@@ -1,6 +1,9 @@
 # Local planning drafts
 _works/
 
+# Local account/workspace grouping folders
+ShareWorkin_git/
+
 # Build output
 bin/
 obj/
