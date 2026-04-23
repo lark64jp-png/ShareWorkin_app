@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+dist/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET
+TestResults/
+*.nupkg
+*.snupkg
+
+# Installer compiler temporary files
+*.tmp
+
+# OS files
+Thumbs.db
+Desktop.ini
