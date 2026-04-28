@@ -1,31 +1,78 @@
 # ShareWorkin
 
-ShareWorkin は、Windows 10 / 11 の同一 LAN 環境で共有フォルダーを扱いやすくするためのローカルアプリです。
+ShareWorkin は、Windows 10 / 11 の同一 LAN 環境で、共有フォルダーを「あなたのお店」として開くためのローカルアプリです。
 
 このリポジトリの現在の版では、まずインストール可能な Windows アプリとして成立させることを目的にしています。
 
 ## 現在の状態
 
-- WPF / .NET 8 の最小アプリ
-- バージョン: 1.01
+- WPF / .NET 8 アプリ
+- 現行版: **1.04**
+- 「わたしのお店」として共有する場所を1つ指定
+- 「お店の中身」として選んだフォルダーの内容を表示
+- フォルダーをダブルクリックして中に入れる
+- ファイルをダブルクリックして開ける
+- 戻る / 進むでお店の中を移動できる
+- 外からファイルやフォルダーを置ける（同名がある場合は置かない）
+- 新しいものが届いたときに通知を表示
+- 画面から共有する場所へ見に行ける
+- ウィンドウを閉じてもタスクトレイに常駐し、お店は開いたまま
+- LAN 不安定時は気配の届け方を内部で切り替える（店主の操作不要）
 - Inno Setup によるインストーラー作成
-- 生成ファイル名: `ShareWorkin1.01_install.exe`
+- インストール先: `C:\MyApps\ShareWorkin\`
+
+### 配布物
+
+| 種類 | 1.04 |
+|---|---|
+| インストーラー | `ShareWorkin_v1.04_install-fixed.exe` |
+| 配布 ZIP | `ShareWorkin_v1.04_Setup.zip` |
+| ハッシュ一覧（ZIP 同梱しない） | `ShareWorkin_v1.04_SHA256-fixed.txt` |
+| Inno Setup スクリプト | `ShareWorkin.iss` |
+| 利用案内 | `ご利用にあたって.txt` |
 
 ## ビルド
 
-Inno Setup 6 と .NET 8 SDK が入っている Windows PC で、リポジトリ直下から実行します。
+### Windows
+
+Inno Setup 6 と .NET 8 SDK が入っている Windows 環境で、リポジトリ直下から実行します。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+powershell -ExecutionPolicy Bypass -File .\build-installer.ps1
 ```
 
-生成先:
+### Linux
 
-```text
-dist\installer\ShareWorkin1.01_install.exe
+Linux Server 上でのビルドは、WPF を扱える Windows 向け .NET SDK 経路が別途用意されている場合に限ります。
+通常の Linux 用 .NET SDK だけでは `Microsoft.NET.Sdk.WindowsDesktop` が含まれないため、このプロジェクトはコンパイルできません。
+
+前提:
+
+- WPF を扱える Windows 向け .NET SDK/toolchain が利用可能であること
+- Wine 上に `Inno Setup 6` の `ISCC.exe` があること
+
+実行:
+
+```bash
+./build-installer-linux.sh
 ```
+
+`ISCC.exe` が標準パスにない場合は、`ISCC_PATH` を指定します。
+
+```bash
+ISCC_PATH="$HOME/.wine/drive_c/Program Files (x86)/Inno Setup 6/ISCC.exe" ./build-installer-linux.sh
+```
+
+WindowsDesktop SDK が見つからない場合、スクリプトはその時点で明示的に停止します。
 
 ## 方針メモ
 
-初版では、通知、権限設定、パスワード設定、アプリ内エクスプローラーなどは確定仕様として扱いません。
-機能ごとに小さく仕様を切り出してから追加します。
+実装判断は `_works/0428-1生成レポート.md` と `_works/ShareWorkin_仕様書_v2_1.md` を参照します。
+1.04 は「お店の中身」機能のテストが落ち着くまで続く開発版として扱います。
+機能を増やすことより、共有フォルダーを「お店」として扱う体験を崩さないことを重視します。
+
+## 配布メモ
+
+- 現行版は「共有フォルダーをあなたのお店として開く」ために、まずお店の中身を見て扱えるようにする版です
+- コード署名は未対応です
+- 配布時は `SHA-256` を配布ページ側に掲載してください。ZIP にはハッシュ一覧を同梱しません。

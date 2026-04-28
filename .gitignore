@@ -7,6 +7,7 @@ ShareWorkin_git/
 # Build output
 bin/
 obj/
+build/
 dist/
 
 # Visual Studio / Rider
@@ -24,6 +25,12 @@ TestResults/
 
 # Installer compiler temporary files
 *.tmp
+
+# Build artifacts and runtime installer (kept out of source history)
+ShareWorkin_v*_install*.exe
+ShareWorkin_v*_Setup.zip
+ShareWorkin_v*_SHA256*.txt
+windowsdesktop-runtime-*.exe
 
 # OS files
 Thumbs.db
