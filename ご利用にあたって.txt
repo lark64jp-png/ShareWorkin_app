@@ -36,12 +36,12 @@
 ■ インストール
 
   ShareWorkin_v1.04_Setup.zip を展開し、
-  ShareWorkin_v1.04_install-fixed.exe を実行してください。
+  ShareWorkin_v1.04_install.exe を実行してください。
 
   ◇ 公式配布物の確認
     ・配布元: https://app.media-house.jp/
     ・ファイル名が一致していることを確認してください
-      - ShareWorkin_v1.04_install-fixed.exe
+      - ShareWorkin_v1.04_install.exe
       - windowsdesktop-runtime-8.0.24-win-x64.exe
       - ご利用にあたって.txt
     ・配布ページ掲載の SHA-256 ハッシュ値と一致することを
@@ -66,7 +66,7 @@
 
   方法：
   1. Windows の「設定」→「アプリ」から削除
-  2. または ShareWorkin_v1.04_install-fixed.exe を再度実行し、
+  2. または ShareWorkin_v1.04_install.exe を再度実行し、
      「アンインストール」を選択
 
 ────────────────────────────────────

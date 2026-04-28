@@ -12,9 +12,9 @@ $innoScript = Join-Path $root "ShareWorkin.iss"
 $readme = Join-Path $root "ご利用にあたって.txt"
 $runtimeInstallerName = "windowsdesktop-runtime-8.0.24-win-x64.exe"
 $runtimeInstaller = Join-Path $root $runtimeInstallerName
-$hashFile = Join-Path $root "ShareWorkin_v1.04_SHA256-fixed.txt"
+$hashFile = Join-Path $root "ShareWorkin_v1.04_SHA256.txt"
 $zipFile = Join-Path $root "ShareWorkin_v1.04_Setup.zip"
-$installer = Join-Path $root "ShareWorkin_v1.04_install-fixed.exe"
+$installer = Join-Path $root "ShareWorkin_v1.04_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 
 if (-not (Test-Path -LiteralPath $iscc)) {
@@ -29,24 +29,24 @@ if (Test-Path -LiteralPath $publishDir) {
 }
 
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
-foreach ($oldOutput in @(
-    $installer,
-    $hashFile,
-    $zipFile,
-    (Join-Path $root "ShareWorkin_v1.03_SHA256-fixed.txt"),
-    (Join-Path $root "ShareWorkin_v1.03_Setup.zip"),
-    (Join-Path $root "ShareWorkin_v1.03_install-fixed.exe"),
-    (Join-Path $root "ShareWorkin_v1.02_SHA256-fixed.txt"),
-    (Join-Path $root "ShareWorkin_v1.02_Setup.zip"),
-    (Join-Path $root "ShareWorkin_v1.02_install-fixed.exe"),
-    (Join-Path $root "ShareWorkin_v1.02_package-fixed.zip"),
-    (Join-Path $root "ShareWorkin1.02_install.exe"),
-    (Join-Path $root "ShareWorkin1.02_package.zip"),
-    (Join-Path $root "ShareWorkin1.02_SHA256.txt")
-)) {
-    if (Test-Path -LiteralPath $oldOutput) {
-        Remove-Item -LiteralPath $oldOutput -Force
-    }
+$cleanupPatterns = @(
+    "ShareWorkin_v1.04_install*.exe",
+    "ShareWorkin_v1.04_SHA256*.txt",
+    "ShareWorkin_v1.04_Setup.zip",
+    "ShareWorkin_v1.03_install*.exe",
+    "ShareWorkin_v1.03_SHA256*.txt",
+    "ShareWorkin_v1.03_Setup.zip",
+    "ShareWorkin_v1.02_install*.exe",
+    "ShareWorkin_v1.02_SHA256*.txt",
+    "ShareWorkin_v1.02_Setup.zip",
+    "ShareWorkin_v1.02_package*.zip",
+    "ShareWorkin1.02_install.exe",
+    "ShareWorkin1.02_package.zip",
+    "ShareWorkin1.02_SHA256.txt"
+)
+foreach ($pattern in $cleanupPatterns) {
+    Get-ChildItem -LiteralPath $root -Filter $pattern -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
 
 dotnet publish $project `

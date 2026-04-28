@@ -13,7 +13,7 @@ INNO_SCRIPT="$ROOT_DIR/ShareWorkin.iss"
 README_TXT="$ROOT_DIR/ご利用にあたって.txt"
 RUNTIME_INSTALLER="windowsdesktop-runtime-8.0.24-win-x64.exe"
 RUNTIME_EXE="$ROOT_DIR/$RUNTIME_INSTALLER"
-HASH_FILE="$ROOT_DIR/ShareWorkin_v1.04_SHA256-fixed.txt"
+HASH_FILE="$ROOT_DIR/ShareWorkin_v1.04_SHA256.txt"
 ZIP_FILE="$ROOT_DIR/ShareWorkin_v1.04_Setup.zip"
 DOTNET_DIR="${DOTNET_DIR:-$HOME/.dotnet-msft}"
 DOTNET_BIN="$DOTNET_DIR/dotnet"
@@ -63,18 +63,18 @@ fi
 
 rm -rf "$PUBLISH_DIR"
 mkdir -p "$PUBLISH_DIR"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.04_install-fixed.exe"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.03_install-fixed.exe"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.03_Setup.zip"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.03_SHA256-fixed.txt"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.02_install-fixed.exe"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.02_Setup.zip"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.02_SHA256-fixed.txt"
-rm -f "$OUTPUT_DIR/ShareWorkin1.02_install.exe"
-rm -f "$OUTPUT_DIR/ShareWorkin1.02_package.zip"
-rm -f "$OUTPUT_DIR/ShareWorkin1.02_SHA256.txt"
-rm -f "$OUTPUT_DIR/ShareWorkin_v1.02_package-fixed.zip"
-rm -f "$HASH_FILE"
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.04_install*.exe
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.04_SHA256*.txt
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.03_install*.exe
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.03_Setup.zip
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.03_SHA256*.txt
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.02_install*.exe
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.02_Setup.zip
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.02_SHA256*.txt
+rm -f "$OUTPUT_DIR"/ShareWorkin_v1.02_package*.zip
+rm -f "$OUTPUT_DIR"/ShareWorkin1.02_install.exe
+rm -f "$OUTPUT_DIR"/ShareWorkin1.02_package.zip
+rm -f "$OUTPUT_DIR"/ShareWorkin1.02_SHA256.txt
 rm -f "$ZIP_FILE"
 
 DOTNET_ROOT="$DOTNET_DIR" PATH="$DOTNET_DIR:$PATH" "$DOTNET_BIN" publish "$PROJECT" \
@@ -94,7 +94,7 @@ fi
 
 "${WINE_CMD[@]}"
 
-INSTALLER_PATH="$OUTPUT_DIR/ShareWorkin_v1.04_install-fixed.exe"
+INSTALLER_PATH="$OUTPUT_DIR/ShareWorkin_v1.04_install.exe"
 if [[ ! -f "$INSTALLER_PATH" ]]; then
   echo "Installer was not created: $INSTALLER_PATH" >&2
   exit 1
