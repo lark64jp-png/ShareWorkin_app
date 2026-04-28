@@ -5,12 +5,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="ShareWorkin"
-        Height="520"
-        Width="860"
+        Height="600"
+        Width="920"
         MinHeight="420"
         MinWidth="680"
         Background="#F5F7FA"
-        FontFamily="Yu Gothic UI">
+        FontFamily="Yu Gothic UI"
+        Closing="Window_Closing">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -24,74 +25,193 @@
                            Foreground="White"
                            FontSize="28"
                            FontWeight="SemiBold" />
-                <TextBlock Text="共有フォルダー便利アプリ 1.01"
+                <TextBlock Text="共有フォルダーをあなたのお店として開くアプリ"
                            Foreground="#D1D5DB"
                            Margin="0,6,0,0"
                            FontSize="14" />
             </StackPanel>
         </Border>
 
-        <Grid Grid.Row="1" Margin="28">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*" />
-                <ColumnDefinition Width="18" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <Grid Grid.Row="1" Margin="28" Background="White">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="16" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-            <Border Grid.Column="0"
-                    Background="White"
+            <Border Grid.Row="0"
                     BorderBrush="#D7DEE8"
                     BorderThickness="1"
                     CornerRadius="8"
-                    Padding="22">
+                    Padding="20">
                 <StackPanel>
-                    <TextBlock Text="インストール確認用の初期画面"
+                    <TextBlock Text="わたしのお店"
                                FontSize="20"
                                FontWeight="SemiBold"
                                Foreground="#111827" />
-                    <TextBlock Text="この版では、アプリをWindowsアプリとしてインストールし、スタートメニューから起動できるところまでを確認します。"
-                               TextWrapping="Wrap"
-                               Margin="0,12,0,0"
-                               FontSize="14"
-                               Foreground="#374151"
-                               LineHeight="22" />
-                    <TextBlock Text="共有フォルダー管理、通知、権限設定は次回以降の小さな仕様に分けて追加します。"
-                               TextWrapping="Wrap"
-                               Margin="0,8,0,0"
-                               FontSize="14"
-                               Foreground="#374151"
-                               LineHeight="22" />
+
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox x:Name="MyShopTextBox"
+                                 Grid.Column="0"
+                                 Height="34"
+                                 VerticalContentAlignment="Center"
+                                 IsReadOnly="True"
+                                 FontSize="13" />
+                        <Button Grid.Column="2"
+                                Content="選ぶ"
+                                Width="88"
+                                Height="34"
+                                Click="BrowseButton_Click" />
+                        <Button x:Name="ShopDoorButton"
+                                Grid.Column="4"
+                                Content="お店を開く"
+                                Width="100"
+                                Height="34"
+                                Click="ShopDoorButton_Click" />
+                        <Button Grid.Column="6"
+                                Content="見に行く"
+                                Width="88"
+                                Height="34"
+                                Click="OpenFolderButton_Click" />
+                    </Grid>
+
+                    <TextBlock x:Name="StatusTextBlock"
+                               Text="共有する場所を選んでください。"
+                               Margin="0,10,0,0"
+                               FontSize="13"
+                               Foreground="#4B5563" />
                 </StackPanel>
             </Border>
 
-            <Border Grid.Column="2"
-                    Background="White"
+            <Border Grid.Row="2"
                     BorderBrush="#D7DEE8"
                     BorderThickness="1"
                     CornerRadius="8"
-                    Padding="22">
-                <StackPanel>
-                    <TextBlock Text="Version"
-                               FontSize="13"
-                               Foreground="#6B7280" />
-                    <TextBlock Text="1.01"
-                               Margin="0,4,0,18"
-                               FontSize="26"
-                               FontWeight="SemiBold"
-                               Foreground="#111827" />
-                    <Button Content="閉じる"
-                            Width="120"
-                            Height="34"
-                            HorizontalAlignment="Left"
-                            Click="CloseButton_Click" />
-                </StackPanel>
+                    Padding="20">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="12" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <DockPanel Grid.Row="0" LastChildFill="True">
+                        <StackPanel DockPanel.Dock="Left"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Top"
+                                    Margin="0,0,16,0">
+                            <Button x:Name="BackButton"
+                                    Content="戻る"
+                                    Width="70"
+                                    Height="30"
+                                    IsEnabled="False"
+                                    Click="BackButton_Click" />
+                            <Button x:Name="ForwardButton"
+                                    Content="進む"
+                                    Width="70"
+                                    Height="30"
+                                    Margin="8,0,0,0"
+                                    IsEnabled="False"
+                                    Click="ForwardButton_Click" />
+                        </StackPanel>
+
+                        <StackPanel>
+                            <TextBlock x:Name="SectionTitleTextBlock"
+                                       Text="お店の中身"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Foreground="#111827" />
+                            <TextBlock x:Name="CurrentLocationTextBlock"
+                                       Text="お店を開くと、ここに中身が並びます。"
+                                       Margin="0,4,0,0"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="#6B7280" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <ListView x:Name="ShopItemsListView"
+                              Grid.Row="2"
+                              ItemsSource="{Binding ShopItems}"
+                              AllowDrop="True"
+                              DragEnter="ShopItemsListView_DragEnter"
+                              DragOver="ShopItemsListView_DragEnter"
+                              Drop="ShopItemsListView_Drop"
+                              MouseDoubleClick="ShopItemsListView_MouseDoubleClick"
+                              ToolTip="ダブルクリックで中に入るか、開きます。">
+                        <ListView.ContextMenu>
+                            <ContextMenu Opened="ShopItemsContextMenu_Opened">
+                                <MenuItem Header="移動"
+                                          Click="MoveShopItemMenuItem_Click" />
+                                <MenuItem x:Name="HoldShopItemMenuItem"
+                                          Header="保留にしまう"
+                                          Click="HoldShopItemMenuItem_Click" />
+                                <MenuItem Header="削除"
+                                          Click="DeleteShopItemMenuItem_Click" />
+                            </ContextMenu>
+                        </ListView.ContextMenu>
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="名前"
+                                                Width="360"
+                                                DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="種類"
+                                                Width="140"
+                                                DisplayMemberBinding="{Binding KindText}" />
+                                <GridViewColumn Header="更新日時"
+                                                Width="210"
+                                                DisplayMemberBinding="{Binding UpdatedAtText}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </Grid>
             </Border>
         </Grid>
 
-        <Border Grid.Row="2" Background="#E5E7EB" Padding="28,12">
-            <TextBlock Text="ShareWorkin - first install package"
-                       Foreground="#4B5563"
-                       FontSize="12" />
+        <Border Grid.Row="2" Background="#E5E7EB" Padding="28,10">
+            <DockPanel LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left"
+                           Text="ShareWorkin - あなたのお店を開きましょう"
+                           Foreground="#4B5563"
+                           VerticalAlignment="Center"
+                           FontSize="12" />
+                <TextBlock DockPanel.Dock="Right"
+                           Text="1.04"
+                           Foreground="#9CA3AF"
+                           VerticalAlignment="Center"
+                           FontSize="11" />
+                <Button DockPanel.Dock="Left"
+                        x:Name="HoldViewButton"
+                        Content="保留を見る"
+                        Width="100"
+                        Height="26"
+                        Margin="0,0,12,0"
+                        Click="HoldViewButton_Click" />
+                <Button DockPanel.Dock="Left"
+                        Content="履歴を見る"
+                        Width="88"
+                        Height="26"
+                        Margin="0,0,14,0"
+                        Click="HistoryButton_Click" />
+                <CheckBox x:Name="NotificationCheckBox"
+                          DockPanel.Dock="Right"
+                          Content="気配を受け取る"
+                          IsChecked="True"
+                          Margin="0,0,18,0"
+                          VerticalAlignment="Center"
+                          FontSize="11"
+                          Foreground="#6B7280" />
+            </DockPanel>
         </Border>
     </Grid>
 </Window>
