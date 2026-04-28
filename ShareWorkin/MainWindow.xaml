@@ -12,6 +12,56 @@
         Background="#F5F7FA"
         FontFamily="Yu Gothic UI"
         Closing="Window_Closing">
+    <Window.Resources>
+        <Style x:Key="ShopColumnHeaderStyle" TargetType="{x:Type GridViewColumnHeader}">
+            <Setter Property="Background" Value="#F3F4F6" />
+            <Setter Property="BorderBrush" Value="#D7DEE8" />
+            <Setter Property="BorderThickness" Value="0,0,1,1" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Foreground" Value="#374151" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#E5E7EB" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="IconButtonStyle" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="#D7DEE8" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#374151" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#F3F4F6" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#E5E7EB" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -39,7 +89,8 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0"
+            <Border x:Name="ClosedShopPanel"
+                    Grid.Row="0"
                     BorderBrush="#D7DEE8"
                     BorderThickness="1"
                     CornerRadius="8"
@@ -79,8 +130,8 @@
                                 Height="34"
                                 Click="ShopDoorButton_Click" />
                         <Button Grid.Column="6"
-                                Content="見に行く"
-                                Width="88"
+                                Content="エクスプローラ"
+                                Width="120"
                                 Height="34"
                                 Click="OpenFolderButton_Click" />
                     </Grid>
@@ -93,22 +144,78 @@
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="2"
+            <Border x:Name="OpenShopPanel"
+                    Grid.Row="0"
                     BorderBrush="#D7DEE8"
                     BorderThickness="1"
                     CornerRadius="8"
-                    Padding="20">
+                    Padding="20,14"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="10" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="わたしのお店"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               Foreground="#111827"
+                               VerticalAlignment="Center" />
+                    <TextBlock x:Name="OpenStatusTextBlock"
+                               Grid.Column="2"
+                               Text=""
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="#4B5563"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="" />
+                    <Button Grid.Column="4"
+                            Content="選ぶ"
+                            Width="64"
+                            Height="30"
+                            Click="BrowseButton_Click" />
+                    <Button x:Name="OpenStateCloseButton"
+                            Grid.Column="6"
+                            Content="閉じる"
+                            Width="64"
+                            Height="30"
+                            Click="ShopDoorButton_Click" />
+                    <Button Grid.Column="8"
+                            Content="エクスプローラ"
+                            Width="98"
+                            Height="30"
+                            Click="OpenFolderButton_Click" />
+                </Grid>
+            </Border>
+
+            <Border x:Name="ShopContentsBorder"
+                    Grid.Row="2"
+                    BorderBrush="#D7DEE8"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="20"
+                    SizeChanged="ShopContentsBorder_SizeChanged">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="12" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <DockPanel Grid.Row="0" LastChildFill="True">
                         <StackPanel DockPanel.Dock="Left"
                                     Orientation="Horizontal"
-                                    VerticalAlignment="Top"
+                                    VerticalAlignment="Center"
                                     Margin="0,0,16,0">
                             <Button x:Name="BackButton"
                                     Content="戻る"
@@ -125,18 +232,33 @@
                                     Click="ForwardButton_Click" />
                         </StackPanel>
 
-                        <StackPanel>
+                        <Button x:Name="RefreshButton"
+                                DockPanel.Dock="Right"
+                                Style="{StaticResource IconButtonStyle}"
+                                ToolTip="最新の状態に更新"
+                                Click="RefreshButton_Click">
+                            <TextBlock Text="&#xE72C;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="16" />
+                        </Button>
+
+                        <StackPanel Orientation="Horizontal"
+                                    VerticalAlignment="Center"
+                                    Margin="0,0,16,0">
                             <TextBlock x:Name="SectionTitleTextBlock"
                                        Text="お店の中身"
                                        FontSize="20"
                                        FontWeight="SemiBold"
-                                       Foreground="#111827" />
-                            <TextBlock x:Name="CurrentLocationTextBlock"
-                                       Text="お店を開くと、ここに中身が並びます。"
-                                       Margin="0,4,0,0"
+                                       Foreground="#111827"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="CurrentPathTextBlock"
+                                       Text=""
                                        FontSize="12"
-                                       TextWrapping="Wrap"
-                                       Foreground="#6B7280" />
+                                       Foreground="#6B7280"
+                                       VerticalAlignment="Bottom"
+                                       TextTrimming="CharacterEllipsis"
+                                       Margin="12,0,0,2"
+                                       MaxWidth="420" />
                         </StackPanel>
                     </DockPanel>
 
@@ -148,32 +270,107 @@
                               DragOver="ShopItemsListView_DragEnter"
                               Drop="ShopItemsListView_Drop"
                               MouseDoubleClick="ShopItemsListView_MouseDoubleClick"
+                              PreviewMouseLeftButtonDown="ShopItemsListView_PreviewMouseLeftButtonDown"
+                              MouseMove="ShopItemsListView_MouseMove"
+                              PreviewMouseRightButtonDown="ShopItemsListView_PreviewMouseRightButtonDown"
+                              SizeChanged="ShopItemsListView_SizeChanged"
+                              GridViewColumnHeader.Click="ShopItemsListView_HeaderClick"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               ToolTip="ダブルクリックで中に入るか、開きます。">
                         <ListView.ContextMenu>
                             <ContextMenu Opened="ShopItemsContextMenu_Opened">
-                                <MenuItem Header="移動"
+                                <MenuItem x:Name="MoveShopItemMenuItem"
+                                          Header="移動"
                                           Click="MoveShopItemMenuItem_Click" />
                                 <MenuItem x:Name="HoldShopItemMenuItem"
-                                          Header="保留にしまう"
+                                          Header="保留へ"
                                           Click="HoldShopItemMenuItem_Click" />
-                                <MenuItem Header="削除"
+                                <MenuItem x:Name="DeleteShopItemMenuItem"
+                                          Header="削除"
                                           Click="DeleteShopItemMenuItem_Click" />
+                                <Separator x:Name="AddFolderSeparator" />
+                                <MenuItem x:Name="AddFolderMenuItem"
+                                          Header="フォルダー追加"
+                                          Click="AddFolderMenuItem_Click" />
                             </ContextMenu>
                         </ListView.ContextMenu>
                         <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="名前"
-                                                Width="360"
-                                                DisplayMemberBinding="{Binding Name}" />
-                                <GridViewColumn Header="種類"
+                            <GridView ColumnHeaderContainerStyle="{StaticResource ShopColumnHeaderStyle}">
+                                <GridViewColumn x:Name="NameColumn"
+                                                Width="360">
+                                    <GridViewColumn.Header>
+                                        <GridViewColumnHeader x:Name="NameColumnHeader"
+                                                              Content="名前"
+                                                              Tag="Name" />
+                                    </GridViewColumn.Header>
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Viewbox Width="15"
+                                                         Height="15"
+                                                         Margin="0,0,8,0"
+                                                         VerticalAlignment="Center"
+                                                         Stretch="Uniform">
+                                                    <Path Data="{Binding IconPathData}"
+                                                          Fill="{Binding IconFillBrush}"
+                                                          Stroke="{Binding IconStrokeBrush}"
+                                                          StrokeThickness="1.8"
+                                                          StrokeLineJoin="Round"
+                                                          StrokeStartLineCap="Round"
+                                                          StrokeEndLineCap="Round" />
+                                                </Viewbox>
+                                                <TextBlock Text="{Binding Name}"
+                                                           VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn x:Name="KindColumn"
+                                                Width="80"
+                                                DisplayMemberBinding="{Binding KindText}">
+                                    <GridViewColumn.Header>
+                                        <GridViewColumnHeader x:Name="KindColumnHeader"
+                                                              Content="種類"
+                                                              Tag="Kind" />
+                                    </GridViewColumn.Header>
+                                </GridViewColumn>
+                                <GridViewColumn x:Name="UpdatedAtColumn"
                                                 Width="140"
-                                                DisplayMemberBinding="{Binding KindText}" />
-                                <GridViewColumn Header="更新日時"
-                                                Width="210"
-                                                DisplayMemberBinding="{Binding UpdatedAtText}" />
+                                                DisplayMemberBinding="{Binding UpdatedAtText}">
+                                    <GridViewColumn.Header>
+                                        <GridViewColumnHeader x:Name="UpdatedAtColumnHeader"
+                                                              Content="更新日時"
+                                                              Tag="UpdatedAt" />
+                                    </GridViewColumn.Header>
+                                </GridViewColumn>
+                                <GridViewColumn x:Name="SizeColumn"
+                                                Width="100">
+                                    <GridViewColumn.Header>
+                                        <GridViewColumnHeader x:Name="SizeColumnHeader"
+                                                              Content="サイズ"
+                                                              Tag="Size" />
+                                    </GridViewColumn.Header>
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding SizeText}"
+                                                       HorizontalAlignment="Right" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                             </GridView>
                         </ListView.View>
                     </ListView>
+
+                    <CheckBox x:Name="SizeCalcCheckBox"
+                              Grid.Row="3"
+                              Content="容量計算"
+                              HorizontalAlignment="Right"
+                              Margin="0,8,2,0"
+                              FontSize="12"
+                              Foreground="#4B5563"
+                              VerticalAlignment="Center"
+                              Checked="SizeCalcCheckBox_Changed"
+                              Unchecked="SizeCalcCheckBox_Changed" />
                 </Grid>
             </Border>
         </Grid>
@@ -201,16 +398,27 @@
                         Content="履歴を見る"
                         Width="88"
                         Height="26"
-                        Margin="0,0,14,0"
+                        Margin="0,0,12,0"
                         Click="HistoryButton_Click" />
-                <CheckBox x:Name="NotificationCheckBox"
-                          DockPanel.Dock="Right"
-                          Content="気配を受け取る"
-                          IsChecked="True"
-                          Margin="0,0,18,0"
-                          VerticalAlignment="Center"
-                          FontSize="11"
-                          Foreground="#6B7280" />
+                <StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,0,18,0">
+                    <TextBlock Text="通知:"
+                               VerticalAlignment="Center"
+                               FontSize="11"
+                               Foreground="#6B7280"
+                               Margin="0,0,6,0" />
+                    <ComboBox x:Name="NotificationModeComboBox"
+                              Width="96"
+                              Height="24"
+                              FontSize="11"
+                              VerticalContentAlignment="Center">
+                        <ComboBoxItem Content="すべて" Tag="All" IsSelected="True" />
+                        <ComboBoxItem Content="外部のみ" Tag="ExternalOnly" />
+                        <ComboBoxItem Content="なし" Tag="Off" />
+                    </ComboBox>
+                </StackPanel>
             </DockPanel>
         </Border>
     </Grid>

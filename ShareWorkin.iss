@@ -479,7 +479,7 @@ begin
 
   LblDescBoth := TLabel.Create(WizardForm);
   LblDescBoth.Parent := CustomPage.Surface;
-  LblDescBoth.Caption := '既存の ShareWorkin を一掃し、.NET Desktop Runtime と ShareWorkin をインストールします。';
+  LblDescBoth.Caption := '既存の ShareWorkin と設定を一掃し、.NET Desktop Runtime と ShareWorkin を新規インストールします。';
   LblDescBoth.Font.Size := 8;
   LblDescBoth.Left := 20;
   LblDescBoth.Top := Y;
@@ -488,7 +488,7 @@ begin
 
   RadioInstallApp := TNewRadioButton.Create(WizardForm);
   RadioInstallApp.Parent := CustomPage.Surface;
-  RadioInstallApp.Caption := 'ShareWorkin のみインストール';
+  RadioInstallApp.Caption := 'アプリのみ入れ替え（既存の設定を残す）';
   RadioInstallApp.Font.Size := 9;
   RadioInstallApp.Font.Style := [fsBold];
   RadioInstallApp.Left := 0;
@@ -499,7 +499,7 @@ begin
 
   LblDescApp := TLabel.Create(WizardForm);
   LblDescApp.Parent := CustomPage.Surface;
-  LblDescApp.Caption := '既存の ShareWorkin を一掃し、ShareWorkin 本体のみをインストールします。';
+  LblDescApp.Caption := '既存の設定（共有先や容量計算など）を残したまま、ShareWorkin 本体のみを上書きインストールします。';
   LblDescApp.Font.Size := 8;
   LblDescApp.Left := 20;
   LblDescApp.Top := Y;
@@ -619,7 +619,7 @@ begin
         end;
       end;
 
-      if not CleanExistingInstall(False, True) then
+      if not CleanExistingInstall(False, False) then
       begin
         Result := False;
         Exit;
