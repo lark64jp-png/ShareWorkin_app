@@ -9,7 +9,8 @@ $root = $PSScriptRoot
 $project = Join-Path $root "ShareWorkin\ShareWorkin.csproj"
 $publishDir = Join-Path $root "dist\publish\ShareWorkin"
 $innoScript = Join-Path $root "ShareWorkin.iss"
-$readme = Join-Path $root "ご利用にあたって.txt"
+$readmeName = -join ([char[]](0x3054, 0x5229, 0x7528, 0x306b, 0x3042, 0x305f, 0x3063, 0x3066)) + ".txt"
+$readme = Join-Path $root $readmeName
 $runtimeInstallerName = "windowsdesktop-runtime-8.0.24-win-x64.exe"
 $runtimeInstaller = Join-Path $root $runtimeInstallerName
 $hashFile = Join-Path $root "ShareWorkin_v1.04_SHA256.txt"
@@ -22,6 +23,9 @@ if (-not (Test-Path -LiteralPath $iscc)) {
 }
 if (-not (Test-Path -LiteralPath $runtimeInstaller)) {
     throw "Runtime installer was not found: $runtimeInstaller"
+}
+if (-not (Test-Path -LiteralPath $readme)) {
+    throw "Readme file was not found: $readme"
 }
 
 if (Test-Path -LiteralPath $publishDir) {
@@ -63,7 +67,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
     throw "Installer was not created: $installer"
 }
 
-$items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), $readme, $runtimeInstaller) | Where-Object { Test-Path -LiteralPath $_ }
+$items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), $readme, $runtimeInstaller)
 $lines = @(
     "ShareWorkin 1.04 SHA-256",
     "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
@@ -79,7 +83,7 @@ foreach ($item in $items) {
 
 Set-Content -LiteralPath $hashFile -Value $lines -Encoding UTF8
 
-$zipItems = @($installer, $runtimeInstaller, $readme) | Where-Object { Test-Path -LiteralPath $_ }
+$zipItems = @($installer, $runtimeInstaller, $readme)
 Compress-Archive -LiteralPath $zipItems -DestinationPath $zipFile -Force
 
 Write-Host "Created installer: $installer"

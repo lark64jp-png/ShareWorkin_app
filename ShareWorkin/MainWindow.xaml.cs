@@ -57,6 +57,9 @@ public partial class MainWindow : Window
     private string? _holdFolderPath;
     private string? _lastNotificationFolder;
     private string? _pendingFocusName;
+    private ShopItem? _dropTargetItem;
+    private Popup? _dragPreviewPopup;
+    private TextBlock? _dragPreviewTextBlock;
     private System.Windows.Point _dragStartPoint;
     private ShopItem? _dragStartItem;
     private string _breadcrumbFullText = string.Empty;
@@ -389,6 +392,22 @@ public partial class MainWindow : Window
         RefreshShopItems();
     }
 
+    private void SectionTitleButton_Click(object sender, RoutedEventArgs e)
+    {
+        NavigateToShopRoot(addHistory: true);
+    }
+
+    private void SearchTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        SearchFromShopRoot(SearchTextBox.Text);
+    }
+
     private void NotificationModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _notificationMode = GetSelectedNotificationMode();
@@ -478,7 +497,10 @@ public partial class MainWindow : Window
 
         System.Windows.DataObject data = new();
         data.SetData(InternalDragPathFormat, _dragStartItem.FullPath);
+        ShowDragHint(_dragStartItem.Name);
         System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Move);
+        HideDragHint();
+        ClearDropTargetHighlight();
         _dragStartItem = null;
     }
 
@@ -493,6 +515,30 @@ public partial class MainWindow : Window
         {
             ShopItemsListView.SelectedItem = null;
         }
+    }
+
+    private void ShopItemsListView_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.C || Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        if (ShopItemsListView.SelectedItem is not ShopItem item)
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(item.Name);
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
+        {
+            SetTransientStatus("コピーできませんでした。");
+        }
+
+        e.Handled = true;
     }
 
     private static ShopItem? GetShopItemFromSource(DependencyObject? source)
@@ -587,11 +633,35 @@ public partial class MainWindow : Window
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
         e.Effects = GetDropEffect(e);
+        UpdateDropTargetHighlight(e);
+        if (e.Data.GetDataPresent(InternalDragPathFormat))
+        {
+            ShowDragHint(Path.GetFileName((string)e.Data.GetData(InternalDragPathFormat)));
+        }
         e.Handled = true;
+    }
+
+    private void ShopItemsListView_GiveFeedback(object sender, System.Windows.GiveFeedbackEventArgs e)
+    {
+        UpdateDragPreviewPosition();
+        e.UseDefaultCursors = true;
+        e.Handled = true;
+    }
+
+    private void ShopItemsListView_DragLeave(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!ShopItemsListView.IsMouseOver)
+        {
+            ClearDropTargetHighlight();
+            HideDragHint();
+        }
     }
 
     private void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
     {
+        ClearDropTargetHighlight();
+        HideDragHint();
+
         if (!CanAcceptDrop(e) || string.IsNullOrWhiteSpace(_currentFolder))
         {
             e.Handled = true;
@@ -753,6 +823,7 @@ public partial class MainWindow : Window
         if (selected is null)
         {
             MoveShopItemMenuItem.Visibility = Visibility.Collapsed;
+            MoveToFolderMenuItem.Visibility = Visibility.Collapsed;
             HoldShopItemMenuItem.Visibility = Visibility.Collapsed;
             DeleteShopItemMenuItem.Visibility = Visibility.Collapsed;
             AddFolderSeparator.Visibility = Visibility.Collapsed;
@@ -761,6 +832,7 @@ public partial class MainWindow : Window
         else if (selected.IsDirectory)
         {
             MoveShopItemMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
+            MoveToFolderMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
             HoldShopItemMenuItem.Visibility = inHoldMode || selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
             DeleteShopItemMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
             AddFolderSeparator.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
@@ -769,6 +841,7 @@ public partial class MainWindow : Window
         else
         {
             MoveShopItemMenuItem.Visibility = Visibility.Visible;
+            MoveToFolderMenuItem.Visibility = Visibility.Visible;
             HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
             DeleteShopItemMenuItem.Visibility = Visibility.Visible;
             AddFolderSeparator.Visibility = Visibility.Collapsed;
@@ -776,7 +849,72 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MoveShopItemMenuItem_Click(object sender, RoutedEventArgs e)
+    private void RenameShopItemMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (ShopItemsListView.SelectedItem is not ShopItem item)
+        {
+            return;
+        }
+
+        string? sourceParent = Path.GetDirectoryName(item.FullPath);
+        if (string.IsNullOrWhiteSpace(sourceParent))
+        {
+            return;
+        }
+
+        NameInputDialog dialog = new("新しい名前", item.Name)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        string newName = dialog.EnteredName.Trim();
+        if (string.IsNullOrEmpty(newName) ||
+            string.Equals(newName, item.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            SetTransientStatus("その名前には変えられません。");
+            return;
+        }
+
+        string destinationPath = Path.Combine(sourceParent, newName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            SetTransientStatus("同じ名前があるので変えられません。");
+            return;
+        }
+
+        try
+        {
+            SuppressExternalChangeNotifications();
+            if (item.IsDirectory)
+            {
+                Directory.Move(item.FullPath, destinationPath);
+            }
+            else
+            {
+                File.Move(item.FullPath, destinationPath);
+            }
+
+            SetTransientStatus($"{item.Name} を {newName} に変えました。");
+            InvalidateSizeCacheUnder(sourceParent);
+            _pendingFocusName = newName;
+            RefreshShopItems();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetTransientStatus("名前を変えられませんでした。");
+        }
+    }
+
+    private void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (ShopItemsListView.SelectedItem is not ShopItem item)
         {
@@ -1443,6 +1581,81 @@ public partial class MainWindow : Window
         }
     }
 
+    private void SearchFromShopRoot(string searchText)
+    {
+        string query = searchText.Trim();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
+        {
+            SetTransientStatus("検索できるお店がありません。");
+            return;
+        }
+
+        string? match = FindFirstShopItem(_shopFolder, query);
+        if (string.IsNullOrWhiteSpace(match))
+        {
+            SetTransientStatus("見つかりませんでした。");
+            return;
+        }
+
+        string? destinationFolder = Directory.Exists(match)
+            ? Path.GetDirectoryName(match)
+            : Path.GetDirectoryName(match);
+        if (string.IsNullOrWhiteSpace(destinationFolder))
+        {
+            return;
+        }
+
+        _pendingFocusName = Path.GetFileName(match);
+        NavigateTo(destinationFolder, addHistory: true, clearForward: true, syncModeToPath: true);
+    }
+
+    private static string? FindFirstShopItem(string rootFolder, string query)
+    {
+        Stack<string> pendingFolders = new();
+        pendingFolders.Push(rootFolder);
+
+        while (pendingFolders.Count > 0)
+        {
+            string currentFolder = pendingFolders.Pop();
+
+            List<string> directories;
+            List<string> files;
+            try
+            {
+                directories = Directory.EnumerateDirectories(currentFolder)
+                    .OrderBy(path => Path.GetFileName(path), StringComparer.CurrentCultureIgnoreCase)
+                    .ToList();
+                files = Directory.EnumerateFiles(currentFolder)
+                    .OrderBy(path => Path.GetFileName(path), StringComparer.CurrentCultureIgnoreCase)
+                    .ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (string path in directories.Concat(files))
+            {
+                if (Path.GetFileName(path).Contains(query, StringComparison.CurrentCultureIgnoreCase))
+                {
+                    return path;
+                }
+            }
+
+            for (int i = directories.Count - 1; i >= 0; i--)
+            {
+                pendingFolders.Push(directories[i]);
+            }
+        }
+
+        return null;
+    }
+
     private void OpenPath(string path)
     {
         if (!File.Exists(path) && !Directory.Exists(path))
@@ -1789,7 +2002,7 @@ public partial class MainWindow : Window
 
     private void UpdateBreadcrumbDisplay()
     {
-        SectionTitleTextBlock.Text = "お店の中身";
+        SectionTitleButton.Content = "お店の中身";
         CurrentPathTextBlock.Text = _breadcrumbFullText;
         CurrentPathTextBlock.ToolTip = string.IsNullOrWhiteSpace(_currentFolder) ? null : _currentFolder;
     }
@@ -1987,6 +2200,133 @@ public partial class MainWindow : Window
         return _currentFolder;
     }
 
+    private void UpdateDropTargetHighlight(System.Windows.DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(InternalDragPathFormat))
+        {
+            ClearDropTargetHighlight();
+            return;
+        }
+
+        ShopItem? target = GetDropDestinationItem(e);
+        if (ReferenceEquals(target, _dropTargetItem))
+        {
+            return;
+        }
+
+        ClearDropTargetHighlight();
+        if (target is not null)
+        {
+            target.IsDropTarget = true;
+            _dropTargetItem = target;
+        }
+    }
+
+    private static ShopItem? GetDropDestinationItem(System.Windows.DragEventArgs e)
+    {
+        DependencyObject? current = e.OriginalSource as DependencyObject;
+        while (current is not null)
+        {
+            if (current is System.Windows.Controls.ListViewItem { DataContext: ShopItem { IsDirectory: true } item })
+            {
+                return item;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
+
+    private void ClearDropTargetHighlight()
+    {
+        if (_dropTargetItem is null)
+        {
+            return;
+        }
+
+        _dropTargetItem.IsDropTarget = false;
+        _dropTargetItem = null;
+    }
+
+    private void ShowDragHint(string? itemName = null)
+    {
+        DragHintBorder.Visibility = Visibility.Visible;
+        if (!string.IsNullOrWhiteSpace(itemName))
+        {
+            EnsureDragPreviewPopup();
+            DragPreviewTextBlock.Text = itemName;
+            _dragPreviewPopup!.IsOpen = true;
+            UpdateDragPreviewPosition();
+        }
+    }
+
+    private void HideDragHint()
+    {
+        DragHintBorder.Visibility = Visibility.Collapsed;
+        if (_dragPreviewPopup is not null)
+        {
+            _dragPreviewPopup.IsOpen = false;
+        }
+    }
+
+    private TextBlock DragPreviewTextBlock
+    {
+        get
+        {
+            EnsureDragPreviewPopup();
+            return _dragPreviewTextBlock!;
+        }
+    }
+
+    private void EnsureDragPreviewPopup()
+    {
+        if (_dragPreviewPopup is not null)
+        {
+            return;
+        }
+
+        _dragPreviewTextBlock = new TextBlock
+        {
+            FontSize = 12,
+            Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(17, 24, 39)),
+            MaxWidth = 260,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        Border previewBorder = new()
+        {
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 246, 226)),
+            BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 216, 152)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(9, 5, 9, 5),
+            Child = _dragPreviewTextBlock
+        };
+
+        _dragPreviewPopup = new Popup
+        {
+            AllowsTransparency = true,
+            Child = previewBorder,
+            IsHitTestVisible = false,
+            Placement = PlacementMode.AbsolutePoint,
+            StaysOpen = true
+        };
+    }
+
+    private void UpdateDragPreviewPosition()
+    {
+        if (_dragPreviewPopup is null || !_dragPreviewPopup.IsOpen)
+        {
+            return;
+        }
+
+        System.Drawing.Point cursorPosition = Forms.Cursor.Position;
+        _dragPreviewPopup.HorizontalOffset = cursorPosition.X + 18;
+        _dragPreviewPopup.VerticalOffset = cursorPosition.Y + 18;
+    }
+
     private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
     {
         Directory.CreateDirectory(destinationDirectory);
@@ -2145,6 +2485,8 @@ public sealed class ShopItem : INotifyPropertyChanged
     public long? SizeBytes { get; private set; }
 
     private string _sizeText = string.Empty;
+    private bool _isDropTarget;
+
     public string SizeText
     {
         get => _sizeText;
@@ -2156,6 +2498,21 @@ public sealed class ShopItem : INotifyPropertyChanged
             }
             _sizeText = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SizeText)));
+        }
+    }
+
+    public bool IsDropTarget
+    {
+        get => _isDropTarget;
+        set
+        {
+            if (_isDropTarget == value)
+            {
+                return;
+            }
+
+            _isDropTarget = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDropTarget)));
         }
     }
 
