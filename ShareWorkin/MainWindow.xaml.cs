@@ -14,6 +14,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ShareWorkin.SMB;
 using Forms = System.Windows.Forms;
 
 namespace ShareWorkin;
@@ -28,14 +29,19 @@ public partial class MainWindow : Window
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
 
-    private static readonly string SettingsDirectory = AppContext.BaseDirectory;
+    private static readonly string LocalAppDataDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ShareWorkin");
+
+    private static readonly string SettingsDirectory = LocalAppDataDirectory;
 
     private static readonly string SettingsPath = Path.Combine(SettingsDirectory, "settings.json");
 
-    private static readonly string DefaultHoldFolderPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ShareWorkin",
-        "hold");
+    private static readonly string LegacySettingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
+
+    private static readonly string DefaultHoldFolderPath = Path.Combine(LocalAppDataDirectory, "hold");
+
+    private const string SettingsVersion = "1.04";
 
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
@@ -54,7 +60,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _folderSizeCancellation;
     private string? _shopFolder;
     private string? _currentFolder;
-    private string? _holdFolderPath;
     private string? _lastNotificationFolder;
     private string? _pendingFocusName;
     private ShopItem? _dropTargetItem;
@@ -72,6 +77,9 @@ public partial class MainWindow : Window
     private bool _isPollingMode;
     private bool _exitRequested;
     private bool _trayHintShown;
+    private bool _wasOpenAtLastShutdown;
+    private bool _suppressAccessLevelEvent;
+    private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private DisplayMode _currentMode = DisplayMode.Shop;
     private ShopSortField _sortField = ShopSortField.Name;
     private ListSortDirection _sortDirection = ListSortDirection.Ascending;
@@ -115,8 +123,132 @@ public partial class MainWindow : Window
 
         LoadSettings();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
+        MigrateLegacyHoldContents();
         UpdateShopState(false);
         UpdateColumnHeaders();
+    }
+
+    private void MigrateLegacyHoldContents()
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return;
+        }
+
+        string legacyHoldPath;
+        try
+        {
+            legacyHoldPath = Path.Combine(_shopFolder, HoldFolderName);
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        if (!Directory.Exists(legacyHoldPath))
+        {
+            return;
+        }
+
+        try
+        {
+            List<string> entries;
+            try
+            {
+                entries = Directory.EnumerateFileSystemEntries(legacyHoldPath).ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                SwkLogger.Warn($"Hold migration: enumerate failed ({ex.Message})");
+                return;
+            }
+
+            if (entries.Count == 0)
+            {
+                TryDeleteEmptyDirectory(legacyHoldPath);
+                return;
+            }
+
+            Directory.CreateDirectory(DefaultHoldFolderPath);
+
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            int movedCount = 0;
+            foreach (string entry in entries)
+            {
+                string baseName = Path.GetFileName(entry);
+                string destinationPath = ResolveNonConflictingPath(DefaultHoldFolderPath, baseName, timestamp);
+
+                try
+                {
+                    if (Directory.Exists(entry))
+                    {
+                        Directory.Move(entry, destinationPath);
+                    }
+                    else
+                    {
+                        File.Move(entry, destinationPath);
+                    }
+                    movedCount++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    SwkLogger.Warn($"Hold migration: could not move ({ex.Message})");
+                }
+            }
+
+            TryDeleteEmptyDirectory(legacyHoldPath);
+
+            if (movedCount > 0)
+            {
+                SwkLogger.Info($"Hold migration: moved {movedCount} entries to LocalAppData hold");
+                SetTransientStatus("保留領域を移しました。");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Warn($"Hold migration error: {ex.Message}");
+        }
+    }
+
+    private static string ResolveNonConflictingPath(string directory, string baseName, string timestamp)
+    {
+        string candidate = Path.Combine(directory, baseName);
+        if (!File.Exists(candidate) && !Directory.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        string stamped = Path.Combine(directory, $"{baseName}_{timestamp}");
+        if (!File.Exists(stamped) && !Directory.Exists(stamped))
+        {
+            return stamped;
+        }
+
+        for (int suffix = 1; suffix < 1000; suffix++)
+        {
+            string alt = Path.Combine(directory, $"{baseName}_{timestamp}_{suffix}");
+            if (!File.Exists(alt) && !Directory.Exists(alt))
+            {
+                return alt;
+            }
+        }
+
+        return Path.Combine(directory, $"{baseName}_{timestamp}_{Guid.NewGuid():N}");
+    }
+
+    private static void TryDeleteEmptyDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+            {
+                Directory.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Warn($"TryDeleteEmptyDirectory failed: {ex.Message}");
+        }
     }
 
     private bool TryEnsureHoldFolder()
@@ -135,20 +267,152 @@ public partial class MainWindow : Window
         }
     }
 
-    private string GetHoldFolderPath()
+    private string GetHoldFolderPath() => DefaultHoldFolderPath;
+
+    private static string DeriveShareName(string? shopFolder)
     {
-        if (!string.IsNullOrWhiteSpace(_holdFolderPath))
+        if (string.IsNullOrWhiteSpace(shopFolder))
         {
-            return _holdFolderPath;
+            return string.Empty;
         }
 
-        if (!string.IsNullOrWhiteSpace(_shopFolder))
+        string trimmed = shopFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string name = Path.GetFileName(trimmed);
+        if (!string.IsNullOrEmpty(name))
         {
-            _holdFolderPath = Path.Combine(_shopFolder, HoldFolderName);
-            return _holdFolderPath;
+            return name;
         }
 
-        return DefaultHoldFolderPath;
+        string root = Path.GetPathRoot(shopFolder) ?? string.Empty;
+        return root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimEnd(':');
+    }
+
+    private static readonly char[] ForbiddenShareNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
+
+    private static bool ValidateShareName(string name, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "お店の名前を決められませんでした。フォルダー名を確認してください。";
+            return false;
+        }
+
+        if (name.IndexOfAny(ForbiddenShareNameChars) >= 0)
+        {
+            error = "お店の名前にこの記号は使えません: \\ / : * ? \" < > |";
+            return false;
+        }
+
+        if (name.Length > 80)
+        {
+            error = "お店の名前が長すぎます(80文字まで)。";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsRunningAsAdmin()
+    {
+        try
+        {
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            WindowsPrincipal principal = new(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryEnsureAdminForShopOps()
+    {
+        if (IsRunningAsAdmin())
+        {
+            return true;
+        }
+
+        MessageBoxResult result = System.Windows.MessageBox.Show(
+            this,
+            "お店を開く・閉じるには管理者権限が必要です。\n今すぐ管理者として再起動しますか?",
+            "ShareWorkin",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Information,
+            MessageBoxResult.Yes);
+        if (result != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        try
+        {
+            string? exePath = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exePath))
+            {
+                return false;
+            }
+
+            ProcessStartInfo psi = new()
+            {
+                FileName = exePath,
+                UseShellExecute = true,
+                Verb = "runas",
+            };
+            Process.Start(psi);
+            _exitRequested = true;
+            Close();
+            return false;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            SwkLogger.Warn($"Admin relaunch failed: {ex.Message}");
+            SetTransientStatus("管理者として再起動できませんでした。");
+            return false;
+        }
+    }
+
+    private static bool IsDesktopFolder(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            string normalized = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string user = Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            return string.Equals(normalized, user, StringComparison.OrdinalIgnoreCase) ||
+                   (!string.IsNullOrEmpty(common) &&
+                    string.Equals(normalized, common, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private string? BuildCurrentUncPath()
+    {
+        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return null;
+        }
+
+        string shareName = DeriveShareName(_shopFolder);
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            return null;
+        }
+
+        return $@"\\{Environment.MachineName}\{shareName}";
     }
 
     private static void ClearHiddenFolderAttribute(string folderPath)
@@ -325,6 +589,21 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (IsDesktopFolder(selected))
+        {
+            MessageBoxResult confirm = System.Windows.MessageBox.Show(
+                this,
+                "デスクトップは普段使うファイルが集まる場所なので、お店として開くと誤って動かしやすくなります。\n続けますか?",
+                "ShareWorkin",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (confirm != MessageBoxResult.Yes)
+            {
+                return;
+            }
+        }
+
         if (_isShopOpen)
         {
             SwitchShopFolder(selected);
@@ -332,7 +611,6 @@ public partial class MainWindow : Window
         else
         {
             _shopFolder = selected;
-            _holdFolderPath = null;
             MyShopTextBox.Text = _shopFolder;
             SaveSettings();
             UpdateShopState(false);
@@ -348,16 +626,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        DisposeWatcher();
-        DisposeContentsWatcher();
-        _pollingTimer.Stop();
-        CancelFolderSizeCalculation();
+        CloseShop();
         _folderSizeCache.Clear();
         _backStack.Clear();
         _forwardStack.Clear();
 
         _shopFolder = newFolder;
-        _holdFolderPath = null;
         MyShopTextBox.Text = _shopFolder;
         SaveSettings();
 
@@ -418,6 +692,94 @@ public partial class MainWindow : Window
         }
 
         SaveSettings();
+    }
+
+    private void AccessLevelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressAccessLevelEvent)
+        {
+            return;
+        }
+
+        ShareAccessRight selected = ShareAccessRight.Full;
+        if (AccessLevelComboBox.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            string.Equals(tag, "Read", StringComparison.OrdinalIgnoreCase))
+        {
+            selected = ShareAccessRight.Read;
+        }
+
+        if (selected == _shareAccessRight)
+        {
+            return;
+        }
+
+        _shareAccessRight = selected;
+        SaveSettings();
+
+        if (_isShopOpen && !string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            string shareName = DeriveShareName(_shopFolder);
+            if (!string.IsNullOrWhiteSpace(shareName))
+            {
+                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                try
+                {
+                    if (!SmbShareManager.GrantSwkGuest(shareName, _shareAccessRight))
+                    {
+                        SetTransientStatus("権限の切替に失敗しました。");
+                        return;
+                    }
+                }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                }
+                SetTransientStatus(_shareAccessRight == ShareAccessRight.Read
+                    ? "見るだけに切り替えました。"
+                    : "自由に編集できるに切り替えました。");
+            }
+        }
+    }
+
+    private void FriendsButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenFriendsWindow();
+    }
+
+    private void InviteButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenInviteDialog();
+    }
+
+    private void OpenFriendsWindow()
+    {
+        FriendsWindow window = new(this, _shopFolder)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
+    private void OpenInviteDialog()
+    {
+        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            SetTransientStatus("お店を開いてから招待を発行してください。");
+            return;
+        }
+
+        string shareName = DeriveShareName(_shopFolder);
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            SetTransientStatus("お店の名前が決められませんでした。");
+            return;
+        }
+
+        InviteDialog dialog = new(shareName, _shareAccessRight)
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
     }
 
     private NotificationMode GetSelectedNotificationMode()
@@ -1207,7 +1569,7 @@ public partial class MainWindow : Window
         }
 
         CancelFolderSizeCalculation();
-        CloseShop();
+        CloseShop(removeSmbShare: false);
         _notificationTimer.Stop();
         _notificationTimer.Tick -= NotificationTimer_Tick;
         _pollingTimer.Stop();
@@ -1256,9 +1618,47 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!TryEnsureAdminForShopOps())
+        {
+            return;
+        }
+
+        string shareName = DeriveShareName(_shopFolder);
+        if (!ValidateShareName(shareName, out string nameError))
+        {
+            UpdateShopState(false, nameError);
+            return;
+        }
+
         if (!TryEnsureHoldFolder())
         {
             UpdateShopState(false, "保留を準備できません。");
+            return;
+        }
+
+        ShopOpenRequest request = new(
+            ShareName: shareName,
+            ShopRootPath: _shopFolder,
+            ProfileLabel: shareName,
+            AccessRight: _shareAccessRight);
+
+        ShopOpenResult result;
+        Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+        try
+        {
+            result = SmbController.OpenShopSequence(request);
+        }
+        finally
+        {
+            Mouse.OverrideCursor = null;
+        }
+
+        if (!result.Succeeded)
+        {
+            string message = string.IsNullOrWhiteSpace(result.FailureMessage)
+                ? "お店を開けませんでした。"
+                : result.FailureMessage!;
+            UpdateShopState(false, message);
             return;
         }
 
@@ -1278,27 +1678,49 @@ public partial class MainWindow : Window
             _arrivalSensor.Renamed += ArrivalSensor_Renamed;
             _arrivalSensor.Error += ArrivalSensor_Error;
             _isPollingMode = false;
-            _isShopOpen = true;
-            UpdateShopState(true);
-            if (_currentMode == DisplayMode.Shop)
-            {
-                NavigateTo(_shopFolder, addHistory: false, clearForward: true);
-            }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             DisposeWatcher();
             BeginPolling();
         }
+
+        _isShopOpen = true;
+        _wasOpenAtLastShutdown = true;
+        SaveSettings();
+
+        UpdateShopState(true);
+        if (_currentMode == DisplayMode.Shop)
+        {
+            NavigateTo(_shopFolder, addHistory: false, clearForward: true);
+        }
     }
 
-    private void CloseShop()
+    private void CloseShop(bool removeSmbShare = true)
     {
         DisposeWatcher();
         _pollingTimer.Stop();
+        bool wasOpen = _isShopOpen;
         _isShopOpen = false;
         _isPollingMode = false;
         CancelFolderSizeCalculation();
+
+        if (wasOpen && removeSmbShare && !string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            string shareName = DeriveShareName(_shopFolder);
+            if (!string.IsNullOrWhiteSpace(shareName))
+            {
+                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                try
+                {
+                    SmbController.CloseShopSequence(shareName, _shopFolder);
+                }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                }
+            }
+        }
 
         if (_currentMode == DisplayMode.Shop)
         {
@@ -1310,6 +1732,9 @@ public partial class MainWindow : Window
             UpdateBreadcrumb();
             UpdateNavigationState();
         }
+
+        _wasOpenAtLastShutdown = !removeSmbShare && wasOpen;
+        SaveSettings();
 
         UpdateShopState(false);
     }
@@ -2346,6 +2771,8 @@ public partial class MainWindow : Window
 
     private void LoadSettings()
     {
+        TryMigrateLegacySettings();
+
         if (!File.Exists(SettingsPath))
         {
             ApplyLoadedSettings(null);
@@ -2370,6 +2797,29 @@ public partial class MainWindow : Window
         }
     }
 
+    private static void TryMigrateLegacySettings()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+            {
+                return;
+            }
+            if (!File.Exists(LegacySettingsPath))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(SettingsDirectory);
+            File.Copy(LegacySettingsPath, SettingsPath, overwrite: false);
+            SwkLogger.Info("Migrated settings.json from legacy install path to LocalAppData");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Warn($"Settings migration skipped: {ex.Message}");
+        }
+    }
+
     private void ApplyLoadedSettings(AppSettings? settings)
     {
         _shopFolder = settings?.ShopFolder ?? settings?.WatchFolder;
@@ -2378,7 +2828,45 @@ public partial class MainWindow : Window
         SelectNotificationMode(_notificationMode);
         _isSizeCalcEnabled = settings?.FolderSizeCalcEnabled ?? false;
         SizeCalcCheckBox.IsChecked = _isSizeCalcEnabled;
+        _wasOpenAtLastShutdown = settings?.IsOpenAtLastShutdown ?? false;
+        _shareAccessRight = ParseAccessLevel(settings?.AccessLevel);
+        SelectAccessLevel(_shareAccessRight);
         _loadedReservedForV22 = settings?.ReservedForV22;
+    }
+
+    private static ShareAccessRight ParseAccessLevel(string? value)
+    {
+        return string.Equals(value, "Read", StringComparison.OrdinalIgnoreCase)
+            ? ShareAccessRight.Read
+            : ShareAccessRight.Full;
+    }
+
+    private void SelectAccessLevel(ShareAccessRight right)
+    {
+        if (AccessLevelComboBox is null)
+        {
+            return;
+        }
+
+        _suppressAccessLevelEvent = true;
+        try
+        {
+            string targetTag = right == ShareAccessRight.Read ? "Read" : "Full";
+            foreach (object item in AccessLevelComboBox.Items)
+            {
+                if (item is ComboBoxItem { Tag: string tag } &&
+                    string.Equals(tag, targetTag, StringComparison.Ordinal))
+                {
+                    AccessLevelComboBox.SelectedItem = item;
+                    return;
+                }
+            }
+            AccessLevelComboBox.SelectedIndex = 0;
+        }
+        finally
+        {
+            _suppressAccessLevelEvent = false;
+        }
     }
 
     private static NotificationMode ResolveNotificationMode(AppSettings? settings)
@@ -2405,7 +2893,10 @@ public partial class MainWindow : Window
                 NotificationMode = _notificationMode.ToString(),
                 NotificationEnabled = _notificationMode != NotificationMode.Off,
                 FolderSizeCalcEnabled = _isSizeCalcEnabled,
-                Version = "2.1.1",
+                IsOpenAtLastShutdown = _wasOpenAtLastShutdown,
+                AccessLevel = _shareAccessRight == ShareAccessRight.Read ? "Read" : "Full",
+                ShareMode = "Everyone",
+                Version = SettingsVersion,
                 ReservedForV22 = _loadedReservedForV22
             };
             string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
@@ -2427,7 +2918,7 @@ public partial class MainWindow : Window
 
     private void UpdateShopState(bool isOpen, string? statusMessage = null)
     {
-        ShopDoorButton.Content = isOpen ? "閉じる" : "お店を開く";
+        ShopDoorButton.Content = isOpen ? "共有を閉じる" : "お店を開く";
         ClosedShopPanel.Visibility = isOpen ? Visibility.Collapsed : Visibility.Visible;
         OpenShopPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
 
@@ -2467,6 +2958,12 @@ public partial class MainWindow : Window
         StatusTextBlock.Text = closedText;
         OpenStatusTextBlock.Text = openText;
         OpenStatusTextBlock.ToolTip = string.IsNullOrEmpty(openTooltip) ? null : openTooltip;
+
+        string? uncPath = isOpen ? BuildCurrentUncPath() : null;
+        OpenSharePathTextBlock.Text = uncPath ?? string.Empty;
+        OpenSharePathTextBlock.Visibility = string.IsNullOrEmpty(uncPath)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 }
 
@@ -2641,6 +3138,17 @@ public sealed class AppSettings
     public bool NotificationEnabled { get; set; } = true;
 
     public bool FolderSizeCalcEnabled { get; set; }
+
+    [JsonPropertyName("isOpenAtLastShutdown")]
+    public bool IsOpenAtLastShutdown { get; set; }
+
+    [JsonPropertyName("accessLevel")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AccessLevel { get; set; }
+
+    [JsonPropertyName("shareMode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ShareMode { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WatchFolder { get; set; }

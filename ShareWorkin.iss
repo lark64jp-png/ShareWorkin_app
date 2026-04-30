@@ -681,6 +681,25 @@ begin
     Confirm := False;
 end;
 
+procedure RunPowerShell(Script: String);
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure CleanupShareWorkinShares();
+begin
+  RunPowerShell('try { Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Description -like ''ShareWorkin:*'' } | ForEach-Object { Remove-SmbShare -Name $_.Name -Force -ErrorAction SilentlyContinue } } catch {}');
+end;
+
+procedure CleanupShareWorkinAccount();
+begin
+  RunPowerShell('try { Get-LocalUser -Name ''swkguest'' -ErrorAction SilentlyContinue | Remove-LocalUser -ErrorAction SilentlyContinue } catch {}');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -692,6 +711,9 @@ begin
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       WaitForProcessExit(APP_EXE);
     end;
+
+    CleanupShareWorkinShares();
+    CleanupShareWorkinAccount();
 
     DeleteDirIfExists(INSTALL_DIR);
     DeleteDirIfExists(OldInstallDir());

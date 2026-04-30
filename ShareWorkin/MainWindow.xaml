@@ -176,48 +176,93 @@
                     Padding="20,14"
                     Visibility="Collapsed">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="10" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="6" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="6" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Column="0"
-                               Text="わたしのお店"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               Foreground="#111827"
-                               VerticalAlignment="Center" />
-                    <TextBlock x:Name="OpenStatusTextBlock"
-                               Grid.Column="2"
-                               Text=""
-                               VerticalAlignment="Center"
-                               FontSize="13"
-                               Foreground="#4B5563"
-                               TextTrimming="CharacterEllipsis"
-                               ToolTip="" />
-                    <Button Grid.Column="4"
-                            Content="選ぶ"
-                            Width="64"
-                            Height="30"
-                            Click="BrowseButton_Click" />
-                    <Button x:Name="OpenStateCloseButton"
-                            Grid.Column="6"
-                            Content="閉じる"
-                            Width="64"
-                            Height="30"
-                            Click="ShopDoorButton_Click" />
-                    <Button Grid.Column="8"
-                            Content="エクスプローラ"
-                            Width="98"
-                            Height="30"
-                            Click="OpenFolderButton_Click" />
+                        <TextBlock Grid.Column="0"
+                                   Text="わたしのお店"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Foreground="#111827"
+                                   VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock x:Name="OpenStatusTextBlock"
+                                       Text=""
+                                       FontSize="13"
+                                       Foreground="#4B5563"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="" />
+                            <TextBlock x:Name="OpenSharePathTextBlock"
+                                       Text=""
+                                       FontSize="11"
+                                       Foreground="#6B7280"
+                                       TextTrimming="CharacterEllipsis"
+                                       Margin="0,2,0,0"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+                        <Button Grid.Column="4"
+                                Content="選ぶ"
+                                Width="64"
+                                Height="30"
+                                Click="BrowseButton_Click" />
+                        <Button x:Name="OpenStateCloseButton"
+                                Grid.Column="6"
+                                Content="共有を閉じる"
+                                Width="100"
+                                Height="30"
+                                Click="ShopDoorButton_Click" />
+                        <Button Grid.Column="8"
+                                Content="エクスプローラ"
+                                Width="98"
+                                Height="30"
+                                Click="OpenFolderButton_Click" />
+                    </Grid>
+
+                    <StackPanel Grid.Row="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Margin="0,10,0,0">
+                        <TextBlock Text="来店者ができること:"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   Foreground="#4B5563"
+                                   Margin="0,0,8,0" />
+                        <ComboBox x:Name="AccessLevelComboBox"
+                                  Width="160"
+                                  Height="26"
+                                  FontSize="12"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="AccessLevelComboBox_SelectionChanged">
+                            <ComboBoxItem Content="自由に編集できる" Tag="Full" IsSelected="True" />
+                            <ComboBoxItem Content="見るだけ" Tag="Read" />
+                        </ComboBox>
+                        <Button x:Name="FriendsButton"
+                                Content="お友達"
+                                Width="80"
+                                Height="26"
+                                Margin="16,0,0,0"
+                                Click="FriendsButton_Click" />
+                        <Button x:Name="InviteButton"
+                                Content="招待を発行"
+                                Width="100"
+                                Height="26"
+                                Margin="6,0,0,0"
+                                Click="InviteButton_Click" />
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -319,7 +364,7 @@
                                               Header="フォルダーへ移動"
                                               Click="MoveToFolderMenuItem_Click" />
                                     <MenuItem x:Name="HoldShopItemMenuItem"
-                                              Header="保留へ"
+                                              Header="保留にしまう"
                                               Click="HoldShopItemMenuItem_Click" />
                                     <MenuItem x:Name="DeleteShopItemMenuItem"
                                               Header="削除"
