@@ -71,6 +71,14 @@ public static class SmbController
         else
         {
             SwkLogger.Info($"OpenShopSequence: reusing existing ShareWorkin share '{request.ShareName}'");
+            if (!SmbShareManager.RepairShareDefinition(
+                    request.ShareName,
+                    request.ShopRootPath,
+                    request.ProfileLabel))
+            {
+                SmbNtfsManager.RevokeSwkGuest(request.ShopRootPath);
+                return Fail("お店の入口を整え直せませんでした。", before, null);
+            }
         }
 
         SmbShareManager.RevokeEveryone(request.ShareName);

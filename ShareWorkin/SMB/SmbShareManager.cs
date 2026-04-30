@@ -42,8 +42,9 @@ if ($s) {{ Write-Output 'EXISTS' }} else {{ Write-Output 'MISSING' }}
         string esPath = EscapeSingleQuotes(folderPath);
         string esDesc = EscapeSingleQuotes(description);
 
+        string account = EscapeSingleQuotes(SmbAccountManager.LocalQualifiedAccountName);
         string script = $@"
-New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess 'swkguest';
+New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}';
 ";
         PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);
         if (result.Succeeded)
@@ -52,6 +53,37 @@ New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAcce
             return true;
         }
         SwkLogger.Warn($"CreateShare failed: {shareName}, stderr={result.StdErr.Trim()}");
+        return false;
+    }
+
+    public static bool RepairShareDefinition(string shareName, string folderPath, string profileLabel)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(shareName);
+        ArgumentException.ThrowIfNullOrEmpty(folderPath);
+        ArgumentNullException.ThrowIfNull(profileLabel);
+
+        string description = string.IsNullOrWhiteSpace(profileLabel)
+            ? $"{DescriptionPrefix} {shareName}"
+            : $"{DescriptionPrefix} {profileLabel}";
+
+        string esName = EscapeSingleQuotes(shareName);
+        string esPath = EscapeSingleQuotes(folderPath);
+        string esDesc = EscapeSingleQuotes(description);
+
+        string script = $@"
+$s = Get-SmbShare -Name '{esName}' -ErrorAction SilentlyContinue;
+if ($s) {{
+    Set-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -Force | Out-Null;
+}}
+";
+        PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);
+        if (result.Succeeded)
+        {
+            SwkLogger.Info($"RepairShareDefinition ok: {shareName}");
+            return true;
+        }
+
+        SwkLogger.Warn($"RepairShareDefinition failed: {shareName}, stderr={result.StdErr.Trim()}");
         return false;
     }
 
@@ -94,9 +126,10 @@ Revoke-SmbShareAccess -Name '{esName}' -AccountName 'Everyone' -Force -ErrorActi
             ShareAccessRight.Read => "Read",
             _ => "Full",
         };
+        string account = EscapeSingleQuotes(SmbAccountManager.LocalQualifiedAccountName);
         string script = $@"
-Revoke-SmbShareAccess -Name '{esName}' -AccountName 'swkguest' -Force -ErrorAction SilentlyContinue | Out-Null;
-Grant-SmbShareAccess -Name '{esName}' -AccountName 'swkguest' -AccessRight {accessRight} -Force | Out-Null;
+Revoke-SmbShareAccess -Name '{esName}' -AccountName '{account}' -Force -ErrorAction SilentlyContinue | Out-Null;
+Grant-SmbShareAccess -Name '{esName}' -AccountName '{account}' -AccessRight {accessRight} -Force | Out-Null;
 ";
         PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);
         if (result.Succeeded)

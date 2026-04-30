@@ -26,7 +26,7 @@ public partial class InviteDialog : Window
         string? password = SecureStorage.Get(SecureStorage.KeySwkGuestPassword);
         if (string.IsNullOrWhiteSpace(password))
         {
-            HintTextBlock.Text = "招待コードを作るには、まず一度「お店を開く」を行ってお店の鍵を用意してください。";
+            HintTextBlock.Text = "招待コードを作れませんでした。";
             TokenTextBox.Text = string.Empty;
             CopyButton.IsEnabled = false;
             SaveSheetButton.IsEnabled = false;
@@ -35,9 +35,13 @@ public partial class InviteDialog : Window
 
         InviteTokenPayload payload = new()
         {
+            // Invitation is one-way: the shop owner says "please come".
+            // This is not a visitor-side request or approval workflow.
             HostMachineName = Environment.MachineName,
             ShareName = _shareName,
             UserName = SmbAccountManager.AccountName,
+            // Current v1.04 uses one shared shop key. Rotating it affects every
+            // already-invited visitor, so future reset/reissue must be explicit.
             Password = password,
             AccessLevel = _accessRight == ShareAccessRight.Read ? "Read" : "Full",
             ProfileLabel = _shareName,

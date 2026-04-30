@@ -9,7 +9,6 @@ public static class SmbNtfsManager
 {
     private const string SidSystem = "*S-1-5-18";
     private const string SidAdministrators = "*S-1-5-32-544";
-    private const string SwkGuestPrincipal = "swkguest";
     private const string PermFull = "(OI)(CI)(F)";
 
     public static bool IsolateShopRoot(string shopRootPath)
@@ -38,7 +37,7 @@ public static class SmbNtfsManager
             return false;
         }
 
-        if (!RunIcacls(new[] { shopRootPath, "/grant:r", $"{SwkGuestPrincipal}:{PermFull}" }, "Grant swkguest"))
+        if (!RunIcacls(new[] { shopRootPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{PermFull}" }, "Grant swkguest"))
         {
             return false;
         }
@@ -57,7 +56,7 @@ public static class SmbNtfsManager
         }
 
         SwkLogger.Info($"RevokeSwkGuest start: {shopRootPath}");
-        return RunIcacls(new[] { shopRootPath, "/remove:g", SwkGuestPrincipal }, "Revoke swkguest");
+        return RunIcacls(new[] { shopRootPath, "/remove:g", SmbAccountManager.LocalQualifiedAccountName }, "Revoke swkguest");
     }
 
     public static bool RestoreInheritance(string shopRootPath)

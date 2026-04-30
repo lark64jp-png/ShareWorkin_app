@@ -9,31 +9,31 @@
         Width="920"
         MinHeight="420"
         MinWidth="680"
-        Background="#F5F7FA"
+        Background="#F6F4EE"
         FontFamily="Yu Gothic UI"
         Closing="Window_Closing">
     <Window.Resources>
         <Style x:Key="ShopColumnHeaderStyle" TargetType="{x:Type GridViewColumnHeader}">
-            <Setter Property="Background" Value="#F3F4F6" />
-            <Setter Property="BorderBrush" Value="#D7DEE8" />
+            <Setter Property="Background" Value="#F1EFE8" />
+            <Setter Property="BorderBrush" Value="#D8D2C3" />
             <Setter Property="BorderThickness" Value="0,0,1,1" />
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FontWeight" Value="Medium" />
-            <Setter Property="Foreground" Value="#374151" />
+            <Setter Property="Foreground" Value="#3F3A32" />
             <Setter Property="Cursor" Value="Hand" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E5E7EB" />
+                    <Setter Property="Background" Value="#E5DFD1" />
                 </Trigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="IconButtonStyle" TargetType="{x:Type Button}">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="#D7DEE8" />
+            <Setter Property="BorderBrush" Value="#D8D2C3" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Foreground" Value="#374151" />
+            <Setter Property="Foreground" Value="#3F3A32" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Width" Value="32" />
@@ -51,10 +51,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#F3F4F6" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#F1EFE8" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#E5E7EB" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#E5DFD1" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -70,13 +70,13 @@
             <Setter Property="Padding" Value="1" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F8FAFC" />
-                    <Setter Property="BorderBrush" Value="#E5E7EB" />
+                    <Setter Property="Background" Value="#FBFAF6" />
+                    <Setter Property="BorderBrush" Value="#E8E1D2" />
                 </Trigger>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#EAF3FF" />
-                    <Setter Property="BorderBrush" Value="#B8D8FF" />
-                    <Setter Property="Foreground" Value="#0F172A" />
+                    <Setter Property="Background" Value="#E7F3EE" />
+                    <Setter Property="BorderBrush" Value="#9FCDBD" />
+                    <Setter Property="Foreground" Value="#1F2D28" />
                 </Trigger>
                 <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
                     <Setter Property="Background" Value="#FFF6E2" />
@@ -93,20 +93,22 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="#1F2937" Padding="28,22">
+        <!-- TODO_UI: Move the visual language away from a Windows share manager
+             and toward a small shop surface. This pass is intentionally light. -->
+        <Border Grid.Row="0" Background="#315C50" Padding="28,22">
             <StackPanel>
                 <TextBlock Text="ShareWorkin"
                            Foreground="White"
                            FontSize="28"
                            FontWeight="SemiBold" />
                 <TextBlock Text="共有フォルダーをあなたのお店として開くアプリ"
-                           Foreground="#D1D5DB"
+                           Foreground="#E7EFE8"
                            Margin="0,6,0,0"
                            FontSize="14" />
             </StackPanel>
         </Border>
 
-        <Grid Grid.Row="1" Margin="28" Background="White">
+        <Grid Grid.Row="1" Margin="28" Background="#FFFEFA">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="16" />
@@ -115,15 +117,16 @@
 
             <Border x:Name="ClosedShopPanel"
                     Grid.Row="0"
-                    BorderBrush="#D7DEE8"
+                    BorderBrush="#D8D2C3"
                     BorderThickness="1"
                     CornerRadius="8"
+                    Background="#FFFEFA"
                     Padding="20">
                 <StackPanel>
                     <TextBlock Text="わたしのお店"
                                FontSize="20"
                                FontWeight="SemiBold"
-                               Foreground="#111827" />
+                               Foreground="#2F2A22" />
 
                     <Grid Margin="0,14,0,0">
                         <Grid.ColumnDefinitions>
@@ -164,15 +167,16 @@
                                Text="共有する場所を選んでください。"
                                Margin="0,10,0,0"
                                FontSize="13"
-                               Foreground="#4B5563" />
+                               Foreground="#5F5A50" />
                 </StackPanel>
             </Border>
 
             <Border x:Name="OpenShopPanel"
                     Grid.Row="0"
-                    BorderBrush="#D7DEE8"
+                    BorderBrush="#A8C9BA"
                     BorderThickness="1"
                     CornerRadius="8"
+                    Background="#F8FCF8"
                     Padding="20,14"
                     Visibility="Collapsed">
                 <Grid>
@@ -197,19 +201,19 @@
                                    Text="わたしのお店"
                                    FontSize="20"
                                    FontWeight="SemiBold"
-                                   Foreground="#111827"
+                                   Foreground="#243B35"
                                    VerticalAlignment="Center" />
                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
                             <TextBlock x:Name="OpenStatusTextBlock"
                                        Text=""
                                        FontSize="13"
-                                       Foreground="#4B5563"
+                                       Foreground="#52645E"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip="" />
                             <TextBlock x:Name="OpenSharePathTextBlock"
                                        Text=""
                                        FontSize="11"
-                                       Foreground="#6B7280"
+                                       Foreground="#738079"
                                        TextTrimming="CharacterEllipsis"
                                        Margin="0,2,0,0"
                                        Visibility="Collapsed" />
@@ -239,7 +243,7 @@
                         <TextBlock Text="来店者ができること:"
                                    VerticalAlignment="Center"
                                    FontSize="12"
-                                   Foreground="#4B5563"
+                                   Foreground="#52645E"
                                    Margin="0,0,8,0" />
                         <ComboBox x:Name="AccessLevelComboBox"
                                   Width="160"
@@ -268,9 +272,10 @@
 
             <Border x:Name="ShopContentsBorder"
                     Grid.Row="2"
-                    BorderBrush="#D7DEE8"
+                    BorderBrush="#D8D2C3"
                     BorderThickness="1"
                     CornerRadius="8"
+                    Background="#FFFEFA"
                     Padding="20"
                     SizeChanged="ShopContentsBorder_SizeChanged">
                 <Grid>
@@ -318,7 +323,7 @@
                                     Content="お店の中身"
                                     FontSize="20"
                                     FontWeight="SemiBold"
-                                    Foreground="#111827"
+                                    Foreground="#2F2A22"
                                     Background="Transparent"
                                     BorderBrush="Transparent"
                                     BorderThickness="0"
@@ -328,7 +333,7 @@
                             <TextBlock x:Name="CurrentPathTextBlock"
                                        Text=""
                                        FontSize="12"
-                                       Foreground="#6B7280"
+                                       Foreground="#6F675C"
                                        VerticalAlignment="Bottom"
                                        TextTrimming="CharacterEllipsis"
                                        Margin="12,0,0,2"
@@ -490,7 +495,7 @@
             </Border>
         </Grid>
 
-        <Border Grid.Row="2" Background="#E5E7EB" Padding="28,10">
+        <Border Grid.Row="2" Background="#E8E1D2" Padding="28,10">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="160" />
@@ -505,8 +510,8 @@
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0"
-                           Text="ShareWorkin - あなたのお店を開きましょう"
-                           Foreground="#4B5563"
+                           Text="ShareWorkin - お店の気配を受け取ります"
+                           Foreground="#5D5448"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"
                            FontSize="12" />
@@ -527,7 +532,7 @@
                     <TextBlock Text="通知:"
                                VerticalAlignment="Center"
                                FontSize="11"
-                               Foreground="#6B7280"
+                               Foreground="#6F675C"
                                Margin="0,0,6,0" />
                     <ComboBox x:Name="NotificationModeComboBox"
                               Width="96"
@@ -541,7 +546,7 @@
                 </StackPanel>
                 <TextBlock Grid.Column="8"
                            Text="1.04"
-                           Foreground="#9CA3AF"
+                           Foreground="#9A8F7E"
                            VerticalAlignment="Center"
                            FontSize="11" />
             </Grid>

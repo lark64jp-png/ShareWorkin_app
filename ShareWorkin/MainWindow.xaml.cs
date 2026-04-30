@@ -77,6 +77,8 @@ public partial class MainWindow : Window
     private bool _isPollingMode;
     private bool _exitRequested;
     private bool _trayHintShown;
+    private bool _uiUnlocked;
+    private bool _startupHandled;
     private bool _wasOpenAtLastShutdown;
     private bool _suppressAccessLevelEvent;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
@@ -103,8 +105,8 @@ public partial class MainWindow : Window
         _notifyIcon.MouseDoubleClick += NotifyIcon_MouseDoubleClick;
 
         _trayMenu = new Forms.ContextMenuStrip();
-        _trayShowItem = new Forms.ToolStripMenuItem("お店を見る");
-        _trayShowItem.Click += (_, _) => Dispatcher.Invoke(ShowMainWindow);
+        _trayShowItem = new Forms.ToolStripMenuItem("画面を開く");
+        _trayShowItem.Click += (_, _) => Dispatcher.Invoke(ShowMainWindowWithPassword);
         _trayExitItem = new Forms.ToolStripMenuItem("アプリを終了");
         _trayExitItem.Click += (_, _) => Dispatcher.Invoke(ExitApp);
         _trayMenu.Items.Add(_trayShowItem);
@@ -126,6 +128,25 @@ public partial class MainWindow : Window
         MigrateLegacyHoldContents();
         UpdateShopState(false);
         UpdateColumnHeaders();
+        Loaded += MainWindow_Loaded;
+    }
+
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_startupHandled)
+        {
+            return;
+        }
+
+        _startupHandled = true;
+        Hide();
+        Dispatcher.BeginInvoke(new Action(HandleStartup));
+    }
+
+    private void HandleStartup()
+    {
+        RestoreOpenShopIfNeeded();
+        ShowMainWindowWithPassword();
     }
 
     private void MigrateLegacyHoldContents()
@@ -762,9 +783,9 @@ public partial class MainWindow : Window
 
     private void OpenInviteDialog()
     {
-        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
+        if (string.IsNullOrWhiteSpace(_shopFolder))
         {
-            SetTransientStatus("お店を開いてから招待を発行してください。");
+            SetTransientStatus("お店を選んでから招待を発行してください。");
             return;
         }
 
@@ -772,6 +793,12 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(shareName))
         {
             SetTransientStatus("お店の名前が決められませんでした。");
+            return;
+        }
+
+        if (!SmbAccountManager.EnsureStoredShopKey())
+        {
+            SetTransientStatus("招待を用意できませんでした。");
             return;
         }
 
@@ -1049,6 +1076,7 @@ public partial class MainWindow : Window
         int placedCount = 0;
         string? lastPlacedName = null;
         bool sawSameName = false;
+        List<string> placedPaths = new();
 
         foreach (string sourcePath in paths)
         {
@@ -1068,12 +1096,14 @@ public partial class MainWindow : Window
                     CopyDirectory(sourcePath, destinationPath);
                     placedCount++;
                     lastPlacedName = sourceName;
+                    placedPaths.Add(destinationPath);
                 }
                 else if (File.Exists(sourcePath))
                 {
                     File.Copy(sourcePath, destinationPath);
                     placedCount++;
                     lastPlacedName = sourceName;
+                    placedPaths.Add(destinationPath);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1096,6 +1126,11 @@ public partial class MainWindow : Window
                 lastPlacedName is not null)
             {
                 _pendingFocusName = lastPlacedName;
+            }
+
+            foreach (string placedPath in placedPaths)
+            {
+                NoteFutureSharePolicyRepair(placedPath, destinationFolder, SharePolicyRepairReason.Placed);
             }
 
             InvalidateSizeCacheUnder(destinationFolder);
@@ -1166,6 +1201,7 @@ public partial class MainWindow : Window
             }
 
             SetTransientStatus($"{Path.GetFileName(sourcePath)} を移しました。");
+            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
             InvalidateSizeCacheUnder(sourceParent);
             InvalidateSizeCacheUnder(destinationFolder);
             RefreshShopItems();
@@ -1266,6 +1302,7 @@ public partial class MainWindow : Window
             }
 
             SetTransientStatus($"{item.Name} を {newName} に変えました。");
+            NoteFutureSharePolicyRepair(destinationPath, sourceParent, SharePolicyRepairReason.Renamed);
             InvalidateSizeCacheUnder(sourceParent);
             _pendingFocusName = newName;
             RefreshShopItems();
@@ -1328,6 +1365,7 @@ public partial class MainWindow : Window
             }
 
             SetTransientStatus($"{item.Name} を移しました。");
+            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
             InvalidateSizeCacheUnder(sourceParent);
             InvalidateSizeCacheUnder(destinationFolder);
             RefreshShopItems();
@@ -1481,6 +1519,7 @@ public partial class MainWindow : Window
             SuppressExternalChangeNotifications();
             Directory.CreateDirectory(destinationPath);
             SetTransientStatus($"{folderName} を作りました。");
+            NoteFutureSharePolicyRepair(destinationPath, targetFolder, SharePolicyRepairReason.FolderCreated);
             InvalidateSizeCacheUnder(targetFolder);
             if (string.Equals(
                     Path.GetFullPath(targetFolder),
@@ -1561,7 +1600,7 @@ public partial class MainWindow : Window
             if (!_trayHintShown)
             {
                 _notifyIcon.BalloonTipTitle = "お店は開いたままです";
-                _notifyIcon.BalloonTipText = "トレイからお店を見られます。";
+                _notifyIcon.BalloonTipText = "お店は開いたまま、画面だけ閉じています。";
                 _notifyIcon.ShowBalloonTip(3000);
                 _trayHintShown = true;
             }
@@ -1593,6 +1632,16 @@ public partial class MainWindow : Window
         Activate();
     }
 
+    private void ShowMainWindowWithPassword()
+    {
+        if (!EnsureUiUnlocked())
+        {
+            return;
+        }
+
+        ShowMainWindow();
+    }
+
     private void ExitApp()
     {
         _exitRequested = true;
@@ -1601,7 +1650,69 @@ public partial class MainWindow : Window
 
     private void NotifyIcon_MouseDoubleClick(object? sender, Forms.MouseEventArgs e)
     {
-        Dispatcher.Invoke(ShowMainWindow);
+        Dispatcher.Invoke(ShowMainWindowWithPassword);
+    }
+
+    private bool EnsureUiUnlocked()
+    {
+        if (_uiUnlocked)
+        {
+            return true;
+        }
+
+        bool setup = !EntryPasswordManager.IsConfigured;
+        string? status = null;
+        while (true)
+        {
+            EntryPasswordDialog dialog = new(setup, status);
+            if (IsVisible)
+            {
+                dialog.Owner = this;
+            }
+            bool? result = dialog.ShowDialog();
+            if (result != true)
+            {
+                return false;
+            }
+
+            string password = dialog.EnteredPassword;
+            if (setup)
+            {
+                if (EntryPasswordManager.SetPassword(password))
+                {
+                    _uiUnlocked = true;
+                    return true;
+                }
+
+                status = "パスワードを入力してください。";
+                setup = true;
+                continue;
+            }
+
+            if (EntryPasswordManager.Verify(password))
+            {
+                _uiUnlocked = true;
+                return true;
+            }
+
+            status = "パスワードが違います。";
+        }
+    }
+
+    private void RestoreOpenShopIfNeeded()
+    {
+        if (!_wasOpenAtLastShutdown || _isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return;
+        }
+
+        if (!Directory.Exists(_shopFolder))
+        {
+            SwkLogger.Warn("Startup restore skipped: shop folder not found");
+            return;
+        }
+
+        OpenShop();
     }
 
     private void OpenShop()
@@ -1875,6 +1986,10 @@ public partial class MainWindow : Window
             }
 
             NotifyExternalShopChange();
+            NoteFutureSharePolicyRepair(
+                e.FullPath,
+                Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
+                SharePolicyRepairReason.ExternalCreated);
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
         });
     }
@@ -1884,6 +1999,10 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() =>
         {
             NotifyExternalShopChange();
+            NoteFutureSharePolicyRepair(
+                e.FullPath,
+                Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
+                SharePolicyRepairReason.ExternalRenamed);
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
         });
     }
@@ -2352,6 +2471,13 @@ public partial class MainWindow : Window
             {
                 NotifyExternalShopChange();
             }
+            if (e.ChangeType == WatcherChangeTypes.Created)
+            {
+                NoteFutureSharePolicyRepair(
+                    e.FullPath,
+                    Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
+                    SharePolicyRepairReason.ExternalCreated);
+            }
             RefreshShopItems();
         });
     }
@@ -2366,8 +2492,29 @@ public partial class MainWindow : Window
             }
             EnsureHoldFolderForShopChange(notifyWhenRecreated: true);
             NotifyExternalShopChange();
+            NoteFutureSharePolicyRepair(
+                e.FullPath,
+                Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
+                SharePolicyRepairReason.ExternalRenamed);
             RefreshShopItems();
         });
+    }
+
+    private void NoteFutureSharePolicyRepair(
+        string affectedPath,
+        string policySourceFolder,
+        SharePolicyRepairReason reason)
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder) ||
+            string.IsNullOrWhiteSpace(affectedPath) ||
+            string.IsNullOrWhiteSpace(policySourceFolder) ||
+            !IsUnderFolder(affectedPath, _shopFolder) ||
+            IsHoldFolderPath(affectedPath))
+        {
+            return;
+        }
+
+        SharePolicyRepair.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
     }
 
     private void ContentsSensor_Error(object sender, ErrorEventArgs e)

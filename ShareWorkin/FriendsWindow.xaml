@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="お友達"
         Height="480"
-        Width="640"
+        Width="720"
         WindowStartupLocation="CenterOwner"
         Background="#F5F7FA"
         FontFamily="Yu Gothic UI">
@@ -24,7 +24,7 @@
                    FontWeight="SemiBold"
                    Foreground="#111827" />
         <TextBlock Grid.Row="2"
-                   Text="ダブルクリックでお友達のお店を開きます。右側のボタンで取り込み・名前変更・削除ができます。"
+                   Text="開くたびに、LANの中にいるお友達のお店を確認します。"
                    FontSize="12"
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
@@ -39,9 +39,10 @@
                       MouseDoubleClick="FriendsListView_MouseDoubleClick">
                 <ListView.View>
                     <GridView>
-                        <GridViewColumn Header="呼び名" Width="160" DisplayMemberBinding="{Binding DisplayName}" />
-                        <GridViewColumn Header="お店" Width="160" DisplayMemberBinding="{Binding ShareName}" />
-                        <GridViewColumn Header="場所" Width="200" DisplayMemberBinding="{Binding UncPath}" />
+                        <GridViewColumn Header="呼び名" Width="140" DisplayMemberBinding="{Binding DisplayName}" />
+                        <GridViewColumn Header="お店" Width="130" DisplayMemberBinding="{Binding ShareName}" />
+                        <GridViewColumn Header="いま" Width="110" DisplayMemberBinding="{Binding PresenceLabel}" />
+                        <GridViewColumn Header="場所" Width="190" DisplayMemberBinding="{Binding LocationLabel}" />
                         <GridViewColumn Header="権限" Width="80" DisplayMemberBinding="{Binding AccessLabel}" />
                     </GridView>
                 </ListView.View>

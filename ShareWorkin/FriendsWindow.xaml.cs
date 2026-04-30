@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using ShareWorkin.SMB;
 
@@ -21,7 +22,7 @@ public partial class FriendsWindow : Window
         _ownerForDialogs = owner;
         _ownerShopFolder = ownerShopFolder;
         FriendsListView.ItemsSource = _rows;
-        Loaded += (_, _) => Reload();
+        Loaded += async (_, _) => await ReloadAndCheckPresenceAsync();
     }
 
     private void Reload()
@@ -39,6 +40,64 @@ public partial class FriendsWindow : Window
         {
             StatusTextBlock.Text = string.Empty;
         }
+    }
+
+    private async Task ReloadAndCheckPresenceAsync()
+    {
+        Reload();
+        if (_rows.Count == 0)
+        {
+            return;
+        }
+
+        StatusTextBlock.Text = "お友達のお店を探しています。";
+
+        IReadOnlyList<LanCandidate> candidates;
+        try
+        {
+            candidates = await LanScanner.ScanAsync();
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Lan scan failed: {ex.Message}");
+            StatusTextBlock.Text = "お友達の今いる場所を確認できませんでした。";
+            return;
+        }
+
+        List<Friend> friends = FriendsRepository.LoadAll().ToList();
+        int foundCount = 0;
+        int movedCount = 0;
+        string checkedAt = DateTime.UtcNow.ToString("o");
+
+        // Presence checking only reconciles already-invited shops. Unknown SMB
+        // hosts on the LAN are intentionally not promoted into friend candidates.
+        foreach (Friend friend in friends)
+        {
+            friend.LastCheckedAt = checkedAt;
+            LanCandidate? match = candidates.FirstOrDefault(c => IsSameHost(friend.HostMachineName, c.HostName));
+            if (match is null)
+            {
+                continue;
+            }
+
+            string address = match.Address.ToString();
+            if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+                !string.Equals(friend.LastKnownAddress, address, StringComparison.OrdinalIgnoreCase))
+            {
+                movedCount++;
+            }
+
+            friend.LastKnownAddress = address;
+            friend.LastFoundAt = checkedAt;
+            foundCount++;
+        }
+
+        FriendsRepository.SaveAll(friends);
+        Reload();
+
+        StatusTextBlock.Text = movedCount > 0
+            ? $"{foundCount} 件のお店を見つけました。{movedCount} 件は場所が変わっていました。"
+            : $"{foundCount} 件のお店を見つけました。";
     }
 
     private FriendRow? GetSelected() => FriendsListView.SelectedItem as FriendRow;
@@ -63,10 +122,10 @@ public partial class FriendsWindow : Window
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
         if (!string.IsNullOrEmpty(password))
         {
-            RegisterCredential(friend.HostMachineName, friend.UserName, password);
+            RegisterCredential(friend.ConnectHost, BuildRemoteUserName(friend.ConnectHost, friend.UserName), password);
         }
 
-        string unc = friend.UncPath;
+        string unc = friend.ConnectUncPath;
         if (string.IsNullOrEmpty(unc))
         {
             StatusTextBlock.Text = "お友達のお店の場所がわかりません。";
@@ -90,6 +149,27 @@ public partial class FriendsWindow : Window
             SwkLogger.Warn($"Open friend shop failed: {ex.Message}");
             StatusTextBlock.Text = "お店を開けませんでした。";
         }
+    }
+
+    private static bool IsSameHost(string expectedHost, string? foundHost)
+    {
+        string expected = NormalizeHostName(expectedHost);
+        string found = NormalizeHostName(foundHost);
+        return !string.IsNullOrWhiteSpace(expected) &&
+               !string.IsNullOrWhiteSpace(found) &&
+               string.Equals(expected, found, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeHostName(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return string.Empty;
+        }
+
+        string trimmed = host.Trim();
+        int dot = trimmed.IndexOf('.');
+        return dot > 0 ? trimmed[..dot] : trimmed;
     }
 
     private void ImportButton_Click(object sender, RoutedEventArgs e)
@@ -200,12 +280,31 @@ public partial class FriendsWindow : Window
         }
     }
 
+    private static string BuildRemoteUserName(string host, string user)
+    {
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(user))
+        {
+            return user;
+        }
+
+        return user.Contains('\\', StringComparison.Ordinal) || user.Contains('@', StringComparison.Ordinal)
+            ? user
+            : $@"{host}\{user}";
+    }
+
     private sealed class FriendRow
     {
         public Friend Source { get; }
         public string DisplayName => Source.DisplayName;
         public string ShareName => Source.ShareName;
-        public string UncPath => Source.UncPath;
+        public string LocationLabel => string.IsNullOrWhiteSpace(Source.LastKnownAddress)
+            ? Source.UncPath
+            : $@"\\{Source.LastKnownAddress}\{Source.ShareName}";
+        public string PresenceLabel => string.IsNullOrWhiteSpace(Source.LastCheckedAt)
+            ? "未確認"
+            : Source.IsCurrentlyFound
+                ? "来店可能"
+                : "不在";
         public string AccessLabel => string.Equals(Source.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
             ? "見るだけ"
             : "自由に編集";

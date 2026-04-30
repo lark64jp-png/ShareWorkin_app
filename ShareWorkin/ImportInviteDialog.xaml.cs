@@ -35,6 +35,8 @@ public partial class ImportInviteDialog : Window
             ? payload.HostMachineName
             : DisplayNameTextBox.Text.Trim();
 
+        // The imported friend record is the receiver's notebook entry for an
+        // invited shop. It is not an authoritative user/account registry.
         var existing = FriendsRepository.LoadAll().ToList();
 
         existing.RemoveAll(f =>
