@@ -48,6 +48,9 @@ Name: "{app}"; Permissions: users-modify
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: ".\ご利用にあたって.txt"; DestDir: "{app}"; Flags: ignoreversion
 
+[Icons]
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
@@ -545,7 +548,7 @@ begin
 
   RadioInstallBoth := TNewRadioButton.Create(WizardForm);
   RadioInstallBoth.Parent := CustomPage.Surface;
-  RadioInstallBoth.Caption := '標準インストール';
+  RadioInstallBoth.Caption := '新規インストール（削除して新規）';
   RadioInstallBoth.Font.Size := 9;
   RadioInstallBoth.Font.Style := [fsBold];
   RadioInstallBoth.Left := 0;
@@ -556,7 +559,7 @@ begin
 
   LblDescBoth := TLabel.Create(WizardForm);
   LblDescBoth.Parent := CustomPage.Surface;
-  LblDescBoth.Caption := '既存の ShareWorkin と設定を一掃し、.NET Desktop Runtime と ShareWorkin を新規インストールします。';
+  LblDescBoth.Caption := '既存の ShareWorkin・設定・お友達アカウント・共有定義をすべて消し、白紙から入れ直します。.NET Desktop Runtime も同時に整えます。';
   LblDescBoth.Font.Size := 8;
   LblDescBoth.Left := 20;
   LblDescBoth.Top := Y;
@@ -565,7 +568,7 @@ begin
 
   RadioInstallApp := TNewRadioButton.Create(WizardForm);
   RadioInstallApp.Parent := CustomPage.Surface;
-  RadioInstallApp.Caption := 'アプリのみ入れ替え（既存の設定を残す）';
+  RadioInstallApp.Caption := '更新インストール（情報を引き継いで更新）';
   RadioInstallApp.Font.Size := 9;
   RadioInstallApp.Font.Style := [fsBold];
   RadioInstallApp.Left := 0;
@@ -576,7 +579,7 @@ begin
 
   LblDescApp := TLabel.Create(WizardForm);
   LblDescApp.Parent := CustomPage.Surface;
-  LblDescApp.Caption := '既存の設定（共有先や容量計算など）を残したまま、ShareWorkin 本体のみを上書きインストールします。';
+  LblDescApp.Caption := '既存の設定・お店の鍵・保留物・お友達情報を引き継いだまま、ShareWorkin 本体のみを新しい版に置き換えます。';
   LblDescApp.Font.Size := 8;
   LblDescApp.Left := 20;
   LblDescApp.Top := Y;
@@ -596,7 +599,7 @@ begin
 
   LblDescUninstall := TLabel.Create(WizardForm);
   LblDescUninstall.Parent := CustomPage.Surface;
-  LblDescUninstall.Caption := 'ShareWorkin をアンインストールし、検出済みの旧データも削除します。';
+  LblDescUninstall.Caption := 'ShareWorkin をアンインストールし、設定・お店の鍵・保留物・お友達アカウント・共有定義をすべて消去します。';
   LblDescUninstall.Font.Size := 8;
   LblDescUninstall.Left := 20;
   LblDescUninstall.Top := Y;
