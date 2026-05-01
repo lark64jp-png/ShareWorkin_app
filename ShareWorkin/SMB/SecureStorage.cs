@@ -106,7 +106,7 @@ public static class SecureStorage
         try
         {
             byte[] encrypted = File.ReadAllBytes(StoragePath);
-            byte[] decrypted = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.LocalMachine);
+            byte[] decrypted = UnprotectWithFallback(encrypted);
             string json = Encoding.UTF8.GetString(decrypted);
             Dictionary<string, string>? values = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
             return values ?? new Dictionary<string, string>(StringComparer.Ordinal);
@@ -115,6 +115,32 @@ public static class SecureStorage
         {
             SwkLogger.Error("SecureStorage load failed", ex);
             return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static byte[] UnprotectWithFallback(byte[] encrypted)
+    {
+        // 通常は LocalMachine スコープで保管。
+        // 「アプリのみ入れ替え」経路で v1.04 の CurrentUser スコープのまま {app} に運ばれてくる場合に備え、
+        // LocalMachine で落ちたら CurrentUser を試し、成功したら LocalMachine で再保存する。
+        try
+        {
+            return ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.LocalMachine);
+        }
+        catch (CryptographicException)
+        {
+            byte[] decrypted = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.CurrentUser);
+            try
+            {
+                byte[] reencrypted = ProtectedData.Protect(decrypted, optionalEntropy: null, DataProtectionScope.LocalMachine);
+                File.WriteAllBytes(StoragePath, reencrypted);
+                SwkLogger.Info("Re-encrypted secure.dat from CurrentUser to LocalMachine scope");
+            }
+            catch (Exception ex) when (ex is IOException or CryptographicException or UnauthorizedAccessException)
+            {
+                SwkLogger.Warn($"Could not re-save secure.dat with LocalMachine scope: {ex.Message}");
+            }
+            return decrypted;
         }
     }
 
