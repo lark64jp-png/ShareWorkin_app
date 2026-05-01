@@ -325,6 +325,10 @@ begin
     RegDeleteKeyIncludingSubkeys(HKCU, UNINSTALL_REG_KEY);
 end;
 
+procedure RunPowerShell(Script: String); forward;
+procedure CleanupShareWorkinShares(); forward;
+procedure CleanupShareWorkinAccount(); forward;
+
 function CleanExistingInstall(Silent: Boolean; PreserveSettings: Boolean): Boolean;
 var
   RegisteredInstallDir: String;
@@ -343,7 +347,13 @@ begin
   end;
 
   if PreserveSettings then
-    BackupExistingSettings();
+    BackupExistingSettings()
+  else
+  begin
+    // 草案4 §A: ホルダー削除で痕跡完全消滅。SMB 共有・swkguest アカウントも一掃する。
+    CleanupShareWorkinShares();
+    CleanupShareWorkinAccount();
+  end;
 
   QueryInstallLocation(RegisteredInstallDir);
 
