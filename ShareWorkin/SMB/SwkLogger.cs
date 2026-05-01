@@ -15,9 +15,9 @@ public static class SwkLogger
 {
     private static readonly object Sync = new();
 
+    // 草案4 §A: ログもアプリホルダー直下に置く。
     private static readonly string LogDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ShareWorkin",
+        AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         "logs");
 
     public static void Info(string message) => Write(SwkLogLevel.Info, message);

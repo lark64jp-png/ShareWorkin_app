@@ -11,11 +11,19 @@ public static class SecureStorage
 {
     private static readonly object Sync = new();
 
-    private static readonly string StorageDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ShareWorkin");
+    // 草案4 §A: アプリは自分のアプリホルダーの外に書き込まない。
+    // secure.dat はアプリホルダー直下で、DPAPI LocalMachine スコープで保管する
+    // (機内のどの利用者からも復号できるようにする ── アプリホルダー集約と整合させるため)。
+    private static readonly string StorageDirectory = AppContext.BaseDirectory.TrimEnd(
+        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static readonly string StoragePath = Path.Combine(StorageDirectory, "secure.dat");
+
+    // v1.04 までの保管位置(CurrentUser スコープ)。アップグレード時に一度だけ拾い直す。
+    private static readonly string LegacyStoragePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ShareWorkin",
+        "secure.dat");
 
     public const string KeySwkGuestPassword = "swkguest.password";
     public const string KeySwkGuestCreatedAt = "swkguest.createdAt";
@@ -85,6 +93,11 @@ public static class SecureStorage
 
     private static Dictionary<string, string> LoadInternal()
     {
+        if (!File.Exists(StoragePath) && File.Exists(LegacyStoragePath))
+        {
+            TryMigrateLegacyStorage();
+        }
+
         if (!File.Exists(StoragePath))
         {
             return new Dictionary<string, string>(StringComparer.Ordinal);
@@ -93,7 +106,7 @@ public static class SecureStorage
         try
         {
             byte[] encrypted = File.ReadAllBytes(StoragePath);
-            byte[] decrypted = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.CurrentUser);
+            byte[] decrypted = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.LocalMachine);
             string json = Encoding.UTF8.GetString(decrypted);
             Dictionary<string, string>? values = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
             return values ?? new Dictionary<string, string>(StringComparer.Ordinal);
@@ -105,6 +118,26 @@ public static class SecureStorage
         }
     }
 
+    private static void TryMigrateLegacyStorage()
+    {
+        // CurrentUser で復号できるのは v1.04 当時に保存した利用者本人だけ。
+        // 復号できなければ静かに諦め、上位の EnsureAccount に鍵再生成経路を委ねる。
+        try
+        {
+            byte[] encrypted = File.ReadAllBytes(LegacyStoragePath);
+            byte[] decrypted = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.CurrentUser);
+            Directory.CreateDirectory(StorageDirectory);
+            byte[] reencrypted = ProtectedData.Protect(decrypted, optionalEntropy: null, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(StoragePath, reencrypted);
+            File.Delete(LegacyStoragePath);
+            SwkLogger.Info("Migrated secure.dat from %LocalAppData% to app folder (DPAPI scope: CurrentUser → LocalMachine)");
+        }
+        catch (Exception ex) when (ex is IOException or CryptographicException or UnauthorizedAccessException)
+        {
+            SwkLogger.Warn($"secure.dat migration skipped: {ex.Message}");
+        }
+    }
+
     private static void SaveInternal(Dictionary<string, string> values)
     {
         try
@@ -112,7 +145,7 @@ public static class SecureStorage
             Directory.CreateDirectory(StorageDirectory);
             string json = JsonSerializer.Serialize(values);
             byte[] data = Encoding.UTF8.GetBytes(json);
-            byte[] encrypted = ProtectedData.Protect(data, optionalEntropy: null, DataProtectionScope.CurrentUser);
+            byte[] encrypted = ProtectedData.Protect(data, optionalEntropy: null, DataProtectionScope.LocalMachine);
             File.WriteAllBytes(StoragePath, encrypted);
         }
         catch (Exception ex) when (ex is IOException or CryptographicException or UnauthorizedAccessException)

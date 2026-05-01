@@ -29,17 +29,23 @@ public partial class MainWindow : Window
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
 
-    private static readonly string LocalAppDataDirectory = Path.Combine(
+    // 草案4 §A: アプリは自分のアプリホルダーの外に書き込まない。
+    // すべてのデータ(settings / secure / hold / logs)はアプリホルダー直下に置く。
+    private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
+        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static readonly string SettingsPath = Path.Combine(AppHomeDirectory, "settings.json");
+
+    private static readonly string DefaultHoldFolderPath = Path.Combine(AppHomeDirectory, "hold");
+
+    // v1.04 までは %LocalAppData%\ShareWorkin に置いていた。アップグレード時に一度だけ移行する。
+    private static readonly string LegacyLocalAppDataDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ShareWorkin");
 
-    private static readonly string SettingsDirectory = LocalAppDataDirectory;
+    private static readonly string LegacySettingsPath = Path.Combine(LegacyLocalAppDataDirectory, "settings.json");
 
-    private static readonly string SettingsPath = Path.Combine(SettingsDirectory, "settings.json");
-
-    private static readonly string LegacySettingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
-
-    private static readonly string DefaultHoldFolderPath = Path.Combine(LocalAppDataDirectory, "hold");
+    private static readonly string LegacyHoldFolderPath = Path.Combine(LegacyLocalAppDataDirectory, "hold");
 
     private const string SettingsVersion = "1.04";
 
@@ -2918,7 +2924,7 @@ public partial class MainWindow : Window
 
     private void LoadSettings()
     {
-        TryMigrateLegacySettings();
+        TryMigrateLegacyData();
 
         if (!File.Exists(SettingsPath))
         {
@@ -2944,26 +2950,29 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void TryMigrateLegacySettings()
+    private static void TryMigrateLegacyData()
     {
+        // %LocalAppData%\ShareWorkin から AppHomeDirectory への一回限り移行(v1.04 → v1.05)。
+        // secure.dat は SecureStorage 側で(DPAPI スコープ再暗号化が必要なため)別経路で扱う。
         try
         {
-            if (File.Exists(SettingsPath))
+            Directory.CreateDirectory(AppHomeDirectory);
+
+            if (!File.Exists(SettingsPath) && File.Exists(LegacySettingsPath))
             {
-                return;
-            }
-            if (!File.Exists(LegacySettingsPath))
-            {
-                return;
+                File.Move(LegacySettingsPath, SettingsPath);
+                SwkLogger.Info("Migrated settings.json from %LocalAppData% to app folder");
             }
 
-            Directory.CreateDirectory(SettingsDirectory);
-            File.Copy(LegacySettingsPath, SettingsPath, overwrite: false);
-            SwkLogger.Info("Migrated settings.json from legacy install path to LocalAppData");
+            if (!Directory.Exists(DefaultHoldFolderPath) && Directory.Exists(LegacyHoldFolderPath))
+            {
+                Directory.Move(LegacyHoldFolderPath, DefaultHoldFolderPath);
+                SwkLogger.Info("Migrated hold folder from %LocalAppData% to app folder");
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            SwkLogger.Warn($"Settings migration skipped: {ex.Message}");
+            SwkLogger.Warn($"Legacy data migration skipped: {ex.Message}");
         }
     }
 
@@ -3033,7 +3042,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            Directory.CreateDirectory(SettingsDirectory);
+            Directory.CreateDirectory(AppHomeDirectory);
             AppSettings settings = new()
             {
                 ShopFolder = _shopFolder,
