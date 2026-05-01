@@ -92,10 +92,15 @@ if ($u) { Write-Output 'EXISTS' } else { Write-Output 'MISSING' }
 
         if (accountExists)
         {
-            // Do not silently rotate the shared shop key. Recreating it here would
-            // lock out every already-invited visitor at once.
-            SwkLogger.Error("swkguest exists but the stored shop key is missing");
-            return false;
+            // The app cannot recover the previous Windows account password once
+            // the DPAPI-protected store is missing or unreadable. Rotate the
+            // shop key so the owner can reopen the shop, then newly issued
+            // invites will carry the repaired key.
+            password = GeneratePassword();
+            SecureStorage.Set(SecureStorage.KeySwkGuestPassword, password);
+            SecureStorage.Set(SecureStorage.KeySwkGuestCreatedAt, DateTime.UtcNow.ToString("o"));
+            SwkLogger.Warn("swkguest exists but the stored shop key was missing; prepared a replacement shop key");
+            return true;
         }
 
         password = GeneratePassword();
