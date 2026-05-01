@@ -69,11 +69,13 @@ New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAcce
         string esName = EscapeSingleQuotes(shareName);
         string esPath = EscapeSingleQuotes(folderPath);
         string esDesc = EscapeSingleQuotes(description);
+        string account = EscapeSingleQuotes(SmbAccountManager.LocalQualifiedAccountName);
 
         string script = $@"
 $s = Get-SmbShare -Name '{esName}' -ErrorAction SilentlyContinue;
 if ($s) {{
-    Set-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -Force | Out-Null;
+    Remove-SmbShare -Name '{esName}' -Force | Out-Null;
+    New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}' | Out-Null;
 }}
 ";
         PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);
