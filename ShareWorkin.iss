@@ -58,7 +58,11 @@ const
   APP_EXE = 'ShareWorkin.exe';
   INSTALL_DIR = 'C:\MyApps\ShareWorkin';
   SETTINGS_FILE = 'settings.json';
+  SECURE_FILE = 'secure.dat';
+  HOLD_DIR = 'hold';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
+  SECURE_BACKUP_FILE = 'ShareWorkin_secure_backup.dat';
+  HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
   RUNTIME_REG_KEY = 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
   UNINSTALL_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7D6F9F2E-827D-4E8D-9D7C-81DD52D313E1}_is1';
@@ -105,41 +109,103 @@ begin
   Result := ExpandConstant('{tmp}\' + SETTINGS_BACKUP_FILE);
 end;
 
-function FindExistingSettings(var SettingsPath: String): Boolean;
+function SecureBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + SECURE_BACKUP_FILE);
+end;
+
+function HoldBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + HOLD_BACKUP_DIR);
+end;
+
+function FindExistingFile(FileName: String; var FoundPath: String): Boolean;
 begin
   Result := False;
-  SettingsPath := '';
+  FoundPath := '';
 
-  if FileExists(INSTALL_DIR + '\' + SETTINGS_FILE) then
+  if FileExists(INSTALL_DIR + '\' + FileName) then
   begin
-    SettingsPath := INSTALL_DIR + '\' + SETTINGS_FILE;
+    FoundPath := INSTALL_DIR + '\' + FileName;
     Result := True;
     Exit;
   end;
 
-  if FileExists(OldDataDir() + '\' + SETTINGS_FILE) then
+  if FileExists(OldDataDir() + '\' + FileName) then
   begin
-    SettingsPath := OldDataDir() + '\' + SETTINGS_FILE;
+    FoundPath := OldDataDir() + '\' + FileName;
+    Result := True;
+  end;
+end;
+
+function FindExistingDirectory(DirName: String; var FoundPath: String): Boolean;
+begin
+  Result := False;
+  FoundPath := '';
+
+  if DirExists(INSTALL_DIR + '\' + DirName) then
+  begin
+    FoundPath := INSTALL_DIR + '\' + DirName;
     Result := True;
     Exit;
   end;
+
+  if DirExists(OldDataDir() + '\' + DirName) then
+  begin
+    FoundPath := OldDataDir() + '\' + DirName;
+    Result := True;
+  end;
+end;
+
+function CopyDirectoryContents(SourceDir, DestDir: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  if not DirExists(SourceDir) then Exit;
+  ForceDirectories(DestDir);
+  if Exec(ExpandConstant('{cmd}'),
+    '/C xcopy "' + SourceDir + '" "' + DestDir + '" /E /I /Y /Q >nul 2>&1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Result := (ResultCode = 0);
 end;
 
 procedure BackupExistingSettings();
 var
-  SettingsPath: String;
+  Source: String;
 begin
   DeleteFile(SettingsBackupPath());
-  if FindExistingSettings(SettingsPath) then
-    CopyFile(SettingsPath, SettingsBackupPath(), False);
+  DeleteFile(SecureBackupPath());
+  DelTree(HoldBackupPath(), True, True, True);
+
+  if FindExistingFile(SETTINGS_FILE, Source) then
+    CopyFile(Source, SettingsBackupPath(), False);
+  if FindExistingFile(SECURE_FILE, Source) then
+    CopyFile(Source, SecureBackupPath(), False);
+  if FindExistingDirectory(HOLD_DIR, Source) then
+    CopyDirectoryContents(Source, HoldBackupPath());
 end;
 
 procedure RestoreExistingSettings();
+var
+  AppDir: String;
 begin
+  AppDir := ExpandConstant('{app}');
+
   if FileExists(SettingsBackupPath()) then
   begin
-    CopyFile(SettingsBackupPath(), ExpandConstant('{app}\' + SETTINGS_FILE), False);
+    CopyFile(SettingsBackupPath(), AppDir + '\' + SETTINGS_FILE, False);
     DeleteFile(SettingsBackupPath());
+  end;
+  if FileExists(SecureBackupPath()) then
+  begin
+    CopyFile(SecureBackupPath(), AppDir + '\' + SECURE_FILE, False);
+    DeleteFile(SecureBackupPath());
+  end;
+  if DirExists(HoldBackupPath()) then
+  begin
+    CopyDirectoryContents(HoldBackupPath(), AppDir + '\' + HOLD_DIR);
+    DelTree(HoldBackupPath(), True, True, True);
   end;
 end;
 
