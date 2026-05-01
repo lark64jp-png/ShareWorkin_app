@@ -357,7 +357,7 @@ public partial class MainWindow : Window
 
         MessageBoxResult result = System.Windows.MessageBox.Show(
             this,
-            "お店を開く・閉じるには管理者権限が必要です。\n今すぐ管理者として再起動しますか?",
+            "お店を開く・閉じる時だけ、管理者権限が必要です。\n「はい」を押すと、ShareWorkin を管理者権限で再起動します。",
             "ShareWorkin",
             MessageBoxButton.YesNo,
             MessageBoxImage.Information,
