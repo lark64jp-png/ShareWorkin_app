@@ -180,98 +180,65 @@
                     Padding="20,14"
                     Visibility="Collapsed">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid Grid.Row="0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="12" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="10" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="6" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="6" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="0"
-                                   Text="わたしのお店"
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="わたしのお店"
                                    FontSize="20"
                                    FontWeight="SemiBold"
-                                   Foreground="#243B35"
-                                   VerticalAlignment="Center" />
-                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                            <TextBlock x:Name="OpenStatusTextBlock"
-                                       Text=""
-                                       FontSize="13"
-                                       Foreground="#52645E"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTip="" />
-                            <TextBlock x:Name="OpenSharePathTextBlock"
-                                       Text=""
-                                       FontSize="11"
-                                       Foreground="#738079"
-                                       TextTrimming="CharacterEllipsis"
-                                       Margin="0,2,0,0"
-                                       Visibility="Collapsed" />
-                        </StackPanel>
-                        <Button Grid.Column="4"
-                                Content="選ぶ"
-                                Width="64"
-                                Height="30"
-                                Click="BrowseButton_Click" />
-                        <Button x:Name="OpenStateCloseButton"
-                                Grid.Column="6"
-                                Content="共有を閉じる"
-                                Width="100"
-                                Height="30"
-                                Click="ShopDoorButton_Click" />
-                        <Button Grid.Column="8"
-                                Content="エクスプローラ"
-                                Width="98"
-                                Height="30"
-                                Click="OpenFolderButton_Click" />
-                    </Grid>
-
-                    <StackPanel Grid.Row="1"
-                                Orientation="Horizontal"
-                                VerticalAlignment="Center"
-                                Margin="0,10,0,0">
-                        <TextBlock Text="来店者ができること:"
-                                   VerticalAlignment="Center"
-                                   FontSize="12"
+                                   Foreground="#243B35" />
+                        <TextBlock x:Name="OpenStatusTextBlock"
+                                   Text=""
+                                   FontSize="13"
                                    Foreground="#52645E"
-                                   Margin="0,0,8,0" />
-                        <ComboBox x:Name="AccessLevelComboBox"
-                                  Width="160"
-                                  Height="26"
-                                  FontSize="12"
-                                  VerticalContentAlignment="Center"
-                                  SelectionChanged="AccessLevelComboBox_SelectionChanged">
-                            <ComboBoxItem Content="自由に編集できる" Tag="Full" IsSelected="True" />
-                            <ComboBoxItem Content="見るだけ" Tag="Read" />
-                        </ComboBox>
-                        <Button x:Name="FriendsButton"
-                                Content="お友達"
-                                Width="80"
-                                Height="26"
-                                Margin="16,0,0,0"
-                                Click="FriendsButton_Click" />
-                        <Button x:Name="InviteButton"
-                                Content="招待を発行"
-                                Width="100"
-                                Height="26"
-                                Margin="6,0,0,0"
-                                Click="InviteButton_Click" />
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip=""
+                                   Margin="0,2,0,0" />
+                        <TextBlock x:Name="OpenSharePathTextBlock"
+                                   Text=""
+                                   FontSize="11"
+                                   Foreground="#738079"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0"
+                                   Visibility="Collapsed" />
                     </StackPanel>
+
+                    <Button x:Name="UserListButton"
+                            Grid.Column="2"
+                            Content="ユーザー一覧"
+                            Width="110"
+                            Height="32"
+                            Click="UserListButton_Click" />
+                    <Button x:Name="OpenStateCloseButton"
+                            Grid.Column="4"
+                            Content="共有を閉じる"
+                            Width="110"
+                            Height="32"
+                            Click="ShopDoorButton_Click" />
+                    <Button Grid.Column="6"
+                            Content="エクスプローラー"
+                            Width="116"
+                            Height="32"
+                            Click="OpenFolderButton_Click" />
                 </Grid>
             </Border>
 
+            <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
             <Border x:Name="ShopContentsBorder"
-                    Grid.Row="2"
+                    Grid.Column="0"
                     BorderBrush="#D8D2C3"
                     BorderThickness="1"
                     CornerRadius="8"
@@ -411,6 +378,31 @@
                                             </DataTemplate>
                                         </GridViewColumn.CellTemplate>
                                     </GridViewColumn>
+                                    <GridViewColumn x:Name="ShareStatusColumn"
+                                                    Width="86">
+                                        <GridViewColumn.Header>
+                                            <GridViewColumnHeader x:Name="ShareStatusColumnHeader"
+                                                                  Content="共有状況"
+                                                                  Foreground="#B0413E"
+                                                                  Tag="ShareStatus" />
+                                        </GridViewColumn.Header>
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="{Binding ShareStatusText}"
+                                                        Tag="{Binding}"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Padding="10,2"
+                                                        Background="Transparent"
+                                                        BorderBrush="Transparent"
+                                                        BorderThickness="0"
+                                                        Foreground="#B0413E"
+                                                        Cursor="Hand"
+                                                        Click="ShareStatusButton_Click"
+                                                        ToolTip="このアイテムの許可を指定" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
                                     <GridViewColumn x:Name="KindColumn"
                                                     Width="80"
                                                     DisplayMemberBinding="{Binding KindText}">
@@ -493,6 +485,60 @@
                     </DockPanel>
                 </Grid>
             </Border>
+
+            <Border x:Name="SidebarBorder"
+                    Grid.Column="1"
+                    Width="280"
+                    Margin="12,0,0,0"
+                    BorderBrush="#D8D2C3"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Background="#FFFEFA"
+                    Padding="14"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0"
+                               Text="お店の周りの人"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Foreground="#2F2A22" />
+                    <ListView Grid.Row="2"
+                              x:Name="SidebarListView"
+                              ItemsSource="{Binding SidebarItems}"
+                              BorderThickness="0"
+                              Background="Transparent"
+                              MouseDoubleClick="SidebarListView_MouseDoubleClick"
+                              ToolTip="ダブルクリックでお店を開きます。">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="2,4">
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               FontSize="13"
+                                               FontWeight="Medium"
+                                               Foreground="#2F2A22" />
+                                    <TextBlock Text="{Binding StatusLabel}"
+                                               FontSize="11"
+                                               Foreground="#6F675C" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock Grid.Row="3"
+                               x:Name="SidebarStatusTextBlock"
+                               Text=""
+                               FontSize="11"
+                               Foreground="#52645E"
+                               Margin="0,8,0,0"
+                               TextWrapping="Wrap" />
+                </Grid>
+            </Border>
+            </Grid>
         </Grid>
 
         <Border Grid.Row="2" Background="#E8E1D2" Padding="28,10">

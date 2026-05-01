@@ -1,0 +1,153 @@
+<Window x:Class="ShareWorkin.PermissionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="許可指定"
+        Height="460"
+        Width="640"
+        WindowStartupLocation="CenterOwner"
+        Background="#FFFEFA"
+        FontFamily="Yu Gothic UI">
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="6" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="14" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="14" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left"
+                       Text="許可指定"
+                       FontSize="20"
+                       FontWeight="SemiBold"
+                       Foreground="#2F2A22" />
+            <TextBlock DockPanel.Dock="Left"
+                       Text="読み・書き"
+                       FontSize="13"
+                       Foreground="#6F675C"
+                       VerticalAlignment="Bottom"
+                       Margin="14,0,0,4" />
+            <TextBlock DockPanel.Dock="Right"
+                       x:Name="TargetItemTextBlock"
+                       Text=""
+                       FontSize="13"
+                       Foreground="#52645E"
+                       VerticalAlignment="Bottom"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="280" />
+        </DockPanel>
+
+        <TextBlock Grid.Row="2"
+                   Text="左に誰もいないと「全員」が読み書きできます。誰かを左に入れると、その人だけの指定になります。"
+                   FontSize="12"
+                   Foreground="#4B5563"
+                   TextWrapping="Wrap" />
+
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="60" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    BorderBrush="#D8D2C3"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Background="White">
+                <Grid>
+                    <ListBox x:Name="AllowedListBox"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectionMode="Extended">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" FontSize="13" Padding="6,4" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="EveryoneOverlay"
+                               Text="全員"
+                               FontSize="34"
+                               FontWeight="SemiBold"
+                               Foreground="#C8C2B5"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False" />
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Column="1"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center">
+                <Button Content="←"
+                        x:Name="MoveLeftButton"
+                        Width="36"
+                        Height="32"
+                        Margin="0,4"
+                        Click="MoveLeftButton_Click"
+                        ToolTip="未設定 → 許可" />
+                <Button Content="→"
+                        x:Name="MoveRightButton"
+                        Width="36"
+                        Height="32"
+                        Margin="0,4"
+                        Click="MoveRightButton_Click"
+                        ToolTip="許可 → 未設定" />
+            </StackPanel>
+
+            <Border Grid.Column="2"
+                    BorderBrush="#D8D2C3"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Background="White">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0"
+                               Text="未設定ユーザー"
+                               FontSize="12"
+                               Foreground="#6F675C"
+                               Padding="8,6,8,0" />
+                    <ListBox Grid.Row="1"
+                             x:Name="UnsetListBox"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectionMode="Extended">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" FontSize="13" Padding="6,4" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="6"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <TextBlock x:Name="StatusTextBlock"
+                       VerticalAlignment="Center"
+                       FontSize="12"
+                       Foreground="#4B5563"
+                       Margin="0,0,12,0" />
+            <Button Content="OK"
+                    Width="84"
+                    Height="32"
+                    IsDefault="True"
+                    Margin="0,0,8,0"
+                    Click="OkButton_Click" />
+            <Button Content="キャンセル"
+                    Width="96"
+                    Height="32"
+                    IsCancel="True"
+                    Click="CancelButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

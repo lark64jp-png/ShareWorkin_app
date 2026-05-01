@@ -86,7 +86,6 @@ public partial class MainWindow : Window
     private bool _uiUnlocked;
     private bool _startupHandled;
     private bool _wasOpenAtLastShutdown;
-    private bool _suppressAccessLevelEvent;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private DisplayMode _currentMode = DisplayMode.Shop;
     private ShopSortField _sortField = ShopSortField.Name;
@@ -96,8 +95,20 @@ public partial class MainWindow : Window
 
     public ObservableCollection<ShopItem> ShopItems { get; } = [];
 
+    public ObservableCollection<SidebarRow> SidebarItems { get; } = [];
+
     public MainWindow()
     {
+        if (!IsRunningAsAdmin())
+        {
+            System.Windows.MessageBox.Show(
+                "ShareWorkin は管理者権限で動く必要があります。\nインストールし直すか、Windows の設定をご確認ください。",
+                "ShareWorkin",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            Environment.Exit(0);
+        }
+
         InitializeComponent();
         DataContext = this;
 
@@ -350,52 +361,6 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is System.Security.SecurityException or InvalidOperationException)
         {
-            return false;
-        }
-    }
-
-    private bool TryEnsureAdminForShopOps()
-    {
-        if (IsRunningAsAdmin())
-        {
-            return true;
-        }
-
-        MessageBoxResult result = System.Windows.MessageBox.Show(
-            this,
-            "お店を開く・閉じる時だけ、管理者権限が必要です。\n「はい」を押すと、ShareWorkin を管理者権限で再起動します。",
-            "ShareWorkin",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Information,
-            MessageBoxResult.Yes);
-        if (result != MessageBoxResult.Yes)
-        {
-            return false;
-        }
-
-        try
-        {
-            string? exePath = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exePath))
-            {
-                return false;
-            }
-
-            ProcessStartInfo psi = new()
-            {
-                FileName = exePath,
-                UseShellExecute = true,
-                Verb = "runas",
-            };
-            Process.Start(psi);
-            _exitRequested = true;
-            Close();
-            return false;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            SwkLogger.Warn($"Admin relaunch failed: {ex.Message}");
-            SetTransientStatus("管理者として再起動できませんでした。");
             return false;
         }
     }
@@ -721,70 +686,41 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void AccessLevelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void UserListButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppressAccessLevelEvent)
-        {
-            return;
-        }
-
-        ShareAccessRight selected = ShareAccessRight.Full;
-        if (AccessLevelComboBox.SelectedItem is ComboBoxItem { Tag: string tag } &&
-            string.Equals(tag, "Read", StringComparison.OrdinalIgnoreCase))
-        {
-            selected = ShareAccessRight.Read;
-        }
-
-        if (selected == _shareAccessRight)
-        {
-            return;
-        }
-
-        _shareAccessRight = selected;
-        SaveSettings();
-
-        if (_isShopOpen && !string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            string shareName = DeriveShareName(_shopFolder);
-            if (!string.IsNullOrWhiteSpace(shareName))
-            {
-                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-                try
-                {
-                    if (!SmbShareManager.GrantSwkGuest(shareName, _shareAccessRight))
-                    {
-                        SetTransientStatus("権限の切替に失敗しました。");
-                        return;
-                    }
-                }
-                finally
-                {
-                    Mouse.OverrideCursor = null;
-                }
-                SetTransientStatus(_shareAccessRight == ShareAccessRight.Read
-                    ? "見るだけに切り替えました。"
-                    : "自由に編集できるに切り替えました。");
-            }
-        }
-    }
-
-    private void FriendsButton_Click(object sender, RoutedEventArgs e)
-    {
-        OpenFriendsWindow();
-    }
-
-    private void InviteButton_Click(object sender, RoutedEventArgs e)
-    {
-        OpenInviteDialog();
-    }
-
-    private void OpenFriendsWindow()
-    {
-        FriendsWindow window = new(this, _shopFolder)
-        {
-            Owner = this
-        };
+        UserListWindow window = new(this) { Owner = this };
         window.ShowDialog();
+    }
+
+    private void ShareStatusButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: ShopItem item })
+        {
+            return;
+        }
+
+        PermissionWindow window = new(item) { Owner = this };
+        if (window.ShowDialog() == true)
+        {
+            item.RefreshShareStatus();
+        }
+    }
+
+    private void UpdateSidebar(bool isOpen)
+    {
+        // The inline sidebar was superseded by the ユーザー一覧 popup.
+        // The XAML element is preserved (Collapsed) so its name field stays bound.
+        _ = isOpen;
+        SidebarBorder.Visibility = Visibility.Collapsed;
+        SidebarItems.Clear();
+        SidebarStatusTextBlock.Text = string.Empty;
+    }
+
+    private void SidebarListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Sidebar is hidden; the handler stays so XAML hookup compiles.
+        _ = sender;
+        _ = e;
     }
 
     private void OpenInviteDialog()
@@ -1732,11 +1668,6 @@ public partial class MainWindow : Window
         if (!Directory.Exists(_shopFolder))
         {
             UpdateShopState(false, "その場所が見つかりません。");
-            return;
-        }
-
-        if (!TryEnsureAdminForShopOps())
-        {
             return;
         }
 
@@ -2997,32 +2928,11 @@ public partial class MainWindow : Window
             : ShareAccessRight.Full;
     }
 
-    private void SelectAccessLevel(ShareAccessRight right)
+    private static void SelectAccessLevel(ShareAccessRight right)
     {
-        if (AccessLevelComboBox is null)
-        {
-            return;
-        }
-
-        _suppressAccessLevelEvent = true;
-        try
-        {
-            string targetTag = right == ShareAccessRight.Read ? "Read" : "Full";
-            foreach (object item in AccessLevelComboBox.Items)
-            {
-                if (item is ComboBoxItem { Tag: string tag } &&
-                    string.Equals(tag, targetTag, StringComparison.Ordinal))
-                {
-                    AccessLevelComboBox.SelectedItem = item;
-                    return;
-                }
-            }
-            AccessLevelComboBox.SelectedIndex = 0;
-        }
-        finally
-        {
-            _suppressAccessLevelEvent = false;
-        }
+        // The global access-level UI was retired in favor of per-item 共有状況.
+        // The state is still loaded from settings for the SMB-share-level grant.
+        _ = right;
     }
 
     private static NotificationMode ResolveNotificationMode(AppSettings? settings)
@@ -3120,7 +3030,19 @@ public partial class MainWindow : Window
         OpenSharePathTextBlock.Visibility = string.IsNullOrEmpty(uncPath)
             ? Visibility.Collapsed
             : Visibility.Visible;
+
+        UpdateSidebar(isOpen);
     }
+}
+
+public sealed class SidebarRow
+{
+    public string DisplayName { get; init; } = string.Empty;
+    public string StatusLabel { get; init; } = string.Empty;
+    public bool IsFriend { get; init; }
+    public Friend? Friend { get; init; }
+    public string? LanHost { get; init; }
+    public string? LanAddress { get; init; }
 }
 
 public sealed class ShopItem : INotifyPropertyChanged
@@ -3170,6 +3092,18 @@ public sealed class ShopItem : INotifyPropertyChanged
     }
 
     public string KindText => IsDirectory ? "フォルダー" : "ファイル";
+
+    // Per-item sharing state. Empty list = 全員, non-empty = 指定.
+    // The list holds nicknames as shown in 許可指定; ACL wiring is deferred to
+    // v2.2 spec freeze, so this is currently in-memory only.
+    public ObservableCollection<string> AllowedUsers { get; } = new();
+
+    public string ShareStatusText => AllowedUsers.Count == 0 ? "全員" : "指定";
+
+    public void RefreshShareStatus()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShareStatusText)));
+    }
 
     public string UpdatedAtText => UpdatedAt.ToString("yyyy/MM/dd HH:mm");
 
