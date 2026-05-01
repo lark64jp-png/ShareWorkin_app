@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Principal;
 
 namespace ShareWorkin.SMB;
 
@@ -22,6 +23,24 @@ public static class SmbNtfsManager
 
         SwkLogger.Info($"IsolateShopRoot start: {shopRootPath}");
 
+        // 骨格仕様書 v0.1 条文 1.5: 店主のローカル権限を奪わない。継承を切る場合は
+        // SYSTEM/Administrators/swkguest に加えて、現在ログオン中の店主 SID にも Full を付与する。
+        string? ownerSid;
+        try
+        {
+            ownerSid = WindowsIdentity.GetCurrent().User?.Value;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Error("IsolateShopRoot: failed to read current user SID", ex);
+            return false;
+        }
+        if (string.IsNullOrEmpty(ownerSid))
+        {
+            SwkLogger.Warn("IsolateShopRoot: current user SID is empty");
+            return false;
+        }
+
         if (!RunIcacls(new[] { shopRootPath, "/inheritance:r" }, "Disable inheritance"))
         {
             return false;
@@ -33,6 +52,11 @@ public static class SmbNtfsManager
         }
 
         if (!RunIcacls(new[] { shopRootPath, "/grant:r", $"{SidAdministrators}:{PermFull}" }, "Grant Administrators"))
+        {
+            return false;
+        }
+
+        if (!RunIcacls(new[] { shopRootPath, "/grant:r", $"*{ownerSid}:{PermFull}" }, "Grant Owner"))
         {
             return false;
         }

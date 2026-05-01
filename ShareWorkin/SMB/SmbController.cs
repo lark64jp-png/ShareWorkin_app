@@ -107,8 +107,11 @@ public static class SmbController
 
         bool removeOk = SmbShareManager.RemoveShare(shareName);
         bool revokeOk = SmbNtfsManager.RevokeSwkGuest(shopRootPath);
+        // 骨格仕様書 v0.1 条文 1.5 (ii) / 条文 3.2: 閉店時に継承を復元する。
+        // 開店時に IsolateShopRoot で /inheritance:r したものを対称に戻す。
+        bool restoreOk = SmbNtfsManager.RestoreInheritance(shopRootPath);
 
-        bool ok = removeOk && revokeOk;
+        bool ok = removeOk && revokeOk && restoreOk;
         SwkLogger.Info($"CloseShopSequence done: ok={ok}");
         return ok;
     }
