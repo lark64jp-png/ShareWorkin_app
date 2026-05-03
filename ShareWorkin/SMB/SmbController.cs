@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace ShareWorkin.SMB;
@@ -9,11 +10,20 @@ public sealed record ShopOpenRequest(
     string ProfileLabel,
     ShareAccessRight AccessRight);
 
+public enum OwnershipChangePrompt
+{
+    None,
+    Verified,         // 事前確認で全件OK確定。標準ダイアログ。
+    Unverifiable,     // 列挙不能で事前確認できず。別文言ダイアログ。
+}
+
 public sealed record ShopOpenResult(
     bool Succeeded,
     string? FailureMessage,
     SmbLayerStatus? StatusBefore,
-    SmbLayerStatus? StatusAfter);
+    SmbLayerStatus? StatusAfter,
+    OwnershipChangePrompt OwnershipPrompt = OwnershipChangePrompt.None,
+    IReadOnlyList<string>? BlockedPaths = null);
 
 public static class SmbController
 {
@@ -29,10 +39,12 @@ public static class SmbController
         return a && b && c && d;
     }
 
-    public static ShopOpenResult OpenShopSequence(ShopOpenRequest request)
+    public static ShopOpenResult OpenShopSequence(
+        ShopOpenRequest request,
+        bool userAuthorizedOwnershipChange = false)
     {
         ArgumentNullException.ThrowIfNull(request);
-        SwkLogger.Info($"OpenShopSequence start: name='{request.ShareName}'");
+        SwkLogger.Info($"OpenShopSequence start: name='{request.ShareName}', authorizedOwnership={userAuthorizedOwnershipChange}");
 
         SmbLayerStatus before = SmbLayerChecker.GetCurrentState(request.ShopRootPath);
 
@@ -44,6 +56,53 @@ public static class SmbController
         if (!SmbAccountManager.EnsureAccount())
         {
             return Fail("お店の鍵が用意できませんでした。", before, null);
+        }
+
+        // 草案6 §A: 所有権が現ユーザーに無い場合、破壊的操作の前に「触らずに確かめる」。
+        // CanModifyAcl が false なら IsolateShopRoot は必ず失敗するため、事前検査と同意取得を挟む。
+        if (!SmbNtfsManager.CanModifyAcl(request.ShopRootPath))
+        {
+            TakeOwnershipPreflight preflight = SmbNtfsManager.PreflightTakeOwnership(request.ShopRootPath);
+
+            // 内包全件OK: 標準同意ダイアログを出す経路
+            // 列挙不能: 事前確認できないが所有権書き換えで救える可能性がある経路(別文言)
+            // それ以外(個別不能項目あり): 救済不可として停止
+            OwnershipChangePrompt prompt = preflight switch
+            {
+                { AllAccessible: true } => OwnershipChangePrompt.Verified,
+                { EnumerationBlocked: true } => OwnershipChangePrompt.Unverifiable,
+                _ => OwnershipChangePrompt.None,
+            };
+
+            if (prompt == OwnershipChangePrompt.None)
+            {
+                SwkLogger.Warn($"OpenShopSequence aborted: {preflight.BlockedPaths.Count} item(s) cannot have ownership changed");
+                return new ShopOpenResult(
+                    Succeeded: false,
+                    FailureMessage: "このフォルダーの一部のファイルは所有者を変更できないため、お店として開けません。",
+                    StatusBefore: before,
+                    StatusAfter: null,
+                    OwnershipPrompt: OwnershipChangePrompt.None,
+                    BlockedPaths: preflight.BlockedPaths);
+            }
+
+            if (!userAuthorizedOwnershipChange)
+            {
+                SwkLogger.Info($"OpenShopSequence: ownership change required ({prompt}), awaiting user consent");
+                return new ShopOpenResult(
+                    Succeeded: false,
+                    FailureMessage: null,
+                    StatusBefore: before,
+                    StatusAfter: null,
+                    OwnershipPrompt: prompt,
+                    BlockedPaths: null);
+            }
+
+            SwkLogger.Info("OpenShopSequence: user authorized ownership change, executing takeown");
+            if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
+            {
+                return Fail("所有者の変更に失敗しました。", before, null);
+            }
         }
 
         if (!SmbNtfsManager.IsolateShopRoot(request.ShopRootPath))

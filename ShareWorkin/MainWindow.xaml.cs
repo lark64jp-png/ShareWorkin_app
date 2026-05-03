@@ -910,7 +910,7 @@ public partial class MainWindow : Window
 
         double scrollbar = SystemParameters.VerticalScrollBarWidth;
         double padding = 8;
-        double otherCols = KindColumn.Width + UpdatedAtColumn.Width + SizeColumn.Width;
+        double otherCols = ShareStatusColumn.Width + KindColumn.Width + UpdatedAtColumn.Width + SizeColumn.Width;
         double nameWidth = total - otherCols - scrollbar - padding;
         if (nameWidth < 80)
         {
@@ -1701,11 +1701,53 @@ public partial class MainWindow : Window
             Mouse.OverrideCursor = null;
         }
 
+        // 草案6 §A: 所有者書き換えが必要な場合は、利用者の明示同意を挟む。
+        // 事前確認できた場合と、フォルダーが完全ロックで確認すらできなかった場合で文言を分ける。
+        if (result.OwnershipPrompt != OwnershipChangePrompt.None)
+        {
+            string consentBody = result.OwnershipPrompt == OwnershipChangePrompt.Unverifiable
+                ? "このフォルダーは現在の権限では中身を確認できません。\n所有者を変更してから処理を進めますか?\n※内包されたデータがある場合、すべて公開されます。"
+                : "このフォルダーを利用するには、所有者の変更が必要です。\n※内包されたデータがある場合、すべて公開されます。";
+
+            MessageBoxResult consent = System.Windows.MessageBox.Show(
+                this,
+                consentBody,
+                "確認",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.None);
+
+            if (consent != MessageBoxResult.OK)
+            {
+                UpdateShopState(false, "開店を取りやめました。");
+                return;
+            }
+
+            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+            try
+            {
+                result = SmbController.OpenShopSequence(request, userAuthorizedOwnershipChange: true);
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
+            }
+        }
+
         if (!result.Succeeded)
         {
             string message = string.IsNullOrWhiteSpace(result.FailureMessage)
                 ? "お店を開けませんでした。"
                 : result.FailureMessage!;
+            if (result.BlockedPaths is { Count: > 0 } blocked)
+            {
+                int show = Math.Min(blocked.Count, 5);
+                string list = string.Join("\n", blocked.Take(show).Select(p => "・" + p));
+                if (blocked.Count > show)
+                {
+                    list += $"\nほか {blocked.Count - show} 件";
+                }
+                message += "\n\n対象:\n" + list;
+            }
             UpdateShopState(false, message);
             return;
         }

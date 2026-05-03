@@ -1,7 +1,8 @@
 #define MyAppName "ShareWorkin"
 #define MyAppVersion "1.04"
-#define MyAppPublisher "ShareWorkin"
+#define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
+#define MyAppCorporateURL "https://media-house.jp/"
 #define MyAppExeName "ShareWorkin.exe"
 #define SourceDir ".\dist\publish\ShareWorkin"
 
@@ -10,7 +11,7 @@ AppId={{7D6F9F2E-827D-4E8D-9D7C-81DD52D313E1}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppPublisherURL={#MyAppURL}
+AppPublisherURL={#MyAppCorporateURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName=C:\MyApps\{#MyAppName}
@@ -48,8 +49,12 @@ Name: "{app}"; Permissions: users-modify
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: ".\ご利用にあたって.txt"; DestDir: "{app}"; Flags: ignoreversion
 
+[Tasks]
+Name: "desktopicon"; Description: "デスクトップにショートカットを作る"; GroupDescription: "追加アイコン:"
+
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -328,7 +333,6 @@ begin
     RegDeleteKeyIncludingSubkeys(HKCU, UNINSTALL_REG_KEY);
 end;
 
-procedure RunPowerShell(Script: String); forward;
 procedure CleanupShareWorkinShares(); forward;
 procedure CleanupShareWorkinAccount(); forward;
 
@@ -727,14 +731,28 @@ begin
   end;
 end;
 
-procedure HideInstallerArtifacts();
+// 草案6 §D: 利用者から見える領域に並ぶファイルは「意味のあるもの」だけ。
+// 実装上避けられない副産物(unins000.*, 内部用 .ico, .NET 配置物等)は不可視属性で配置する。
+// Hidden 単独だと「隠しファイル表示」を有効にした閲覧者から見えてしまうため、System 属性も併用し、
+// 「保護されたOSファイルを表示しない」(Win11 既定有効)が効く位置に置く。
+procedure HideFile(const FileName: String);
 var
   ResultCode: Integer;
+  FullPath: String;
 begin
-  Exec(ExpandConstant('{sys}\attrib.exe'), '+h "' + ExpandConstant('{app}\unins000.exe') + '"',
+  FullPath := ExpandConstant('{app}\' + FileName);
+  Exec(ExpandConstant('{sys}\attrib.exe'), '+h +s "' + FullPath + '"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\attrib.exe'), '+h "' + ExpandConstant('{app}\unins000.dat') + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure HideInstallerArtifacts();
+begin
+  HideFile('unins000.exe');
+  HideFile('unins000.dat');
+  HideFile('app.ico');
+  HideFile('ShareWorkin.dll');
+  HideFile('ShareWorkin.deps.json');
+  HideFile('ShareWorkin.runtimeconfig.json');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -760,23 +778,34 @@ begin
     Confirm := False;
 end;
 
-procedure RunPowerShell(Script: String);
+procedure CleanupShareWorkinShares();
 var
+  ShareNames: TArrayOfString;
+  I: Integer;
+  Multi: String;
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;
-
-procedure CleanupShareWorkinShares();
-begin
-  RunPowerShell('try { Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Description -like ''ShareWorkin:*'' } | ForEach-Object { Remove-SmbShare -Name $_.Name -Force -ErrorAction SilentlyContinue } } catch {}');
+  if not RegGetValueNames(HKLM, 'SYSTEM\CurrentControlSet\Services\LanmanServer\Shares', ShareNames) then
+    Exit;
+  for I := 0 to GetArrayLength(ShareNames) - 1 do
+  begin
+    if ShareNames[I] = '' then Continue;
+    if not RegQueryMultiStringValue(HKLM, 'SYSTEM\CurrentControlSet\Services\LanmanServer\Shares', ShareNames[I], Multi) then
+      Continue;
+    if Pos(#13#10 + 'Remark=ShareWorkin:', #13#10 + Multi) > 0 then
+      Exec(ExpandConstant('{cmd}'),
+        '/C net share "' + ShareNames[I] + '" /delete /y >nul 2>&1',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
 end;
 
 procedure CleanupShareWorkinAccount();
+var
+  ResultCode: Integer;
 begin
-  RunPowerShell('try { Get-LocalUser -Name ''swkguest'' -ErrorAction SilentlyContinue | Remove-LocalUser -ErrorAction SilentlyContinue } catch {}');
+  Exec(ExpandConstant('{cmd}'),
+    '/C net user swkguest /delete >nul 2>&1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
