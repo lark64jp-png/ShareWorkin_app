@@ -14,6 +14,10 @@ public sealed record LanCandidate(IPAddress Address, string? HostName);
 public static class LanScanner
 {
     private const int SmbPort = 445;
+    // Windows PC は 445 と並んで 135(RPC Endpoint Mapper) も開いていることがほぼ常。
+    // NASNE/LinkStation 等の家電系 SMB は 135 を持たない。
+    // ShareWorkin の用途は Windows PC 同士なので 445 のみのホストは候補から除外する。
+    private const int RpcPort = 135;
     private const int ProbeTimeoutMs = 1000;
     private const int MaxParallel = 64;
 
@@ -57,26 +61,40 @@ public static class LanScanner
         SwkLogger.Info($"LanScanner: probing {targets.Count} addresses");
 
         SemaphoreSlim gate = new(MaxParallel);
-        List<Task<LanCandidate?>> probes = targets
+        List<Task<ProbeOutcome>> probes = targets
             .Select(ip => ProbeAsync(ip, gate, cancellationToken))
             .ToList();
 
-        LanCandidate?[] results = await Task.WhenAll(probes).ConfigureAwait(false);
-        return results.Where(r => r is not null).Cast<LanCandidate>().ToArray();
+        ProbeOutcome[] outcomes = await Task.WhenAll(probes).ConfigureAwait(false);
+
+        int smbOnly = outcomes.Count(o => o.SmbOpen && !o.RpcOpen);
+        int both = outcomes.Count(o => o.SmbOpen && o.RpcOpen);
+        SwkLogger.Debug($"LanScanner: 445 only={smbOnly} (excluded as non-Windows SMB), 445+135={both} (included)");
+
+        return outcomes
+            .Where(o => o.Candidate is not null)
+            .Select(o => o.Candidate!)
+            .ToArray();
     }
 
-    private static async Task<LanCandidate?> ProbeAsync(IPAddress address, SemaphoreSlim gate, CancellationToken token)
+    private readonly record struct ProbeOutcome(bool SmbOpen, bool RpcOpen, LanCandidate? Candidate);
+
+    private static async Task<ProbeOutcome> ProbeAsync(IPAddress address, SemaphoreSlim gate, CancellationToken token)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            using TcpClient client = new();
-            Task connect = client.ConnectAsync(address, SmbPort, token).AsTask();
-            Task delay = Task.Delay(ProbeTimeoutMs, token);
-            Task done = await Task.WhenAny(connect, delay).ConfigureAwait(false);
-            if (done != connect || !client.Connected)
+            bool smbOpen = await TryConnectAsync(address, SmbPort, token).ConfigureAwait(false);
+            if (!smbOpen)
             {
-                return null;
+                return new ProbeOutcome(false, false, null);
+            }
+
+            bool rpcOpen = await TryConnectAsync(address, RpcPort, token).ConfigureAwait(false);
+            if (!rpcOpen)
+            {
+                SwkLogger.Debug($"LanScanner: skip {address} (445 open, 135 closed; likely NAS/家電)");
+                return new ProbeOutcome(true, false, null);
             }
 
             string? hostName = null;
@@ -90,15 +108,27 @@ public static class LanScanner
                 hostName = null;
             }
 
-            return new LanCandidate(address, hostName);
-        }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
-        {
-            return null;
+            return new ProbeOutcome(true, true, new LanCandidate(address, hostName));
         }
         finally
         {
             try { gate.Release(); } catch { }
+        }
+    }
+
+    private static async Task<bool> TryConnectAsync(IPAddress address, int port, CancellationToken token)
+    {
+        try
+        {
+            using TcpClient client = new();
+            Task connect = client.ConnectAsync(address, port, token).AsTask();
+            Task delay = Task.Delay(ProbeTimeoutMs, token);
+            Task done = await Task.WhenAny(connect, delay).ConfigureAwait(false);
+            return done == connect && client.Connected;
+        }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+        {
+            return false;
         }
     }
 }

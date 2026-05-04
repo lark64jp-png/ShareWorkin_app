@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ユーザー一覧"
         Height="520"
-        Width="640"
+        Width="720"
         WindowStartupLocation="CenterOwner"
         Background="#FFFEFA"
         FontFamily="Yu Gothic UI">
@@ -24,7 +24,7 @@
                    FontWeight="SemiBold"
                    Foreground="#2F2A22" />
         <TextBlock Grid.Row="2"
-                   Text="C クラス LAN にいる SMB 共有 PC を、お友達 → 不在 → 未設定 の順で並べます。"
+                   Text="つながらない登録済みお友達と、まだ登録していない PC を表示します。行をダブルクリックで開きます。"
                    FontSize="12"
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
@@ -37,11 +37,13 @@
             <ListView x:Name="UserListView"
                       BorderThickness="0"
                       HorizontalContentAlignment="Stretch"
+                      MouseDoubleClick="UserListView_MouseDoubleClick"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                 <ListView.ItemContainerStyle>
                     <Style TargetType="{x:Type ListViewItem}">
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                         <Setter Property="Padding" Value="6,4" />
+                        <Setter Property="Background" Value="{Binding RowBackground}" />
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
@@ -51,6 +53,8 @@
                                 <ColumnDefinition Width="36" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="160" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="140" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -64,53 +68,65 @@
                                     CornerRadius="3" />
 
                             <TextBlock Grid.Column="2"
-                                       Text="{Binding DisplayName}"
+                                       Text="{Binding NameLabel}"
                                        VerticalAlignment="Center"
                                        FontSize="14"
-                                       FontWeight="Medium"
-                                       Foreground="#2F2A22"
+                                       FontWeight="{Binding NameWeight}"
+                                       FontStyle="{Binding NameStyle}"
+                                       Foreground="{Binding NameForeground}"
                                        TextTrimming="CharacterEllipsis" />
 
-                            <Border Grid.Column="4"
-                                    Background="{Binding BandBrush}"
-                                    CornerRadius="3"
-                                    Padding="10,3"
-                                    HorizontalAlignment="Stretch">
-                                <TextBlock Text="{Binding DetailLabel}"
-                                           Foreground="#3F3A32"
-                                           FontSize="12"
-                                           TextTrimming="CharacterEllipsis" />
-                            </Border>
-
-                            <TextBlock Grid.Column="6"
-                                       Text="{Binding StatusLabel}"
+                            <TextBlock Grid.Column="4"
+                                       Text="{Binding ShareFolderName}"
                                        VerticalAlignment="Center"
                                        FontSize="12"
-                                       Foreground="{Binding StatusForeground}" />
+                                       Foreground="#3F3A32"
+                                       TextTrimming="CharacterEllipsis" />
+
+                            <TextBlock Grid.Column="6"
+                                       Text="{Binding Memo}"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       Foreground="#6B6358"
+                                       TextTrimming="CharacterEllipsis" />
+
+                            <TextBlock Grid.Column="8"
+                                       Text="{Binding IpLabel}"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       Foreground="#6B6358"
+                                       HorizontalAlignment="Right" />
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
         </Border>
 
-        <StackPanel Grid.Row="6"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right">
+        <Grid Grid.Row="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
             <TextBlock x:Name="StatusTextBlock"
+                       Grid.Column="0"
                        VerticalAlignment="Center"
                        FontSize="12"
-                       Foreground="#4B5563"
-                       Margin="0,0,12,0" />
-            <Button Content="お友達を呼ぶ"
-                    Width="120"
-                    Height="32"
-                    Margin="0,0,8,0"
-                    Click="InviteButton_Click" />
-            <Button Content="閉じる"
-                    Width="84"
-                    Height="32"
-                    IsCancel="True"
-                    Click="CloseButton_Click" />
-        </StackPanel>
+                       Foreground="#4B5563" />
+
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal">
+                <Button Content="再読み込み"
+                        Width="100"
+                        Height="32"
+                        Margin="0,0,8,0"
+                        Click="ReloadButton_Click" />
+                <Button Content="閉じる"
+                        Width="84"
+                        Height="32"
+                        IsCancel="True"
+                        Click="CloseButton_Click" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

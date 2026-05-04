@@ -30,6 +30,11 @@ public sealed class Friend
     [JsonPropertyName("label")]
     public string ProfileLabel { get; set; } = string.Empty;
 
+    // 草案7 §B: ピックアップ画面で自由記述できるメモ。
+    // 既存 friends.json に存在しない場合は空文字で読み込まれる(System.Text.Json 既定)。
+    [JsonPropertyName("memo")]
+    public string Memo { get; set; } = string.Empty;
+
     [JsonPropertyName("addedAt")]
     public string AddedAt { get; set; } = string.Empty;
 

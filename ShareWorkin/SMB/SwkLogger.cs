@@ -6,6 +6,7 @@ namespace ShareWorkin.SMB;
 
 public enum SwkLogLevel
 {
+    Debug,
     Info,
     Warn,
     Error,
@@ -19,6 +20,10 @@ public static class SwkLogger
     private static readonly string LogDirectory = Path.Combine(
         AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         "logs");
+
+    // 開発期間中の観測用。完成時は SwkLogger.Debug(...) 呼び出しを grep で
+    // 機械的に削除できるよう、デバッグ専用ログはこの経路のみに統一する。
+    public static void Debug(string message) => Write(SwkLogLevel.Debug, message);
 
     public static void Info(string message) => Write(SwkLogLevel.Info, message);
 
