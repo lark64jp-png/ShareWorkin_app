@@ -191,8 +191,8 @@ public partial class UserListWindow : Window
 
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: row={row.Kind}/{row.NameLabel}");
         FriendsWindow pickup = (row.Kind == UserListRowKind.NewShop && row.ShopInfo != null)
-            ? new FriendsWindow(this, row.ShopInfo)
-            : new FriendsWindow(this, row.Friend, row.Candidate, _lastCandidates);
+            ? new FriendsWindow(this, row.ShopInfo, _lastCandidates, _lastShopInfos)
+            : new FriendsWindow(this, row.Friend, row.Candidate, _lastCandidates, _lastShopInfos);
         bool? result = pickup.ShowDialog();
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: pickup result={result}");
         if (result == true)

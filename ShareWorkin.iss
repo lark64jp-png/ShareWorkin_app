@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.05"
+#define MyAppVersion "1.06"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.05_install
+OutputBaseFilename=ShareWorkin_v1.06_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -62,14 +62,16 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.04';
+  APP_VERSION = '1.06';
   APP_EXE = 'ShareWorkin.exe';
   INSTALL_DIR = 'C:\MyApps\ShareWorkin';
   SETTINGS_FILE = 'settings.json';
   SECURE_FILE = 'secure.dat';
+  FRIENDS_FILE = 'friends.json';
   HOLD_DIR = 'hold';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
   SECURE_BACKUP_FILE = 'ShareWorkin_secure_backup.dat';
+  FRIENDS_BACKUP_FILE = 'ShareWorkin_friends_backup.json';
   HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
   RUNTIME_REG_KEY = 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
@@ -120,6 +122,11 @@ end;
 function SecureBackupPath(): String;
 begin
   Result := ExpandConstant('{tmp}\' + SECURE_BACKUP_FILE);
+end;
+
+function FriendsBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + FRIENDS_BACKUP_FILE);
 end;
 
 function HoldBackupPath(): String;
@@ -184,12 +191,15 @@ var
 begin
   DeleteFile(SettingsBackupPath());
   DeleteFile(SecureBackupPath());
+  DeleteFile(FriendsBackupPath());
   DelTree(HoldBackupPath(), True, True, True);
 
   if FindExistingFile(SETTINGS_FILE, Source) then
     CopyFile(Source, SettingsBackupPath(), False);
   if FindExistingFile(SECURE_FILE, Source) then
     CopyFile(Source, SecureBackupPath(), False);
+  if FindExistingFile(FRIENDS_FILE, Source) then
+    CopyFile(Source, FriendsBackupPath(), False);
   if FindExistingDirectory(HOLD_DIR, Source) then
     CopyDirectoryContents(Source, HoldBackupPath());
 end;
@@ -209,6 +219,11 @@ begin
   begin
     CopyFile(SecureBackupPath(), AppDir + '\' + SECURE_FILE, False);
     DeleteFile(SecureBackupPath());
+  end;
+  if FileExists(FriendsBackupPath()) then
+  begin
+    CopyFile(FriendsBackupPath(), AppDir + '\' + FRIENDS_FILE, False);
+    DeleteFile(FriendsBackupPath());
   end;
   if DirExists(HoldBackupPath()) then
   begin
