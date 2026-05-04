@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -14,11 +12,14 @@ using System.Threading.Tasks;
 namespace ShareWorkin.SMB;
 
 /// <summary>
-/// 店主側: 開店中、定期的に C クラス範囲に「ここにいます」と通知を送信
-/// TLS/TCP でセキュアに通信
+/// 店主側: 開店中、UDP ブロードキャストで「ここにいます」と通知し、
+/// TLS/TCP で招待コード要求に応答する
 /// </summary>
 public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 {
+    // LAN 内の ShareWorkin 発見に使う固定 UDP ポート（アプリ定数、システムポートではない）
+    public const int UdpDiscoveryPort = 7831;
+
     private readonly string _shareName;
     private TcpListener? _listener;
     private int _listeningPort;
@@ -31,38 +32,28 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     public SwkNotificationBroadcaster(string shareName)
     {
         _shareName = shareName ?? throw new ArgumentNullException(nameof(shareName));
-        _listeningPort = 0;
     }
 
-    /// <summary>
-    /// リスナーを起動。動的ポートで TcpListener を開始し、定期的に通知を送信する
-    /// </summary>
     public async Task StartAsync()
     {
         try
         {
-            // TLS 証明書を生成（自己署名、LAN 内限定）
             _tlsCertificate = CreateSelfSignedCertificate();
 
-            // 動的ポートでリッスン開始
             _listener = new TcpListener(IPAddress.Any, 0);
             _listener.Start();
             _listeningPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
 
-            SwkLogger.Info($"SwkNotificationBroadcaster started on port {_listeningPort} for share '{_shareName}'");
+            SwkLogger.Info($"SwkNotificationBroadcaster started on TCP port {_listeningPort} for share '{_shareName}'");
 
-            // ポート情報をファイルに記録（Listener側がこれを読み取ってポート番号を知る）
-            WritePortInfoFile();
-
-            // キャンセルトークンを準備
             _cancellationSource = new CancellationTokenSource();
-
-            // 接続受け付けタスクと定期送信タスクを並行実行
             _broadcastTask = Task.WhenAll(
                 AcceptConnectionsAsync(_cancellationSource.Token),
-                BroadcastPeriodicNotificationsAsync(_cancellationSource.Token)
+                BroadcastPeriodicNotificationsAsync(_cancellationSource.Token),
+                ListenUdpProbesAsync(_cancellationSource.Token)
             );
 
+            SwkLogger.Info($"SwkNotificationBroadcaster started for '{_shareName}'");
             await _broadcastTask;
         }
         catch (Exception ex)
@@ -72,9 +63,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// リスナーを停止
-    /// </summary>
     public async ValueTask StopAsync()
     {
         try
@@ -82,16 +70,9 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             _cancellationSource?.Cancel();
             if (_broadcastTask != null)
             {
-                try
-                {
-                    await _broadcastTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    // 予想内の例外
-                }
+                try { await _broadcastTask; }
+                catch (OperationCanceledException) { }
             }
-
             _listener?.Stop();
             SwkLogger.Info("SwkNotificationBroadcaster stopped");
         }
@@ -101,9 +82,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// 接続受け付けループ
-    /// </summary>
     private async Task AcceptConnectionsAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested && _listener != null)
@@ -113,10 +91,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 TcpClient client = await _listener.AcceptTcpClientAsync(cancellationToken);
                 _ = HandleClientAsync(client, cancellationToken);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"AcceptConnectionsAsync error: {ex.Message}");
@@ -125,7 +100,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     }
 
     /// <summary>
-    /// 単一クライアントの処理
+    /// TLS 接続を受け付け、ShopNotification を送信後、InviteCodeRequest を待つ
     /// </summary>
     private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
     {
@@ -133,32 +108,45 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         {
             try
             {
-                using (var sslStream = new SslStream(client.GetStream(), false))
+                using var sslStream = new SslStream(client.GetStream(), false);
+                var sslOptions = new SslServerAuthenticationOptions
                 {
-                    // TLS ハンドシェイク
-                    var sslOptions = new SslServerAuthenticationOptions
-                    {
-                        ServerCertificate = _tlsCertificate,
-                    };
-                    await sslStream.AuthenticateAsServerAsync(sslOptions, cancellationToken);
+                    ServerCertificate = _tlsCertificate,
+                };
+                await sslStream.AuthenticateAsServerAsync(sslOptions, cancellationToken);
 
-                    // クライアントからリクエストを受信
-                    string? requestJson = await ReadJsonAsync(sslStream, cancellationToken);
-                    if (string.IsNullOrEmpty(requestJson))
-                    {
-                        return;
-                    }
+                // 接続直後に ShopNotification を送信（相手が「開店中」であることを確認できる）
+                var notification = new SwkNotificationProtocol.ShopNotification
+                {
+                    ShopMachineName = Environment.MachineName,
+                    ShareName = _shareName,
+                    ListeningPort = _listeningPort,
+                    IssuedAt = DateTime.UtcNow.ToString("o")
+                };
+                await WriteJsonAsync(sslStream, notification, cancellationToken);
 
-                    // リクエストをパース
-                    using (JsonDocument doc = JsonDocument.Parse(requestJson))
-                    {
-                        string? type = doc.RootElement.GetProperty("type").GetString();
+                // InviteCodeRequest を待つ（タイムアウト 10 秒）
+                using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                reqCts.CancelAfter(TimeSpan.FromSeconds(10));
 
-                        if (type == "InviteCodeRequest")
-                        {
-                            await HandleInviteCodeRequestAsync(sslStream, doc, cancellationToken);
-                        }
-                    }
+                string? requestJson;
+                try
+                {
+                    requestJson = await ReadJsonAsync(sslStream, reqCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // タイムアウト = 発見プローブとして正常終了（InviteCodeRequest は不要）
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(requestJson)) return;
+
+                using JsonDocument doc = JsonDocument.Parse(requestJson);
+                string? type = doc.RootElement.GetProperty("type").GetString();
+                if (type == "InviteCodeRequest")
+                {
+                    await HandleInviteCodeRequestAsync(sslStream, doc, cancellationToken);
                 }
             }
             catch (Exception ex)
@@ -168,9 +156,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// InviteCodeRequest に応答
-    /// </summary>
     private async Task HandleInviteCodeRequestAsync(SslStream stream, JsonDocument requestDoc, CancellationToken cancellationToken)
     {
         try
@@ -178,7 +163,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             string? requestedShare = requestDoc.RootElement.GetProperty("shareName").GetString();
             string? clientMachine = requestDoc.RootElement.GetProperty("clientMachineName").GetString();
 
-            // 要求されたシェアが自分のものかチェック
             if (requestedShare != _shareName)
             {
                 var errorResponse = new SwkNotificationProtocol.InviteCodeResponse
@@ -190,20 +174,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 return;
             }
 
-            // 招待コードを生成
-            string? inviteCode = GenerateInviteCode();
-            if (string.IsNullOrEmpty(inviteCode))
-            {
-                var errorResponse = new SwkNotificationProtocol.InviteCodeResponse
-                {
-                    Result = "Denied",
-                    ErrorMessage = "Failed to generate invite code"
-                };
-                await WriteJsonAsync(stream, errorResponse, cancellationToken);
-                return;
-            }
-
-            // パスワードを取得
             string? password = SecureStorage.Get(SecureStorage.KeySwkGuestPassword);
             if (string.IsNullOrEmpty(password))
             {
@@ -216,11 +186,10 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 return;
             }
 
-            // 成功応答
             var successResponse = new SwkNotificationProtocol.InviteCodeResponse
             {
                 Result = "Ok",
-                InviteCode = inviteCode,
+                InviteCode = "SWK1.auto",
                 Password = password
             };
             await WriteJsonAsync(stream, successResponse, cancellationToken);
@@ -234,46 +203,68 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     }
 
     /// <summary>
-    /// ポート情報をローカルファイルに記録（Listener側でポート番号を取得するため）
+    /// UDP ポート 7831 でプローブを待ち受け、ShopNotification を返す
     /// </summary>
-    private void WritePortInfoFile()
+    private async Task ListenUdpProbesAsync(CancellationToken cancellationToken)
     {
         try
         {
-            string appFolder = AppContext.BaseDirectory;
-            string portInfoPath = Path.Combine(appFolder, "broadcaster_port.txt");
+            using var udp = new UdpClient();
+            udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            udp.Client.Bind(new IPEndPoint(IPAddress.Any, UdpDiscoveryPort));
 
-            string content = _listeningPort.ToString();
-            File.WriteAllText(portInfoPath, content);
+            SwkLogger.Info($"SwkNotificationBroadcaster listening UDP probes on port {UdpDiscoveryPort}");
 
-            SwkLogger.Debug($"Port info written to {portInfoPath}: {_listeningPort}");
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    UdpReceiveResult result = await udp.ReceiveAsync(cancellationToken);
+                    string msg = Encoding.UTF8.GetString(result.Buffer);
+
+                    if (msg.Contains("\"ShopProbe\""))
+                    {
+                        var response = new SwkNotificationProtocol.ShopNotification
+                        {
+                            ShopMachineName = Environment.MachineName,
+                            ShareName = _shareName,
+                            ListeningPort = _listeningPort,
+                            IssuedAt = DateTime.UtcNow.ToString("o")
+                        };
+                        string responseJson = JsonSerializer.Serialize(response);
+                        byte[] responseBytes = Encoding.UTF8.GetBytes(responseJson);
+                        await udp.SendAsync(responseBytes, result.RemoteEndPoint, cancellationToken);
+                        SwkLogger.Debug($"UDP probe response sent to {result.RemoteEndPoint}: port={_listeningPort}");
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    SwkLogger.Debug($"ListenUdpProbesAsync recv error: {ex.Message}");
+                }
+            }
         }
         catch (Exception ex)
         {
-            SwkLogger.Warn($"WritePortInfoFile failed: {ex.Message}");
+            SwkLogger.Warn($"ListenUdpProbesAsync failed to bind UDP {UdpDiscoveryPort}: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// 定期的に通知を送信
-    /// 当面はポート情報ファイルの定期更新のみ（Listener側がSMB経由で読み取る）
+    /// 起動直後と 30 秒ごとに UDP ブロードキャストを送信する
     /// </summary>
     private async Task BroadcastPeriodicNotificationsAsync(CancellationToken cancellationToken)
     {
+        await SendUdpBroadcastAsync(cancellationToken);
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                // ポート情報ファイルを定期的に更新（タイムスタンプ更新で「生きている」ことを示す）
-                WritePortInfoFile();
-
-                // 30秒ごとに更新
                 await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+                await SendUdpBroadcastAsync(cancellationToken);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"BroadcastPeriodicNotificationsAsync error: {ex.Message}");
@@ -282,99 +273,79 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// 招待コードを生成（InviteDialog と同じロジック）
-    /// </summary>
-    private string? GenerateInviteCode()
+    private async Task SendUdpBroadcastAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var payload = new SwkNotificationProtocol.InviteCodeRequest
+            using var udp = new UdpClient();
+            udp.EnableBroadcast = true;
+            var notification = new SwkNotificationProtocol.ShopNotification
             {
+                ShopMachineName = Environment.MachineName,
                 ShareName = _shareName,
-                ClientMachineName = Environment.MachineName
+                ListeningPort = _listeningPort,
+                IssuedAt = DateTime.UtcNow.ToString("o")
             };
-
-            // 実装予定: InviteToken.Encode と同様のロジックで招待コードを生成
-            // ただし Password は含めない（通知で別途渡す）
-            return "SWK1.placeholder"; // TODO: 実装
+            string json = JsonSerializer.Serialize(notification);
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Broadcast, UdpDiscoveryPort), cancellationToken);
+            SwkLogger.Debug($"UDP broadcast sent: tcpPort={_listeningPort}");
         }
         catch (Exception ex)
         {
-            SwkLogger.Warn($"GenerateInviteCode failed: {ex.Message}");
-            return null;
+            SwkLogger.Debug($"SendUdpBroadcastAsync error: {ex.Message}");
         }
     }
 
-    /// <summary>
-    /// TLS ハンドシェイク用の自己署名証明書を生成
-    /// </summary>
     private static X509Certificate2 CreateSelfSignedCertificate()
     {
-        using (var rsa = RSA.Create(2048))
-        {
-            var request = new CertificateRequest(
-                $"CN={Environment.MachineName}",
-                rsa,
-                HashAlgorithmName.SHA256,
-                RSASignaturePadding.Pkcs1);
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            $"CN={Environment.MachineName}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
 
-            request.CertificateExtensions.Add(
-                new X509BasicConstraintsExtension(false, false, 0, false));
+        request.CertificateExtensions.Add(
+            new X509BasicConstraintsExtension(false, false, 0, false));
 
-            var sanBuilder = new SubjectAlternativeNameBuilder();
-            sanBuilder.AddDnsName(Environment.MachineName);
-            sanBuilder.AddDnsName("127.0.0.1");
-            request.CertificateExtensions.Add(sanBuilder.Build());
+        var sanBuilder = new SubjectAlternativeNameBuilder();
+        sanBuilder.AddDnsName(Environment.MachineName);
+        sanBuilder.AddDnsName("127.0.0.1");
+        request.CertificateExtensions.Add(sanBuilder.Build());
 
-            using (var cert = request.CreateSelfSigned(
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow.AddYears(1)))
-            {
-                return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.EphemeralKeySet);
-            }
-        }
+        using var cert = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddYears(1));
+        return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.EphemeralKeySet);
     }
 
-    /// <summary>
-    /// SslStream から JSON を読み込む
-    /// </summary>
     private static async Task<string?> ReadJsonAsync(SslStream stream, CancellationToken cancellationToken)
     {
         byte[] lengthBuffer = new byte[4];
         int read = await stream.ReadAsync(lengthBuffer, 0, 4, cancellationToken);
-        if (read < 4)
-            return null;
+        if (read < 4) return null;
 
         int length = BitConverter.ToInt32(lengthBuffer, 0);
-        if (length <= 0 || length > 1024 * 1024) // 1MB 上限
-            return null;
+        if (length <= 0 || length > 1024 * 1024) return null;
 
         byte[] jsonBuffer = new byte[length];
         read = await stream.ReadAsync(jsonBuffer, 0, length, cancellationToken);
-        if (read < length)
-            return null;
+        if (read < length) return null;
 
         return Encoding.UTF8.GetString(jsonBuffer);
     }
 
-    /// <summary>
-    /// JSON を SslStream に書き込む
-    /// </summary>
     private static async Task WriteJsonAsync(SslStream stream, object obj, CancellationToken cancellationToken)
     {
         string json = JsonSerializer.Serialize(obj);
         byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
         byte[] lengthBytes = BitConverter.GetBytes(jsonBytes.Length);
-
         await stream.WriteAsync(lengthBytes, 0, 4, cancellationToken);
         await stream.WriteAsync(jsonBytes, 0, jsonBytes.Length, cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// リソース解放
-    /// </summary>
     public async ValueTask DisposeAsync()
     {
         await StopAsync();

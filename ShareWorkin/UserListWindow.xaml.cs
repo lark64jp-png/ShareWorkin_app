@@ -18,6 +18,7 @@ public partial class UserListWindow : Window
     private readonly Window _ownerWindow;
     private readonly ObservableCollection<UserListRow> _rows = new();
     private IReadOnlyList<LanCandidate> _lastCandidates = Array.Empty<LanCandidate>();
+    private IReadOnlyList<SwkNotificationListener.ShopInfo> _lastShopInfos = Array.Empty<SwkNotificationListener.ShopInfo>();
 
     public UserListWindow(Window owner)
     {
@@ -55,14 +56,24 @@ public partial class UserListWindow : Window
         _lastCandidates = candidates;
         SwkLogger.Debug($"UserListWindow.LoadAsync: friends={friends.Count} candidates={candidates.Count}");
 
-        // 各ホストに通知を問い合わせて、ShareWorkinが動いているかを判定
-        // TODO: SwkNotificationListener の実装完了後に、実際の問い合わせを実装
-        // 暫定: LAN スキャンで見つかったホストは "開店中" と見なす
-        HashSet<string> shopOpen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (LanCandidate c in candidates)
+        // UDP プローブで実際に開店中のお店を発見する
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos;
+        try
         {
-            string host = NormalizeHostName(c.HostName ?? c.Address.ToString());
-            shopOpen.Add(host);
+            shopInfos = await SwkNotificationListener.ProbeHostsAsync(candidates, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow ProbeHostsAsync failed: {ex.Message}");
+            shopInfos = Array.Empty<SwkNotificationListener.ShopInfo>();
+        }
+        _lastShopInfos = shopInfos;
+
+        // 開店中ホスト名セット（正規化済み）
+        HashSet<string> shopOpen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (SwkNotificationListener.ShopInfo s in shopInfos)
+        {
+            shopOpen.Add(NormalizeHostName(s.MachineName));
         }
 
         HashSet<string> matchedHosts = new(StringComparer.OrdinalIgnoreCase);
@@ -112,7 +123,9 @@ public partial class UserListWindow : Window
             if (isOpen)
             {
                 // ③ 新しいお店: 未登録 + 開店中
-                rows.Add(UserListRow.ForNewShop(c));
+                SwkNotificationListener.ShopInfo? shopInfo = _lastShopInfos
+                    .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
+                rows.Add(UserListRow.ForNewShop(c, shopInfo));
             }
             else
             {
@@ -177,7 +190,9 @@ public partial class UserListWindow : Window
         }
 
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: row={row.Kind}/{row.NameLabel}");
-        FriendsWindow pickup = new(this, row.Friend, row.Candidate, _lastCandidates);
+        FriendsWindow pickup = (row.Kind == UserListRowKind.NewShop && row.ShopInfo != null)
+            ? new FriendsWindow(this, row.ShopInfo)
+            : new FriendsWindow(this, row.Friend, row.Candidate, _lastCandidates);
         bool? result = pickup.ShowDialog();
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: pickup result={result}");
         if (result == true)
@@ -228,6 +243,7 @@ public sealed class UserListRow
 
     public Friend? Friend { get; init; }
     public LanCandidate? Candidate { get; init; }
+    public SwkNotificationListener.ShopInfo? ShopInfo { get; init; }
 
     /// <summary>
     /// ① 接続可能: Friend登録済み + 開店中（通知受信中）
@@ -274,15 +290,16 @@ public sealed class UserListRow
     }
 
     /// <summary>
-    /// ③ 新しいお店: Friend未登録 + 開店中（通知受信中）
+    /// ③ 新しいお店: Friend未登録 + 開店中（UDP で発見済み）
     /// </summary>
-    public static UserListRow ForNewShop(LanCandidate candidate, string? visitorDisplayName = null)
+    public static UserListRow ForNewShop(LanCandidate candidate, SwkNotificationListener.ShopInfo? shopInfo = null)
     {
         string host = string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName!;
+        string shareName = shopInfo?.ShareName ?? string.Empty;
         return new UserListRow
         {
             NameLabel = host,
-            ShareFolderName = string.Empty,
+            ShareFolderName = shareName,
             Memo = string.Empty,
             IpLabel = candidate.Address.ToString(),
             Kind = UserListRowKind.NewShop,
@@ -293,6 +310,7 @@ public sealed class UserListRow
             NameStyle = FontStyles.Normal,
             Friend = null,
             Candidate = candidate,
+            ShopInfo = shopInfo,
         };
     }
 

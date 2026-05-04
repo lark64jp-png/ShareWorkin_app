@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Security;
@@ -13,8 +12,7 @@ using System.Threading.Tasks;
 namespace ShareWorkin.SMB;
 
 /// <summary>
-/// お友達側: 定期的に LAN 内のホストに接続して「ここに誰がいますか？」と問い合わせ
-/// 店主側の通知を受け取り、開店中のお店リストを保持
+/// お友達側: UDP プローブで LAN 内の開店中お店を発見し、TLS/TCP で招待コードを取得する
 /// </summary>
 public sealed class SwkNotificationListener : IAsyncDisposable
 {
@@ -32,9 +30,6 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         public DateTime LastCheckedAt { get; set; }
     }
 
-    /// <summary>
-    /// リスナーを起動。定期的に LAN を探索する
-    /// </summary>
     public async Task StartAsync()
     {
         try
@@ -50,9 +45,6 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// リスナーを停止
-    /// </summary>
     public async ValueTask StopAsync()
     {
         try
@@ -60,16 +52,9 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             _cancellationSource?.Cancel();
             if (_listenTask != null)
             {
-                try
-                {
-                    await _listenTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    // 予想内の例外
-                }
+                try { await _listenTask; }
+                catch (OperationCanceledException) { }
             }
-
             SwkLogger.Info("SwkNotificationListener stopped");
         }
         catch (Exception ex)
@@ -78,9 +63,6 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// 現在発見されているお店リストを取得
-    /// </summary>
     public IReadOnlyList<ShopInfo> GetDiscoveredShops()
     {
         lock (_shopsLock)
@@ -89,26 +71,28 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// 定期的に LAN を探索してお店を発見
-    /// </summary>
     private async Task DiscoverShopsPeriodicAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                // LAN スキャン結果を利用して各ホストに接続を試みる
-                // 実装予定: LanScanner の結果を活用し、各ホストに SwkNotificationBroadcaster ポートを探索
-                await DiscoverFromLanCandidatesAsync(cancellationToken);
+                IReadOnlyList<LanCandidate> candidates = await LanScanner.ScanAsync();
+                IReadOnlyList<ShopInfo> found = await ProbeHostsAsync(candidates, cancellationToken);
 
-                // 1 分ごとに再探索
+                lock (_shopsLock)
+                {
+                    _discoveredShops.Clear();
+                    foreach (ShopInfo s in found)
+                    {
+                        string key = $"{s.MachineName}:{s.ShareName}";
+                        _discoveredShops[key] = s;
+                    }
+                }
+
                 await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"DiscoverShopsPeriodicAsync error: {ex.Message}");
@@ -118,133 +102,99 @@ public sealed class SwkNotificationListener : IAsyncDisposable
     }
 
     /// <summary>
-    /// LAN スキャン結果から各ホストに接続を試みる
+    /// 各 LAN 候補に UDP プローブを送信し、ShopNotification が返ってきたものを開店中のお店として返す
+    /// UserListWindow から直接呼び出す（静的メソッド）
     /// </summary>
-    private async Task DiscoverFromLanCandidatesAsync(CancellationToken cancellationToken)
+    public static async Task<IReadOnlyList<ShopInfo>> ProbeHostsAsync(
+        IReadOnlyList<LanCandidate> candidates,
+        CancellationToken cancellationToken)
     {
+        var result = new List<ShopInfo>();
+        if (candidates.Count == 0) return result;
+
         try
         {
-            IReadOnlyList<LanCandidate> candidates = await LanScanner.ScanAsync();
-            if (candidates.Count == 0)
-            {
-                return;
-            }
+            using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
 
-            // 各候補ホストに接続試行（複数同時接続）
-            var tasks = new List<Task>();
+            var probe = new { type = "ShopProbe", clientMachineName = Environment.MachineName };
+            byte[] probeBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(probe));
+
+            int sentCount = 0;
             foreach (LanCandidate c in candidates)
             {
-                string host = c.HostName ?? c.Address.ToString();
-                tasks.Add(QueryHostAsync(host, 0, cancellationToken));
+                try
+                {
+                    await udp.SendAsync(probeBytes, new IPEndPoint(c.Address, SwkNotificationBroadcaster.UdpDiscoveryPort), cancellationToken);
+                    sentCount++;
+                }
+                catch (Exception ex)
+                {
+                    SwkLogger.Debug($"ProbeHostsAsync send failed to {c.Address}: {ex.Message}");
+                }
             }
 
-            await Task.WhenAll(tasks);
+            SwkLogger.Debug($"ProbeHostsAsync: sent {sentCount} probes");
+
+            // 最大 2 秒待機してレスポンスを収集
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+
+            var respondedIps = new HashSet<string>();
+
+            while (!timeoutCts.IsCancellationRequested)
+            {
+                try
+                {
+                    UdpReceiveResult recv = await udp.ReceiveAsync(timeoutCts.Token);
+                    string senderIp = recv.RemoteEndPoint.Address.ToString();
+
+                    if (respondedIps.Contains(senderIp)) continue;
+
+                    string json = Encoding.UTF8.GetString(recv.Buffer);
+                    using JsonDocument doc = JsonDocument.Parse(json);
+
+                    if (!doc.RootElement.TryGetProperty("type", out var typeProp)) continue;
+                    if (typeProp.GetString() != "ShopNotification") continue;
+
+                    string? machineName = doc.RootElement.GetProperty("shopMachineName").GetString();
+                    string? shareName = doc.RootElement.GetProperty("shareName").GetString();
+                    int tcpPort = doc.RootElement.GetProperty("listeningPort").GetInt32();
+                    string? issuedAtStr = doc.RootElement.GetProperty("issuedAt").GetString();
+
+                    if (string.IsNullOrEmpty(machineName) || string.IsNullOrEmpty(shareName) || tcpPort <= 0) continue;
+
+                    respondedIps.Add(senderIp);
+                    result.Add(new ShopInfo
+                    {
+                        MachineName = machineName,
+                        ShareName = shareName,
+                        Port = tcpPort,
+                        IssuedAt = DateTime.Parse(issuedAtStr ?? DateTime.UtcNow.ToString("o")),
+                        LastCheckedAt = DateTime.UtcNow
+                    });
+
+                    SwkLogger.Debug($"ProbeHostsAsync: discovered {machineName}/{shareName} tcpPort={tcpPort}");
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    SwkLogger.Debug($"ProbeHostsAsync recv error: {ex.Message}");
+                }
+            }
+
+            SwkLogger.Info($"ProbeHostsAsync: {result.Count} shop(s) found from {sentCount} probes");
+            return result;
         }
         catch (Exception ex)
         {
-            SwkLogger.Debug($"DiscoverFromLanCandidatesAsync error: {ex.Message}");
+            SwkLogger.Warn($"ProbeHostsAsync failed: {ex.Message}");
+            return result;
         }
     }
 
     /// <summary>
-    /// 特定のホストに接続して通知を受け取る
-    /// ポート番号が 0 の場合は、ホストから動的ポート番号を取得する
-    /// </summary>
-    public async Task<ShopInfo?> QueryHostAsync(string hostName, int port, CancellationToken cancellationToken)
-    {
-        try
-        {
-            // ポート番号が 0 の場合、ホストのポート情報ファイルから取得を試みる
-            if (port == 0)
-            {
-                port = await TryGetBroadcasterPortAsync(hostName, cancellationToken);
-                if (port <= 0)
-                {
-                    SwkLogger.Debug($"QueryHostAsync failed to get broadcaster port from {hostName}");
-                    return null;
-                }
-                SwkLogger.Debug($"QueryHostAsync obtained port {port} from {hostName}");
-            }
-
-            using (var client = new TcpClient())
-            {
-                // 接続タイムアウト: 5秒
-                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                {
-                    cts.CancelAfter(TimeSpan.FromSeconds(5));
-
-                    try
-                    {
-                        await client.ConnectAsync(hostName, port, cts.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        SwkLogger.Debug($"QueryHostAsync timeout connecting to {hostName}:{port}");
-                        return null;
-                    }
-                }
-
-                using (var sslStream = new SslStream(client.GetStream(), true, (s, c, ch, p) => true)) // 証明書検証をスキップ（自己署名）
-                {
-                    // TLS ハンドシェイク
-                    var sslOptions = new SslClientAuthenticationOptions
-                    {
-                        TargetHost = hostName,
-                        EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13,
-                        RemoteCertificateValidationCallback = (s, c, ch, p) => true, // 証明書検証をスキップ（自己署名）
-                    };
-                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
-
-                    // ShopNotification を受信
-                    string? notificationJson = await ReadJsonAsync(sslStream, cancellationToken);
-                    if (string.IsNullOrEmpty(notificationJson))
-                        return null;
-
-                    using (JsonDocument doc = JsonDocument.Parse(notificationJson))
-                    {
-                        string? type = doc.RootElement.GetProperty("type").GetString();
-                        if (type != "ShopNotification")
-                            return null;
-
-                        string? machineName = doc.RootElement.GetProperty("shopMachineName").GetString();
-                        string? shareName = doc.RootElement.GetProperty("shareName").GetString();
-                        int listeningPort = doc.RootElement.GetProperty("listeningPort").GetInt32();
-                        string? issuedAtStr = doc.RootElement.GetProperty("issuedAt").GetString();
-
-                        if (string.IsNullOrEmpty(machineName) || string.IsNullOrEmpty(shareName))
-                            return null;
-
-                        var shopInfo = new ShopInfo
-                        {
-                            MachineName = machineName,
-                            ShareName = shareName,
-                            Port = listeningPort,
-                            IssuedAt = DateTime.Parse(issuedAtStr ?? DateTime.UtcNow.ToString("o")),
-                            LastCheckedAt = DateTime.UtcNow
-                        };
-
-                        // 発見リストに追加/更新
-                        lock (_shopsLock)
-                        {
-                            string key = $"{machineName}:{shareName}";
-                            _discoveredShops[key] = shopInfo;
-                        }
-
-                        SwkLogger.Debug($"Discovered shop: {machineName}/{shareName} on port {listeningPort}");
-                        return shopInfo;
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Debug($"QueryHostAsync failed for {hostName}:{port}: {ex.Message}");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// 発見済みのお店に対して招待コードを要求
+    /// 発見済みのお店に対して招待コードを要求する
+    /// Broadcaster は接続直後に ShopNotification を送るので、先にそれを受信してから InviteCodeRequest を送る
     /// </summary>
     public async Task<(string? inviteCode, string? password, string? errorMessage)> RequestInviteCodeAsync(
         ShopInfo shop,
@@ -252,68 +202,64 @@ public sealed class SwkNotificationListener : IAsyncDisposable
     {
         try
         {
-            using (var client = new TcpClient())
+            using var client = new TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+            try
             {
-                using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                {
-                    cts.CancelAfter(TimeSpan.FromSeconds(5));
-
-                    try
-                    {
-                        await client.ConnectAsync(shop.MachineName, shop.Port, cts.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return (null, null, "Connection timeout");
-                    }
-                }
-
-                using (var sslStream = new SslStream(client.GetStream(), true, (s, c, ch, p) => true))
-                {
-                    // TLS ハンドシェイク
-                    var sslOptions = new SslClientAuthenticationOptions
-                    {
-                        TargetHost = shop.MachineName,
-                        EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13,
-                        RemoteCertificateValidationCallback = (s, c, ch, p) => true, // 証明書検証をスキップ（自己署名）
-                    };
-                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
-
-                    // InviteCodeRequest を送信
-                    var request = new SwkNotificationProtocol.InviteCodeRequest
-                    {
-                        ShareName = shop.ShareName,
-                        ClientMachineName = Environment.MachineName
-                    };
-                    await WriteJsonAsync(sslStream, request, cancellationToken);
-
-                    // InviteCodeResponse を受信
-                    string? responseJson = await ReadJsonAsync(sslStream, cancellationToken);
-                    if (string.IsNullOrEmpty(responseJson))
-                        return (null, null, "No response from server");
-
-                    using (JsonDocument doc = JsonDocument.Parse(responseJson))
-                    {
-                        string? result = doc.RootElement.GetProperty("result").GetString();
-
-                        if (result != "Ok")
-                        {
-                            string? errorMsg = null;
-                            if (doc.RootElement.TryGetProperty("errorMessage", out var errorElement))
-                            {
-                                errorMsg = errorElement.GetString();
-                            }
-                            return (null, null, errorMsg ?? result);
-                        }
-
-                        string? inviteCode = doc.RootElement.GetProperty("inviteCode").GetString();
-                        string? password = doc.RootElement.GetProperty("password").GetString();
-
-                        SwkLogger.Info($"Received invite code from {shop.MachineName}/{shop.ShareName}");
-                        return (inviteCode, password, null);
-                    }
-                }
+                await client.ConnectAsync(shop.MachineName, shop.Port, cts.Token);
             }
+            catch (OperationCanceledException)
+            {
+                return (null, null, "接続タイムアウト");
+            }
+
+            using var sslStream = new SslStream(client.GetStream(), true, (s, c, ch, p) => true);
+            var sslOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = shop.MachineName,
+                EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13,
+                RemoteCertificateValidationCallback = (s, c, ch, p) => true,
+            };
+            await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
+
+            // Broadcaster は接続直後に ShopNotification を送るので、先に受信する
+            string? notificationJson = await ReadJsonAsync(sslStream, cancellationToken);
+            if (string.IsNullOrEmpty(notificationJson))
+                return (null, null, "応答なし");
+
+            SwkLogger.Debug($"RequestInviteCodeAsync: received ShopNotification from {shop.MachineName}/{shop.ShareName}");
+
+            // InviteCodeRequest を送信
+            var request = new SwkNotificationProtocol.InviteCodeRequest
+            {
+                ShareName = shop.ShareName,
+                ClientMachineName = Environment.MachineName
+            };
+            await WriteJsonAsync(sslStream, request, cancellationToken);
+
+            // InviteCodeResponse を受信
+            string? responseJson = await ReadJsonAsync(sslStream, cancellationToken);
+            if (string.IsNullOrEmpty(responseJson))
+                return (null, null, "応答なし");
+
+            using JsonDocument doc = JsonDocument.Parse(responseJson);
+            string? result = doc.RootElement.GetProperty("result").GetString();
+
+            if (result != "Ok")
+            {
+                string? errorMsg = null;
+                if (doc.RootElement.TryGetProperty("errorMessage", out var errorElement))
+                    errorMsg = errorElement.GetString();
+                return (null, null, errorMsg ?? result);
+            }
+
+            string? inviteCode = doc.RootElement.GetProperty("inviteCode").GetString();
+            string? password = doc.RootElement.GetProperty("password").GetString();
+
+            SwkLogger.Info($"Received invite code from {shop.MachineName}/{shop.ShareName}");
+            return (inviteCode, password, null);
         }
         catch (Exception ex)
         {
@@ -322,91 +268,32 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// JSON を SslStream から読み込む
-    /// </summary>
     private static async Task<string?> ReadJsonAsync(SslStream stream, CancellationToken cancellationToken)
     {
         byte[] lengthBuffer = new byte[4];
         int read = await stream.ReadAsync(lengthBuffer, 0, 4, cancellationToken);
-        if (read < 4)
-            return null;
+        if (read < 4) return null;
 
         int length = BitConverter.ToInt32(lengthBuffer, 0);
-        if (length <= 0 || length > 1024 * 1024)
-            return null;
+        if (length <= 0 || length > 1024 * 1024) return null;
 
         byte[] jsonBuffer = new byte[length];
         read = await stream.ReadAsync(jsonBuffer, 0, length, cancellationToken);
-        if (read < length)
-            return null;
+        if (read < length) return null;
 
         return Encoding.UTF8.GetString(jsonBuffer);
     }
 
-    /// <summary>
-    /// JSON を SslStream に書き込む
-    /// </summary>
     private static async Task WriteJsonAsync(SslStream stream, object obj, CancellationToken cancellationToken)
     {
         string json = JsonSerializer.Serialize(obj);
         byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
         byte[] lengthBytes = BitConverter.GetBytes(jsonBytes.Length);
-
         await stream.WriteAsync(lengthBytes, 0, 4, cancellationToken);
         await stream.WriteAsync(jsonBytes, 0, jsonBytes.Length, cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// ホストの Broadcaster が使用しているポート番号を検出（ポートスキャン）
-    /// Broadcaster は高いポート番号を使用することが多いため、6000-6999 の範囲をスキャン
-    /// </summary>
-    private async Task<int> TryGetBroadcasterPortAsync(string hostName, CancellationToken cancellationToken)
-    {
-        // ポートスキャン範囲（動的ポート範囲の一部）
-        const int minPort = 6000;
-        const int maxPort = 6999;
-        const int timeoutMs = 500;
-
-        for (int port = minPort; port <= maxPort; port++)
-        {
-            try
-            {
-                using (var client = new TcpClient())
-                {
-                    using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                    {
-                        cts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
-                        try
-                        {
-                            await client.ConnectAsync(hostName, port, cts.Token).ConfigureAwait(false);
-                            // 接続成功したら、このポートが Broadcaster ポート
-                            SwkLogger.Debug($"Found Broadcaster on {hostName}:{port}");
-                            return port;
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            // タイムアウト、次のポートへ
-                            continue;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is SocketException or OperationCanceledException)
-            {
-                // 接続失敗、次のポートへ
-                continue;
-            }
-        }
-
-        SwkLogger.Debug($"TryGetBroadcasterPortAsync failed: no open port found on {hostName} in range {minPort}-{maxPort}");
-        return -1;
-    }
-
-    /// <summary>
-    /// リソース解放
-    /// </summary>
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
