@@ -51,6 +51,9 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 
             SwkLogger.Info($"SwkNotificationBroadcaster started on port {_listeningPort} for share '{_shareName}'");
 
+            // ポート情報をファイルに記録（Listener側がこれを読み取ってポート番号を知る）
+            WritePortInfoFile();
+
             // キャンセルトークンを準備
             _cancellationSource = new CancellationTokenSource();
 
@@ -231,14 +234,52 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     }
 
     /// <summary>
-    /// 定期的に通知を送信（現時点では実装スケルトン）
-    /// 実装予定: C クラス範囲の各 PC に定期的に ShopNotification を送信
+    /// ポート情報をローカルファイルに記録（Listener側でポート番号を取得するため）
+    /// </summary>
+    private void WritePortInfoFile()
+    {
+        try
+        {
+            string appFolder = AppContext.BaseDirectory;
+            string portInfoPath = Path.Combine(appFolder, "broadcaster_port.txt");
+
+            string content = _listeningPort.ToString();
+            File.WriteAllText(portInfoPath, content);
+
+            SwkLogger.Debug($"Port info written to {portInfoPath}: {_listeningPort}");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"WritePortInfoFile failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 定期的に通知を送信
+    /// 当面はポート情報ファイルの定期更新のみ（Listener側がSMB経由で読み取る）
     /// </summary>
     private async Task BroadcastPeriodicNotificationsAsync(CancellationToken cancellationToken)
     {
-        // 実装予定: C クラス範囲を探索し、各ホストに通知を送信
-        // 当面は待機のみ
-        await Task.Delay(Timeout.Infinite, cancellationToken);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                // ポート情報ファイルを定期的に更新（タイムスタンプ更新で「生きている」ことを示す）
+                WritePortInfoFile();
+
+                // 30秒ごとに更新
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                SwkLogger.Warn($"BroadcastPeriodicNotificationsAsync error: {ex.Message}");
+                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+            }
+        }
     }
 
     /// <summary>

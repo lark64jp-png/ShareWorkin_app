@@ -148,11 +148,24 @@ public sealed class SwkNotificationListener : IAsyncDisposable
 
     /// <summary>
     /// 特定のホストに接続して通知を受け取る
+    /// ポート番号が 0 の場合は、ホストから動的ポート番号を取得する
     /// </summary>
     public async Task<ShopInfo?> QueryHostAsync(string hostName, int port, CancellationToken cancellationToken)
     {
         try
         {
+            // ポート番号が 0 の場合、ホストのポート情報ファイルから取得を試みる
+            if (port == 0)
+            {
+                port = await TryGetBroadcasterPortAsync(hostName, cancellationToken);
+                if (port <= 0)
+                {
+                    SwkLogger.Debug($"QueryHostAsync failed to get broadcaster port from {hostName}");
+                    return null;
+                }
+                SwkLogger.Debug($"QueryHostAsync obtained port {port} from {hostName}");
+            }
+
             using (var client = new TcpClient())
             {
                 // 接続タイムアウト: 5秒
@@ -343,6 +356,52 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         await stream.WriteAsync(lengthBytes, 0, 4, cancellationToken);
         await stream.WriteAsync(jsonBytes, 0, jsonBytes.Length, cancellationToken);
         await stream.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// ホストの Broadcaster が使用しているポート番号を検出（ポートスキャン）
+    /// Broadcaster は高いポート番号を使用することが多いため、6000-6999 の範囲をスキャン
+    /// </summary>
+    private async Task<int> TryGetBroadcasterPortAsync(string hostName, CancellationToken cancellationToken)
+    {
+        // ポートスキャン範囲（動的ポート範囲の一部）
+        const int minPort = 6000;
+        const int maxPort = 6999;
+        const int timeoutMs = 500;
+
+        for (int port = minPort; port <= maxPort; port++)
+        {
+            try
+            {
+                using (var client = new TcpClient())
+                {
+                    using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                    {
+                        cts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
+                        try
+                        {
+                            await client.ConnectAsync(hostName, port, cts.Token).ConfigureAwait(false);
+                            // 接続成功したら、このポートが Broadcaster ポート
+                            SwkLogger.Debug($"Found Broadcaster on {hostName}:{port}");
+                            return port;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // タイムアウト、次のポートへ
+                            continue;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is SocketException or OperationCanceledException)
+            {
+                // 接続失敗、次のポートへ
+                continue;
+            }
+        }
+
+        SwkLogger.Debug($"TryGetBroadcasterPortAsync failed: no open port found on {hostName} in range {minPort}-{maxPort}");
+        return -1;
     }
 
     /// <summary>
