@@ -55,23 +55,51 @@ public partial class UserListWindow : Window
         _lastCandidates = candidates;
         SwkLogger.Debug($"UserListWindow.LoadAsync: friends={friends.Count} candidates={candidates.Count}");
 
-        // 友達のホスト名にぶつかった候補を控える(=その友達は接続OK→非表示)。
+        // 各ホストに通知を問い合わせて、ShareWorkinが動いているかを判定
+        // TODO: SwkNotificationListener の実装完了後に、実際の問い合わせを実装
+        // 暫定: LAN スキャンで見つかったホストは "開店中" と見なす
+        HashSet<string> shopOpen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (LanCandidate c in candidates)
+        {
+            string host = NormalizeHostName(c.HostName ?? c.Address.ToString());
+            shopOpen.Add(host);
+        }
+
         HashSet<string> matchedHosts = new(StringComparer.OrdinalIgnoreCase);
         List<UserListRow> rows = new();
 
+        // Friends を処理: Friend登録済みのホストを分類
         foreach (Friend f in friends)
         {
             LanCandidate? match = candidates.FirstOrDefault(c => SameHost(f.HostMachineName, c.HostName));
+            string normalizedHost = NormalizeHostName(f.HostMachineName);
+            bool isOpen = shopOpen.Contains(normalizedHost);
+
             if (match is not null)
             {
-                // 接続OK登録済 = 一覧から非表示(草案7 §C: 要対応のものだけ並べる)。
                 matchedHosts.Add(NormalizeHostName(match.HostName));
-                continue;
+
+                // ① 接続可能: 登録済み + 開店中
+                if (isOpen)
+                {
+                    rows.Add(UserListRow.ForConnectedFriend(f));
+                }
+                else
+                {
+                    // ② 不通: 登録済み + オフライン
+                    rows.Add(UserListRow.ForUnreachableFriend(f));
+                }
             }
-            rows.Add(UserListRow.ForUnreachableFriend(f));
+            else
+            {
+                // ② 不通: 登録済みだがLANで見つからない
+                rows.Add(UserListRow.ForUnreachableFriend(f));
+            }
         }
 
         string myHost = NormalizeHostName(Environment.MachineName);
+
+        // Candidates を処理: Friend未登録のホストを分類
         foreach (LanCandidate c in candidates)
         {
             string host = NormalizeHostName(c.HostName);
@@ -79,10 +107,21 @@ public partial class UserListWindow : Window
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
             if (matchedHosts.Contains(host)) continue;
 
-            rows.Add(UserListRow.ForUnregisteredCandidate(c));
+            bool isOpen = shopOpen.Contains(host);
+
+            if (isOpen)
+            {
+                // ③ 新しいお店: 未登録 + 開店中
+                rows.Add(UserListRow.ForNewShop(c));
+            }
+            else
+            {
+                // ④ Windows PCのみ: 未登録 + オフライン/ShareWorkinなし
+                rows.Add(UserListRow.ForWindowsPcOnly(c));
+            }
         }
 
-        // 並び順: 不通お友達 → 未登録(草案7 §C)。
+        // 並び順: 接続可能 → 新しいお店 → 不通 → Windows PCのみ
         rows.Sort(static (a, b) =>
         {
             int byKind = ((int)a.Kind).CompareTo((int)b.Kind);
@@ -95,22 +134,26 @@ public partial class UserListWindow : Window
             _rows.Add(r);
         }
 
+        int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
+        int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
         int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
-        int unset = rows.Count(r => r.Kind == UserListRowKind.UnregisteredCandidate);
-        int hiddenOk = friends.Count - unreach;
+        int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
+
         if (_rows.Count == 0)
         {
-            StatusTextBlock.Text = hiddenOk > 0
-                ? $"対応の必要なお友達はいません。({hiddenOk} 名は接続OKで非表示)"
-                : "周りには誰もいません。";
+            StatusTextBlock.Text = "周りには誰もいません。";
         }
         else
         {
-            StatusTextBlock.Text = hiddenOk > 0
-                ? $"不通 {unreach} / 未登録 {unset} (接続OK {hiddenOk} 名は非表示)"
-                : $"不通 {unreach} / 未登録 {unset}";
+            List<string> status = new();
+            if (connected > 0) status.Add($"接続可能 {connected}");
+            if (newShop > 0) status.Add($"新しいお店 {newShop}");
+            if (unreach > 0) status.Add($"不通 {unreach}");
+            if (windowsPcOnly > 0) status.Add($"PC {windowsPcOnly}");
+            StatusTextBlock.Text = string.Join(" / ", status);
         }
-        SwkLogger.Debug($"UserListWindow.LoadAsync done: unreach={unreach} unset={unset} hiddenOk={hiddenOk}");
+
+        SwkLogger.Debug($"UserListWindow.LoadAsync done: connected={connected} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly}");
     }
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
@@ -163,8 +206,11 @@ public partial class UserListWindow : Window
 public enum UserListRowKind
 {
     // 値の小さい順に表示される(0 が先頭)。
-    UnreachableFriend = 0,
-    UnregisteredCandidate = 1,
+    // 優先度順: 接続可能 → 新しいお店 → 不通 → Windows PC のみ
+    ConnectedFriend = 0,        // Friend登録済み + 開店中
+    NewShop = 1,                // Friend未登録 + 開店中
+    UnreachableFriend = 2,      // Friend登録済み + オフライン
+    WindowsPcOnly = 3,          // Friend未登録 + ShareWorkinなし
 }
 
 public sealed class UserListRow
@@ -183,9 +229,33 @@ public sealed class UserListRow
     public Friend? Friend { get; init; }
     public LanCandidate? Candidate { get; init; }
 
+    /// <summary>
+    /// ① 接続可能: Friend登録済み + 開店中（通知受信中）
+    /// </summary>
+    public static UserListRow ForConnectedFriend(Friend friend)
+    {
+        return new UserListRow
+        {
+            NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+            ShareFolderName = friend.ShareName,
+            Memo = friend.Memo,
+            IpLabel = string.IsNullOrWhiteSpace(friend.LastKnownAddress) ? string.Empty : friend.LastKnownAddress!,
+            Kind = UserListRowKind.ConnectedFriend,
+            IconBrush = new SolidColorBrush(Color.FromRgb(76, 175, 80)), // 緑
+            RowBackground = Brushes.Transparent,
+            NameForeground = new SolidColorBrush(Color.FromRgb(76, 175, 80)),
+            NameWeight = FontWeights.Normal,
+            NameStyle = FontStyles.Normal,
+            Friend = friend,
+            Candidate = null,
+        };
+    }
+
+    /// <summary>
+    /// ② 不通: Friend登録済み + オフライン（通知なし）
+    /// </summary>
     public static UserListRow ForUnreachableFriend(Friend friend)
     {
-        // 強調表示: 要対応 (不通の登録済お友達)。
         return new UserListRow
         {
             NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
@@ -193,7 +263,7 @@ public sealed class UserListRow
             Memo = friend.Memo,
             IpLabel = string.IsNullOrWhiteSpace(friend.LastKnownAddress) ? string.Empty : friend.LastKnownAddress!,
             Kind = UserListRowKind.UnreachableFriend,
-            IconBrush = ColorFromName(string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName),
+            IconBrush = new SolidColorBrush(Color.FromRgb(244, 67, 54)), // 赤
             RowBackground = new SolidColorBrush(Color.FromRgb(255, 235, 230)),
             NameForeground = new SolidColorBrush(Color.FromRgb(150, 50, 40)),
             NameWeight = FontWeights.SemiBold,
@@ -203,9 +273,11 @@ public sealed class UserListRow
         };
     }
 
-    public static UserListRow ForUnregisteredCandidate(LanCandidate candidate)
+    /// <summary>
+    /// ③ 新しいお店: Friend未登録 + 開店中（通知受信中）
+    /// </summary>
+    public static UserListRow ForNewShop(LanCandidate candidate, string? visitorDisplayName = null)
     {
-        // 未登録: 通常表示、お友達名は (ホスト名) を仮置き(イタリック・薄色)。
         string host = string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName!;
         return new UserListRow
         {
@@ -213,16 +285,40 @@ public sealed class UserListRow
             ShareFolderName = string.Empty,
             Memo = string.Empty,
             IpLabel = candidate.Address.ToString(),
-            Kind = UserListRowKind.UnregisteredCandidate,
-            IconBrush = new SolidColorBrush(Color.FromRgb(216, 210, 195)),
+            Kind = UserListRowKind.NewShop,
+            IconBrush = new SolidColorBrush(Color.FromRgb(255, 193, 7)), // 黄
             RowBackground = Brushes.Transparent,
-            NameForeground = new SolidColorBrush(Color.FromRgb(120, 110, 95)),
+            NameForeground = new SolidColorBrush(Color.FromRgb(255, 152, 0)),
             NameWeight = FontWeights.Normal,
-            NameStyle = FontStyles.Italic,
+            NameStyle = FontStyles.Normal,
             Friend = null,
             Candidate = candidate,
         };
     }
+
+    /// <summary>
+    /// ④ Windows PCのみ: Friend未登録 + ShareWorkinなし
+    /// </summary>
+    public static UserListRow ForWindowsPcOnly(LanCandidate candidate)
+    {
+        string host = string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName!;
+        return new UserListRow
+        {
+            NameLabel = host,
+            ShareFolderName = string.Empty,
+            Memo = string.Empty,
+            IpLabel = candidate.Address.ToString(),
+            Kind = UserListRowKind.WindowsPcOnly,
+            IconBrush = new SolidColorBrush(Color.FromRgb(158, 158, 158)), // グレー
+            RowBackground = Brushes.Transparent,
+            NameForeground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+            NameWeight = FontWeights.Normal,
+            NameStyle = FontStyles.Normal,
+            Friend = null,
+            Candidate = candidate,
+        };
+    }
+
 
     private static Brush ColorFromName(string name)
     {

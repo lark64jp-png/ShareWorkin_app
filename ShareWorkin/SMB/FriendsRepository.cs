@@ -10,12 +10,59 @@ namespace ShareWorkin.SMB;
 
 public static class FriendsRepository
 {
+    // 新しい保存先: アプリフォルダー内（§A 準拠）
     private static readonly string FriendsPath = Path.Combine(
+        AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        "friends.json");
+
+    // 旧保存先: マイグレーション用
+    private static readonly string LegacyFriendsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ShareWorkin",
         "friends.json");
 
     private static readonly byte[] DpapiEntropy = Encoding.UTF8.GetBytes("ShareWorkin/Friend/Password");
+
+    // 初期化時に旧ファイルのマイグレーションを実施
+    static FriendsRepository()
+    {
+        TryMigrateLegacyFriendsFile();
+    }
+
+    /// <summary>
+    /// 旧保存先（%LocalAppData%\ShareWorkin\friends.json）から新保存先（アプリフォルダー）へマイグレーション
+    /// </summary>
+    private static void TryMigrateLegacyFriendsFile()
+    {
+        try
+        {
+            // 新しい場所にすでに存在する場合は、旧ファイルを削除して完了
+            if (File.Exists(FriendsPath))
+            {
+                if (File.Exists(LegacyFriendsPath))
+                {
+                    File.Delete(LegacyFriendsPath);
+                    SwkLogger.Info("Migrated friends.json: deleted legacy file");
+                }
+                return;
+            }
+
+            // 旧ファイルが存在し、新しい場所にはない場合 → マイグレーション
+            if (File.Exists(LegacyFriendsPath))
+            {
+                string json = File.ReadAllText(LegacyFriendsPath);
+                Directory.CreateDirectory(Path.GetDirectoryName(FriendsPath)!);
+                File.WriteAllText(FriendsPath, json);
+                File.Delete(LegacyFriendsPath);
+                SwkLogger.Info("Migrated friends.json: moved from %LocalAppData% to app folder");
+            }
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TryMigrateLegacyFriendsFile failed: {ex.Message}");
+            // マイグレーション失敗は致命的ではない。通常の LoadAll で新しい場所を作成する
+        }
+    }
 
     public static IReadOnlyList<Friend> LoadAll()
     {

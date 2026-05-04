@@ -202,6 +202,13 @@
                         Height="32"
                         Margin="0,0,8,0"
                         Click="ReloadButton_Click" />
+                <Button x:Name="OpenFolderButton"
+                        Content="フォルダーを開く"
+                        Width="120"
+                        Height="32"
+                        Margin="0,0,8,0"
+                        Visibility="Collapsed"
+                        Click="OpenFolderButton_Click" />
                 <Button x:Name="DeleteButton"
                         Content="削除"
                         Width="64"

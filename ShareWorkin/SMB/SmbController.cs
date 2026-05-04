@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace ShareWorkin.SMB;
 
@@ -27,6 +28,9 @@ public sealed record ShopOpenResult(
 
 public static class SmbController
 {
+    // 開店中のブロードキャスター（通知を送信）
+    private static SwkNotificationBroadcaster? _broadcaster;
+
     public static SmbLayerStatus GetCurrentState(string? shopRootPath = null)
         => SmbLayerChecker.GetCurrentState(shopRootPath);
 
@@ -153,6 +157,20 @@ public static class SmbController
         }
 
         SmbLayerStatus after = SmbLayerChecker.GetCurrentState(request.ShopRootPath);
+
+        // 通知ブロードキャスターを起動（LAN内の他のPCに「ここで開いてます」と通知）
+        try
+        {
+            _broadcaster = new SwkNotificationBroadcaster(request.ShareName);
+            _ = _broadcaster.StartAsync(); // 非同期で起動（待たない）
+            SwkLogger.Info($"SwkNotificationBroadcaster started for '{request.ShareName}'");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Failed to start SwkNotificationBroadcaster: {ex.Message}");
+            // ブロードキャスター起動失敗は致命的でない。お店は開けたが、他PCからは発見されないだけ
+        }
+
         SwkLogger.Info("OpenShopSequence ok");
         return new ShopOpenResult(true, null, before, after);
     }
@@ -163,6 +181,22 @@ public static class SmbController
         ArgumentException.ThrowIfNullOrEmpty(shopRootPath);
 
         SwkLogger.Info($"CloseShopSequence start: name='{shareName}'");
+
+        // 通知ブロードキャスターを停止
+        if (_broadcaster != null)
+        {
+            try
+            {
+                // 非同期で停止（本来は await する。ただし同期メソッドなので、Fire-and-forget）
+                _ = _broadcaster.StopAsync();
+                _broadcaster = null;
+                SwkLogger.Info("SwkNotificationBroadcaster stopped");
+            }
+            catch (Exception ex)
+            {
+                SwkLogger.Warn($"Error stopping SwkNotificationBroadcaster: {ex.Message}");
+            }
+        }
 
         bool removeOk = SmbShareManager.RemoveShare(shareName);
         bool revokeOk = SmbNtfsManager.RevokeSwkGuest(shopRootPath);
