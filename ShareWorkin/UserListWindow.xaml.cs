@@ -149,13 +149,10 @@ public partial class UserListWindow : Window
         }
         else
         {
-            int connectable = connected + newShop;
-            int others = unreach + windowsPcOnly + installCandidate;
-            bool isFullScan = SwkNetworkCache.LastScanMode == ScanMode.Full;
-
-            StatusTextBlock.Text = isFullScan
-                ? $"接続可能 {connectable} / その他 {others}"
-                : $"接続可能 {connectable}";
+            string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
+            int total = _rows.Count;
+            int noAccess = windowsPcOnly + installCandidate;
+            StatusTextBlock.Text = $"{modeLabel}：接続中 {total}、登録接続中 {connected} 登録接続不可 {unreach} 接続可能 {newShop} 接続不可 {noAccess}";
         }
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
