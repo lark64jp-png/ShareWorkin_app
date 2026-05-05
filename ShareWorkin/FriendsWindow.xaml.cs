@@ -94,6 +94,13 @@ public partial class FriendsWindow : Window
         finally { _suppressFormEvents = false; }
     }
 
+    private void UpdateButtonColumns()
+    {
+        int count = ButtonPanel.Children.Cast<System.Windows.UIElement>()
+            .Count(e => e.Visibility == Visibility.Visible);
+        ButtonPanel.Columns = Math.Max(1, count);
+    }
+
     private void ApplyActiveTargetInternal()
     {
         DeleteButton.Visibility = Visibility.Collapsed;
@@ -175,6 +182,7 @@ public partial class FriendsWindow : Window
 
         _initialName = NameTextBox.Text;
         _initialMemo = MemoTextBox.Text;
+        UpdateButtonColumns();
         UpdateOkState();
     }
 

@@ -9,15 +9,17 @@
         FontFamily="Yu Gothic UI">
     <Grid Margin="22">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="6" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="14" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="14" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="14" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />   <!-- 0: タイトル -->
+            <RowDefinition Height="6" />      <!-- 1: spacer -->
+            <RowDefinition Height="Auto" />   <!-- 2: サブタイトル -->
+            <RowDefinition Height="14" />     <!-- 3: spacer -->
+            <RowDefinition Height="Auto" />   <!-- 4: 情報部 -->
+            <RowDefinition Height="10" />     <!-- 5: spacer -->
+            <RowDefinition Height="Auto" />   <!-- 6: ボタン行 -->
+            <RowDefinition Height="4" />      <!-- 7: spacer -->
+            <RowDefinition Height="Auto" />   <!-- 8: ステータス行 -->
+            <RowDefinition Height="10" />     <!-- 9: spacer -->
+            <RowDefinition Height="*" />      <!-- 10: 接続未確定リスト -->
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0"
@@ -119,57 +121,49 @@
             </Grid>
         </Border>
 
-        <!-- ボタンバー（情報部と候補リストの間） -->
-        <Grid Grid.Row="6">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        <!-- ボタン行: 表示中のボタン数に応じて Columns をコードで更新し全幅均等割りを維持 -->
+        <UniformGrid x:Name="ButtonPanel"
+                     Grid.Row="6"
+                     Rows="1"
+                     Columns="3">
+            <Button Content="再読み込み"
+                    Height="32"
+                    Margin="0,0,4,0"
+                    Click="ReloadButton_Click" />
+            <Button x:Name="OpenFolderButton"
+                    Content="フォルダーを開く"
+                    Height="32"
+                    Margin="4,0,4,0"
+                    Visibility="Collapsed"
+                    Click="OpenFolderButton_Click" />
+            <Button x:Name="DeleteButton"
+                    Content="削除"
+                    Height="32"
+                    Margin="4,0,4,0"
+                    Visibility="Collapsed"
+                    Click="DeleteButton_Click" />
+            <Button x:Name="OkButton"
+                    Content="確定"
+                    Height="32"
+                    Margin="4,0,4,0"
+                    IsEnabled="False"
+                    Click="OkButton_Click" />
+            <Button Content="キャンセル"
+                    Height="32"
+                    Margin="4,0,0,0"
+                    IsCancel="True"
+                    Click="CancelButton_Click" />
+        </UniformGrid>
 
-            <TextBlock x:Name="StatusTextBlock"
-                       Grid.Column="0"
-                       VerticalAlignment="Center"
-                       FontSize="12"
-                       Foreground="#4B5563" />
-
-            <StackPanel Grid.Column="1"
-                        Orientation="Horizontal">
-                <Button Content="再読み込み"
-                        Width="100"
-                        Height="32"
-                        Margin="0,0,8,0"
-                        Click="ReloadButton_Click" />
-                <Button x:Name="OpenFolderButton"
-                        Content="フォルダーを開く"
-                        Width="120"
-                        Height="32"
-                        Margin="0,0,8,0"
-                        Visibility="Collapsed"
-                        Click="OpenFolderButton_Click" />
-                <Button x:Name="DeleteButton"
-                        Content="削除"
-                        Width="64"
-                        Height="32"
-                        Margin="0,0,8,0"
-                        Visibility="Collapsed"
-                        Click="DeleteButton_Click" />
-                <Button x:Name="OkButton"
-                        Content="確定"
-                        Width="84"
-                        Height="32"
-                        Margin="0,0,8,0"
-                        IsEnabled="False"
-                        Click="OkButton_Click" />
-                <Button Content="キャンセル"
-                        Width="84"
-                        Height="32"
-                        IsCancel="True"
-                        Click="CancelButton_Click" />
-            </StackPanel>
-        </Grid>
+        <!-- ステータス行（ボタンの下） -->
+        <TextBlock x:Name="StatusTextBlock"
+                   Grid.Row="8"
+                   VerticalAlignment="Center"
+                   FontSize="12"
+                   Foreground="#4B5563" />
 
         <!-- 接続未確定リスト -->
-        <Border Grid.Row="8"
+        <Border Grid.Row="10"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="6"

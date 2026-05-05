@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace ShareWorkin.SMB;
 
-public sealed record LanCandidate(IPAddress Address, string? HostName);
+public sealed record LanCandidate(IPAddress Address, string? HostName, bool IsInstallCandidate = false);
 
 public static class LanScanner
 {
@@ -18,6 +18,10 @@ public static class LanScanner
     // NASNE/LinkStation 等の家電系 SMB は 135 を持たない。
     // ShareWorkin の用途は Windows PC 同士なので 445 のみのホストは候補から除外する。
     private const int RpcPort = 135;
+    // 全PCスキャン時に 445+135 のないホストに対してもプローブするポート。
+    // FTP(21) または SSH(22) が応答すればコンピューターと見なす（インストール候補）。
+    private const int FtpPort = 21;
+    private const int SshPort = 22;
     private const int ProbeTimeoutMs = 1000;
     private const int MaxParallel = 64;
 
@@ -44,7 +48,7 @@ public static class LanScanner
         return nets;
     }
 
-    public static async Task<IReadOnlyList<LanCandidate>> ScanAsync(CancellationToken cancellationToken = default)
+    public static async Task<IReadOnlyList<LanCandidate>> ScanAsync(bool fullScan = false, CancellationToken cancellationToken = default)
     {
         IReadOnlyList<IPNetwork2> subnets = EnumerateLocalSubnets();
         if (subnets.Count == 0)
@@ -58,18 +62,19 @@ public static class LanScanner
             targets.AddRange(subnet.EnumerateUsable());
         }
 
-        SwkLogger.Info($"LanScanner: probing {targets.Count} addresses");
+        SwkLogger.Info($"LanScanner: probing {targets.Count} addresses (fullScan={fullScan})");
 
         SemaphoreSlim gate = new(MaxParallel);
         List<Task<ProbeOutcome>> probes = targets
-            .Select(ip => ProbeAsync(ip, gate, cancellationToken))
+            .Select(ip => ProbeAsync(ip, gate, fullScan, cancellationToken))
             .ToList();
 
         ProbeOutcome[] outcomes = await Task.WhenAll(probes).ConfigureAwait(false);
 
         int smbOnly = outcomes.Count(o => o.SmbOpen && !o.RpcOpen);
         int both = outcomes.Count(o => o.SmbOpen && o.RpcOpen);
-        SwkLogger.Debug($"LanScanner: 445 only={smbOnly} (excluded as non-Windows SMB), 445+135={both} (included)");
+        int installCandidates = outcomes.Count(o => o.Candidate?.IsInstallCandidate == true);
+        SwkLogger.Debug($"LanScanner: 445 only={smbOnly} (excluded), 445+135={both}, installCandidates={installCandidates}");
 
         return outcomes
             .Where(o => o.Candidate is not null)
@@ -79,40 +84,54 @@ public static class LanScanner
 
     private readonly record struct ProbeOutcome(bool SmbOpen, bool RpcOpen, LanCandidate? Candidate);
 
-    private static async Task<ProbeOutcome> ProbeAsync(IPAddress address, SemaphoreSlim gate, CancellationToken token)
+    private static async Task<ProbeOutcome> ProbeAsync(IPAddress address, SemaphoreSlim gate, bool fullScan, CancellationToken token)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             bool smbOpen = await TryConnectAsync(address, SmbPort, token).ConfigureAwait(false);
-            if (!smbOpen)
+            if (smbOpen)
             {
-                return new ProbeOutcome(false, false, null);
+                bool rpcOpen = await TryConnectAsync(address, RpcPort, token).ConfigureAwait(false);
+                if (!rpcOpen)
+                {
+                    SwkLogger.Debug($"LanScanner: skip {address} (445 open, 135 closed; likely NAS/家電)");
+                    return new ProbeOutcome(true, false, null);
+                }
+
+                string? hostName = await ResolveHostNameAsync(address).ConfigureAwait(false);
+                return new ProbeOutcome(true, true, new LanCandidate(address, hostName));
             }
 
-            bool rpcOpen = await TryConnectAsync(address, RpcPort, token).ConfigureAwait(false);
-            if (!rpcOpen)
+            if (fullScan)
             {
-                SwkLogger.Debug($"LanScanner: skip {address} (445 open, 135 closed; likely NAS/家電)");
-                return new ProbeOutcome(true, false, null);
+                bool ftpOpen = await TryConnectAsync(address, FtpPort, token).ConfigureAwait(false);
+                bool sshOpen = !ftpOpen && await TryConnectAsync(address, SshPort, token).ConfigureAwait(false);
+                if (ftpOpen || sshOpen)
+                {
+                    string? hostName = await ResolveHostNameAsync(address).ConfigureAwait(false);
+                    return new ProbeOutcome(false, false, new LanCandidate(address, hostName, IsInstallCandidate: true));
+                }
             }
 
-            string? hostName = null;
-            try
-            {
-                IPHostEntry entry = await Dns.GetHostEntryAsync(address).ConfigureAwait(false);
-                hostName = entry.HostName;
-            }
-            catch (Exception ex) when (ex is SocketException or ArgumentException)
-            {
-                hostName = null;
-            }
-
-            return new ProbeOutcome(true, true, new LanCandidate(address, hostName));
+            return new ProbeOutcome(false, false, null);
         }
         finally
         {
             try { gate.Release(); } catch { }
+        }
+    }
+
+    private static async Task<string?> ResolveHostNameAsync(IPAddress address)
+    {
+        try
+        {
+            IPHostEntry entry = await Dns.GetHostEntryAsync(address).ConfigureAwait(false);
+            return entry.HostName;
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException)
+        {
+            return null;
         }
     }
 

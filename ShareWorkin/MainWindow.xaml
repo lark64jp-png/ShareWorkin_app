@@ -209,13 +209,6 @@
                                    TextTrimming="CharacterEllipsis"
                                    ToolTip=""
                                    Margin="0,2,0,0" />
-                        <TextBlock x:Name="OpenSharePathTextBlock"
-                                   Text=""
-                                   FontSize="11"
-                                   Foreground="#738079"
-                                   TextTrimming="CharacterEllipsis"
-                                   Margin="0,2,0,0"
-                                   Visibility="Collapsed" />
                     </StackPanel>
 
                     <Button x:Name="UserListButton"
@@ -287,7 +280,7 @@
                                 Click="RefreshButton_Click">
                             <TextBlock Text="&#xE72C;"
                                        FontFamily="Segoe MDL2 Assets"
-                                       FontSize="16" />
+                                       FontSize="12" />
                         </Button>
 
                         <StackPanel Orientation="Horizontal"

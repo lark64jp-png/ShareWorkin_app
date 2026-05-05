@@ -175,6 +175,7 @@ public partial class MainWindow : Window
             return;
         }
         ShowMainWindow();
+        _ = SwkNetworkCache.RefreshAsync(ScanMode.Quick);
     }
 
     private void MigrateLegacyHoldContents()
@@ -402,23 +403,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private string? BuildCurrentUncPath()
-    {
-        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            return null;
-        }
-
-        string shareName = DeriveShareName(_shopFolder);
-        if (string.IsNullOrWhiteSpace(shareName))
-        {
-            return null;
-        }
-
-        return $@"\\{Environment.MachineName}\{shareName}";
-    }
-
-    private static void ClearHiddenFolderAttribute(string folderPath)
+private static void ClearHiddenFolderAttribute(string folderPath)
     {
         FileAttributes attributes = File.GetAttributes(folderPath);
         if ((attributes & FileAttributes.Hidden) != 0)
@@ -2300,7 +2285,19 @@ public partial class MainWindow : Window
                 }
             }
 
-            foreach (ShopItem item in SortShopItems(all))
+            IEnumerable<ShopItem> sorted = SortShopItems(all);
+            if (_isShopOpen && _currentMode == DisplayMode.Shop &&
+                !string.IsNullOrWhiteSpace(_shopFolder) &&
+                string.Equals(
+                    Path.GetFullPath(_currentFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    Path.GetFullPath(_shopFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                string holdPath = GetHoldFolderPath();
+                DateTime holdUpdatedAt = Directory.Exists(holdPath) ? Directory.GetLastWriteTime(holdPath) : DateTime.MinValue;
+                sorted = sorted.Prepend(new ShopItem(HoldFolderName, holdPath, true, true, holdUpdatedAt, null));
+            }
+            foreach (ShopItem item in sorted)
             {
                 ShopItems.Add(item);
             }
@@ -3078,13 +3075,7 @@ public partial class MainWindow : Window
         OpenStatusTextBlock.Text = openText;
         OpenStatusTextBlock.ToolTip = string.IsNullOrEmpty(openTooltip) ? null : openTooltip;
 
-        string? uncPath = isOpen ? BuildCurrentUncPath() : null;
-        OpenSharePathTextBlock.Text = uncPath ?? string.Empty;
-        OpenSharePathTextBlock.Visibility = string.IsNullOrEmpty(uncPath)
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-
-        UpdateSidebar(isOpen);
+UpdateSidebar(isOpen);
     }
 }
 
