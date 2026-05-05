@@ -28,6 +28,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         public required int Port { get; set; }
         public required DateTime IssuedAt { get; set; }
         public DateTime LastCheckedAt { get; set; }
+        public string? IpAddress { get; set; }
     }
 
     public async Task StartAsync()
@@ -170,7 +171,8 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                         ShareName = shareName,
                         Port = tcpPort,
                         IssuedAt = DateTime.Parse(issuedAtStr ?? DateTime.UtcNow.ToString("o")),
-                        LastCheckedAt = DateTime.UtcNow
+                        LastCheckedAt = DateTime.UtcNow,
+                        IpAddress = senderIp
                     });
 
                     SwkLogger.Debug($"ProbeHostsAsync: discovered {machineName}/{shareName} tcpPort={tcpPort}");
@@ -202,16 +204,20 @@ public sealed class SwkNotificationListener : IAsyncDisposable
     {
         try
         {
+            string connectTarget = shop.IpAddress ?? shop.MachineName;
+            SwkLogger.Info($"RequestInviteCodeAsync: connecting to {shop.MachineName}({connectTarget}):{shop.Port}");
+
             using var client = new TcpClient();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
 
             try
             {
-                await client.ConnectAsync(shop.MachineName, shop.Port, cts.Token);
+                await client.ConnectAsync(connectTarget, shop.Port, cts.Token);
             }
             catch (OperationCanceledException)
             {
+                SwkLogger.Warn($"RequestInviteCodeAsync: TCP connect timed out to {shop.MachineName}({connectTarget}):{shop.Port}");
                 return (null, null, "接続タイムアウト");
             }
 
