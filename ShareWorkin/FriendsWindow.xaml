@@ -126,7 +126,8 @@
                      Grid.Row="6"
                      Rows="1"
                      Columns="3">
-            <Button Content="再読み込み"
+            <Button x:Name="ReloadButton"
+                    Content="再読み込み"
                     Height="32"
                     Margin="0,0,4,0"
                     Click="ReloadButton_Click" />

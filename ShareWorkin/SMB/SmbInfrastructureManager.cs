@@ -21,6 +21,36 @@ Set-NetFirewallRule -DisplayGroup 'ファイルとプリンターの共有' -Pro
         return RunStep(script, "EnsureFirewallSharingEnabled", timeoutMs: 15000);
     }
 
+    public static bool EnsureSwkDiscoveryPort()
+    {
+        const string script = @"
+$ruleName = 'ShareWorkin Discovery (UDP 7831)';
+$existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue;
+if ($existing) {
+    Set-NetFirewallRule -DisplayName $ruleName -Profile Private,Domain -Enabled True | Out-Null;
+} else {
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol UDP -LocalPort 7831 -Profile Private,Domain -Action Allow | Out-Null;
+}
+";
+        return RunStep(script, "EnsureSwkDiscoveryPort", timeoutMs: 15000);
+    }
+
+    public static bool EnsureSwkAppTcpRule(string exePath)
+    {
+        string escaped = exePath.Replace("'", "''");
+        string script = $@"
+$ruleName = 'ShareWorkin App (TCP Inbound)';
+$exePath = '{escaped}';
+$existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue;
+if ($existing) {{
+    Set-NetFirewallRule -DisplayName $ruleName -Program $exePath -Profile Private,Domain -Enabled True | Out-Null;
+}} else {{
+    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -Program $exePath -Profile Private,Domain -Action Allow | Out-Null;
+}}
+";
+        return RunStep(script, "EnsureSwkAppTcpRule", timeoutMs: 15000);
+    }
+
     public static bool EnsureSmbServerConfig()
     {
         const string script = @"

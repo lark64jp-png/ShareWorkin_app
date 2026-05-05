@@ -20,25 +20,11 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0"
-                       Text="ユーザー一覧"
-                       FontSize="20"
-                       FontWeight="SemiBold"
-                       Foreground="#2F2A22" />
-            <ComboBox x:Name="ScanModeComboBox"
-                      Grid.Column="1"
-                      VerticalAlignment="Center"
-                      Width="148"
-                      SelectedIndex="0">
-                <ComboBoxItem Content="接続可能スキャン" />
-                <ComboBoxItem Content="全PCスキャン" />
-            </ComboBox>
-        </Grid>
+        <TextBlock Grid.Row="0"
+                   Text="ユーザー一覧"
+                   FontSize="20"
+                   FontWeight="SemiBold"
+                   Foreground="#2F2A22" />
         <TextBlock Grid.Row="2"
                    Text="つながらない登録済みお友達と、まだ登録していない PC を表示します。行をダブルクリックで開きます。"
                    FontSize="12"
@@ -142,6 +128,14 @@
 
             <StackPanel Grid.Column="1"
                         Orientation="Horizontal">
+                <ComboBox x:Name="ScanModeComboBox"
+                          VerticalAlignment="Center"
+                          Width="148"
+                          Margin="0,0,8,0"
+                          SelectedIndex="0">
+                    <ComboBoxItem Content="接続可能スキャン" />
+                    <ComboBoxItem Content="全PCスキャン" />
+                </ComboBox>
                 <Button x:Name="ReloadButton"
                         Content="再スキャン"
                         Width="100"

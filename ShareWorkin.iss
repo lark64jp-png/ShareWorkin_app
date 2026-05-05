@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.07"
+#define MyAppVersion "1.08"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.07_install
+OutputBaseFilename=ShareWorkin_v1.08_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

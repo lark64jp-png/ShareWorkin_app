@@ -40,7 +40,10 @@ public static class SmbController
         bool b = SmbInfrastructureManager.EnsureNetworkPrivate();
         bool c = SmbInfrastructureManager.EnsureFirewallSharingEnabled();
         bool d = SmbInfrastructureManager.EnsureSmbServerConfig();
-        return a && b && c && d;
+        bool e = SmbInfrastructureManager.EnsureSwkDiscoveryPort();
+        string exePath = Environment.ProcessPath ?? string.Empty;
+        bool f = string.IsNullOrEmpty(exePath) || SmbInfrastructureManager.EnsureSwkAppTcpRule(exePath);
+        return a && b && c && d && e && f;
     }
 
     public static ShopOpenResult OpenShopSequence(

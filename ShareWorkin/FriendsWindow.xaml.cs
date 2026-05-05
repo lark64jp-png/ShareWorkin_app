@@ -56,6 +56,7 @@ public partial class FriendsWindow : Window
             $"candidate={initialCandidate?.HostName ?? "null"}");
         Loaded += (_, _) =>
         {
+            ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
             _initialApplied = true;
@@ -79,6 +80,7 @@ public partial class FriendsWindow : Window
         SwkLogger.Debug($"FriendsWindow ctor (ShopInfo): {shopInfo.MachineName}/{shopInfo.ShareName}");
         Loaded += (_, _) =>
         {
+            ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
             _initialApplied = true;
@@ -328,18 +330,22 @@ public partial class FriendsWindow : Window
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Debug("FriendsWindow.ReloadButton_Click");
+        ReloadButton.IsEnabled = false;
         StatusTextBlock.Text = "周りを見ています…";
         try
         {
-            _candidates = await LanScanner.ScanAsync();
-            _shopInfos = await SwkNotificationListener.ProbeHostsAsync(_candidates, CancellationToken.None);
+            await SwkNetworkCache.RefreshAsync(SwkNetworkCache.LastScanMode);
         }
         catch (Exception ex)
         {
             SwkLogger.Warn($"FriendsWindow reload failed: {ex.Message}");
-            _candidates = Array.Empty<LanCandidate>();
-            _shopInfos = Array.Empty<SwkNotificationListener.ShopInfo>();
         }
+        finally
+        {
+            ReloadButton.IsEnabled = true;
+        }
+        _candidates = SwkNetworkCache.Candidates;
+        _shopInfos = SwkNetworkCache.ShopInfos;
 
         if (_activeFriend != null)
         {

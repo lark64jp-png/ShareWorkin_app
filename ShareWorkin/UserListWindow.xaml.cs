@@ -31,17 +31,12 @@ public partial class UserListWindow : Window
         };
     }
 
-    // キャッシュから UI を構築する。キャッシュが空なら先に RefreshAsync を走らせる。
+    // 一覧を開くたびに必ず再スキャンする。キャッシュがあれば暫定表示してから更新。
     private async Task BuildFromCacheAsync()
     {
-        if (!SwkNetworkCache.IsReady)
-        {
-            SwkLogger.Debug("UserListWindow: cache not ready, running initial scan");
-            await RunScanAndBuildAsync();
-            return;
-        }
-
-        BuildUiFromCache();
+        if (SwkNetworkCache.IsReady)
+            BuildUiFromCache();
+        await RunScanAndBuildAsync();
     }
 
     // スキャンを実行してキャッシュを更新し UI を再構築する（再スキャンボタン用）。
@@ -179,7 +174,7 @@ public partial class UserListWindow : Window
         Close();
     }
 
-    private void UserListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    private async void UserListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (UserListView.SelectedItem is not UserListRow row)
         {
@@ -198,7 +193,7 @@ public partial class UserListWindow : Window
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: pickup result={result}");
         if (result == true)
         {
-            BuildUiFromCache();
+            await RunScanAndBuildAsync();
         }
     }
 
