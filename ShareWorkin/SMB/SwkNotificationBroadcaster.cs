@@ -317,7 +317,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         using var cert = request.CreateSelfSigned(
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow.AddYears(1));
-        return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.EphemeralKeySet);
+        return new X509Certificate2(cert.Export(X509ContentType.Pfx));
     }
 
     private static async Task<string?> ReadJsonAsync(SslStream stream, CancellationToken cancellationToken)
