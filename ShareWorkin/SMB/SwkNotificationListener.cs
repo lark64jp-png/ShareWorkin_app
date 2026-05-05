@@ -215,7 +215,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 return (null, null, "接続タイムアウト");
             }
 
-            using var sslStream = new SslStream(client.GetStream(), true, (s, c, ch, p) => true);
+            using var sslStream = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
             var sslOptions = new SslClientAuthenticationOptions
             {
                 TargetHost = shop.MachineName,
