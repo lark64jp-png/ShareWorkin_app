@@ -37,7 +37,8 @@ public partial class UserListWindow : Window
     // すべてここを呼び出す(草案7 §C: 「読み込みは1コンポーネントの処理」)。
     private async Task LoadAsync()
     {
-        _rows.Clear();
+        ReloadButton.IsEnabled = false;
+        LoadingBar.Visibility = Visibility.Visible;
         StatusTextBlock.Text = "周りを見ています…";
 
         IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
@@ -50,7 +51,6 @@ public partial class UserListWindow : Window
         {
             SwkLogger.Warn($"UserListWindow LAN scan failed: {ex.Message}");
             candidates = Array.Empty<LanCandidate>();
-            StatusTextBlock.Text = "周りを見られませんでした。";
         }
 
         _lastCandidates = candidates;
@@ -142,6 +142,7 @@ public partial class UserListWindow : Window
             return string.Compare(a.NameLabel, b.NameLabel, StringComparison.OrdinalIgnoreCase);
         });
 
+        _rows.Clear();
         foreach (UserListRow r in rows)
         {
             _rows.Add(r);
@@ -166,6 +167,8 @@ public partial class UserListWindow : Window
             StatusTextBlock.Text = string.Join(" / ", status);
         }
 
+        LoadingBar.Visibility = Visibility.Collapsed;
+        ReloadButton.IsEnabled = true;
         SwkLogger.Debug($"UserListWindow.LoadAsync done: connected={connected} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly}");
     }
 

@@ -14,7 +14,9 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="14" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="14" />
+            <RowDefinition Height="4" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -102,7 +104,17 @@
             </ListView>
         </Border>
 
-        <Grid Grid.Row="6">
+        <!-- 読み込みインジケーター -->
+        <ProgressBar Grid.Row="6"
+                     x:Name="LoadingBar"
+                     Height="3"
+                     IsIndeterminate="True"
+                     Foreground="#4A7C59"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     Visibility="Collapsed" />
+
+        <Grid Grid.Row="8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -116,7 +128,8 @@
 
             <StackPanel Grid.Column="1"
                         Orientation="Horizontal">
-                <Button Content="再読み込み"
+                <Button x:Name="ReloadButton"
+                        Content="再読み込み"
                         Width="100"
                         Height="32"
                         Margin="0,0,8,0"

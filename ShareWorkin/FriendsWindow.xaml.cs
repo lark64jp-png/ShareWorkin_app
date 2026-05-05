@@ -96,7 +96,6 @@ public partial class FriendsWindow : Window
 
     private void ApplyActiveTargetInternal()
     {
-        InviteCodeBorder.Visibility = Visibility.Collapsed;
         DeleteButton.Visibility = Visibility.Collapsed;
         OpenFolderButton.Visibility = Visibility.Collapsed;
 
@@ -112,11 +111,15 @@ public partial class FriendsWindow : Window
                 SubtitleTextBlock.Text =
                     $"「{friendName}」の接続先を「{targetHost}」に変更します。お友達名を確認してください。";
             }
+            else if (_activeFriend.IsCurrentlyFound)
+            {
+                TitleTextBlock.Text = "接続を更新";
+                SubtitleTextBlock.Text = $"「{friendName}」の編集ができます。";
+            }
             else
             {
                 TitleTextBlock.Text = "接続を更新";
-                SubtitleTextBlock.Text =
-                    $"「{friendName}」の情報を編集できます。接続未確定リストから接続先を変更することもできます。";
+                SubtitleTextBlock.Text = $"「{friendName}」は現在未接続です。接続未確定リストから別の接続先を指定するか、削除してください。";
             }
 
             NameTextBox.Text = _activeFriend.DisplayName;
@@ -135,8 +138,9 @@ public partial class FriendsWindow : Window
         {
             // New モード: ShopInfo 自動登録
             TitleTextBlock.Text = "新規接続";
+            string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
             SubtitleTextBlock.Text =
-                $"「{_activeShopInfo.MachineName}」を新しくお友達として登録します。お友達名を入力してください。";
+                $"「{_activeShopInfo.MachineName}」{shopIp}を新しくお友達として登録します。お友達名を入力してください。";
             NameTextBox.Text = string.Empty;
             MemoTextBox.Text = string.Empty;
             ShareFolderTextBlock.Text = "(招待コードから取得します)";

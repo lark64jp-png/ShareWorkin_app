@@ -145,6 +145,11 @@ public partial class MainWindow : Window
         MigrateLegacyHoldContents();
         UpdateShopState(false);
         UpdateColumnHeaders();
+        string? ver = (System.Reflection.CustomAttributeExtensions
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
+                typeof(MainWindow).Assembly))
+            ?.InformationalVersion;
+        AppVersionTextBlock.Text = string.IsNullOrEmpty(ver) ? string.Empty : $"v{ver}";
         Loaded += MainWindow_Loaded;
     }
 
@@ -163,7 +168,13 @@ public partial class MainWindow : Window
     private void HandleStartup()
     {
         RestoreOpenShopIfNeeded();
-        ShowMainWindowWithPassword();
+        if (!EnsureUiUnlocked())
+        {
+            if (!_isShopOpen)
+                ExitApp();
+            return;
+        }
+        ShowMainWindow();
     }
 
     private void MigrateLegacyHoldContents()

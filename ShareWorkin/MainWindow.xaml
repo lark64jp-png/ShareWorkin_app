@@ -97,10 +97,17 @@
              and toward a small shop surface. This pass is intentionally light. -->
         <Border Grid.Row="0" Background="#315C50" Padding="28,22">
             <StackPanel>
-                <TextBlock Text="ShareWorkin"
-                           Foreground="White"
-                           FontSize="28"
-                           FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <TextBlock Text="ShareWorkin"
+                               Foreground="White"
+                               FontSize="28"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="AppVersionTextBlock"
+                               Foreground="#B0D4C0"
+                               FontSize="13"
+                               Margin="10,0,0,6"
+                               VerticalAlignment="Bottom" />
+                </StackPanel>
                 <TextBlock Text="共有フォルダーをあなたのお店として開くアプリ"
                            Foreground="#E7EFE8"
                            Margin="0,6,0,0"
@@ -591,7 +598,7 @@
                     </ComboBox>
                 </StackPanel>
                 <TextBlock Grid.Column="8"
-                           Text="1.04"
+                           Text=""
                            Foreground="#9A8F7E"
                            VerticalAlignment="Center"
                            FontSize="11" />
