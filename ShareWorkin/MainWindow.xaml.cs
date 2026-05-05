@@ -88,6 +88,8 @@ public partial class MainWindow : Window
     private bool _wasOpenAtLastShutdown;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private DisplayMode _currentMode = DisplayMode.Shop;
+    private Friend? _activeFriendShop;
+    private bool _suppressDropdownChange;
     private ShopSortField _sortField = ShopSortField.Name;
     private ListSortDirection _sortDirection = ListSortDirection.Ascending;
 
@@ -142,6 +144,8 @@ public partial class MainWindow : Window
 
         LoadSettings();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
+        ExplorerTargetComboBox.SelectionChanged += ExplorerTargetComboBox_SelectionChanged;
+        PopulateExplorerDropdown();
         MigrateLegacyHoldContents();
         UpdateShopState(false);
         UpdateColumnHeaders();
@@ -686,6 +690,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         UserListWindow window = new(this) { Owner = this };
         window.ShowDialog();
+        PopulateExplorerDropdown();
     }
 
     private void ShareStatusButton_Click(object sender, RoutedEventArgs e)
@@ -1474,18 +1479,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void HoldViewButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_currentMode == DisplayMode.Hold)
-        {
-            EnterShopMode();
-        }
-        else
-        {
-            EnterHoldMode();
-        }
-    }
-
     private void EnterHoldMode()
     {
         NavigateToHoldRoot(addHistory: true);
@@ -1500,7 +1493,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         CancelFolderSizeCalculation();
         _currentMode = DisplayMode.Hold;
-        HoldViewButton.Content = "お店の中身を見る";
+        _activeFriendShop = null;
         NavigateTo(GetHoldFolderPath(), addHistory: addHistory, clearForward: true);
     }
 
@@ -1513,7 +1506,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         CancelFolderSizeCalculation();
         _currentMode = DisplayMode.Shop;
-        HoldViewButton.Content = "保留を見る";
+        _activeFriendShop = null;
 
         if (_isShopOpen && !string.IsNullOrWhiteSpace(_shopFolder) && Directory.Exists(_shopFolder))
         {
@@ -2233,10 +2226,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void SyncModeToFolderPath(string folderPath)
     {
-        _currentMode = IsUnderFolder(folderPath, GetHoldFolderPath()) ? DisplayMode.Hold : DisplayMode.Shop;
-        HoldViewButton.Content = _currentMode == DisplayMode.Hold
-            ? "お店の中身を見る"
-            : "保留を見る";
+        if (_activeFriendShop != null && !string.IsNullOrWhiteSpace(_activeFriendShop.ConnectUncPath) &&
+            IsUnderFolder(folderPath, _activeFriendShop.ConnectUncPath))
+        {
+            _currentMode = DisplayMode.FriendShop;
+        }
+        else if (IsUnderFolder(folderPath, GetHoldFolderPath()))
+        {
+            _currentMode = DisplayMode.Hold;
+            _activeFriendShop = null;
+        }
+        else
+        {
+            _currentMode = DisplayMode.Shop;
+            _activeFriendShop = null;
+        }
     }
 
     private static bool IsUnderFolder(string folderPath, string rootFolderPath)
@@ -2536,34 +2540,186 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private string BuildRelativeLocationText()
     {
-        if (string.IsNullOrWhiteSpace(_currentFolder) || string.IsNullOrWhiteSpace(_shopFolder))
+        if (string.IsNullOrWhiteSpace(_currentFolder)) return string.Empty;
+
+        string? rootPath = GetCurrentRootPath();
+        if (string.IsNullOrWhiteSpace(rootPath)) return string.Empty;
+
+        try
+        {
+            string root = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string current = _currentFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (string.Equals(root, current, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+
+            if (current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                string relative = current[(root.Length + 1)..];
+                string[] segments = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+                return string.Join(" / ", segments);
+            }
+
+            return string.Empty;
+        }
+        catch
         {
             return string.Empty;
         }
+    }
 
-        string root = Path.GetFullPath(_shopFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string current = Path.GetFullPath(_currentFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (string.Equals(root, current, StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
-        }
-
-        if (current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-        {
-            string relative = current[(root.Length + 1)..];
-            string[] segments = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-            return string.Join(" / ", segments);
-        }
-
-        return string.Empty;
+    private string? GetCurrentRootPath()
+    {
+        if (_currentMode == DisplayMode.FriendShop && _activeFriendShop != null)
+            return _activeFriendShop.ConnectUncPath;
+        return string.IsNullOrWhiteSpace(_shopFolder) ? null : Path.GetFullPath(_shopFolder);
     }
 
     private void UpdateBreadcrumbDisplay()
     {
-        SectionTitleButton.Content = "お店の中身";
+        SyncDropdownToCurrentMode();
         CurrentPathTextBlock.Text = _breadcrumbFullText;
         CurrentPathTextBlock.ToolTip = string.IsNullOrWhiteSpace(_currentFolder) ? null : _currentFolder;
+    }
+
+    private void SyncDropdownToCurrentMode()
+    {
+        _suppressDropdownChange = true;
+        try
+        {
+            if (_currentMode == DisplayMode.FriendShop && _activeFriendShop != null)
+            {
+                foreach (object item in ExplorerTargetComboBox.Items)
+                {
+                    if (item is ExplorerTarget t && t.Friend?.Id == _activeFriendShop.Id)
+                    {
+                        ExplorerTargetComboBox.SelectedItem = item;
+                        return;
+                    }
+                }
+            }
+            if (ExplorerTargetComboBox.Items.Count > 0)
+                ExplorerTargetComboBox.SelectedIndex = 0;
+        }
+        finally
+        {
+            _suppressDropdownChange = false;
+        }
+    }
+
+    private void PopulateExplorerDropdown()
+    {
+        _suppressDropdownChange = true;
+        try
+        {
+            ExplorerTargetComboBox.Items.Clear();
+            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null));
+
+            IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+            foreach (Friend f in friends
+                .OrderBy(f => string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName,
+                         StringComparer.CurrentCultureIgnoreCase))
+            {
+                string label = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
+                ExplorerTargetComboBox.Items.Add(new ExplorerTarget(label, f));
+            }
+
+            SyncDropdownToCurrentMode();
+        }
+        finally
+        {
+            _suppressDropdownChange = false;
+        }
+    }
+
+    private void ExplorerTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressDropdownChange) return;
+        if (ExplorerTargetComboBox.SelectedItem is not ExplorerTarget target) return;
+
+        SwkLogger.Debug($"ExplorerTargetComboBox_SelectionChanged: {target.Label}");
+
+        if (target.Friend == null)
+        {
+            _activeFriendShop = null;
+            EnterShopMode();
+        }
+        else
+        {
+            _ = NavigateToFriendShopAsync(target.Friend);
+        }
+    }
+
+    private async Task NavigateToFriendShopAsync(Friend friend)
+    {
+        string label = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+        SwkLogger.Debug($"NavigateToFriendShopAsync: {label} ({friend.ConnectUncPath})");
+
+        _activeFriendShop = friend;
+        _currentMode = DisplayMode.FriendShop;
+        CancelFolderSizeCalculation();
+        DisposeContentsWatcher();
+        _currentFolder = null;
+        ShopItems.Clear();
+        _backStack.Clear();
+        _forwardStack.Clear();
+        UpdateBreadcrumb();
+        UpdateNavigationState();
+
+        string uncPath = friend.ConnectUncPath;
+        if (string.IsNullOrWhiteSpace(uncPath))
+        {
+            SetTransientStatus("接続できません");
+            return;
+        }
+
+        string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+        if (!string.IsNullOrEmpty(password))
+        {
+            await Task.Run(() => SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password));
+        }
+
+        bool accessible = await Task.Run(() =>
+        {
+            try { return Directory.Exists(uncPath); }
+            catch { return false; }
+        });
+
+        if (!accessible)
+        {
+            SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {uncPath}");
+            SetTransientStatus("接続できません");
+            return;
+        }
+
+        NavigateTo(uncPath, addHistory: false, clearForward: true);
+    }
+
+    private void TopButton_Click(object sender, RoutedEventArgs e)
+    {
+        SwkLogger.Debug($"TopButton_Click: mode={_currentMode}");
+        if (_currentMode == DisplayMode.FriendShop && _activeFriendShop != null)
+        {
+            _ = NavigateToFriendShopAsync(_activeFriendShop);
+        }
+        else
+        {
+            NavigateToShopRoot(addHistory: true);
+        }
+    }
+
+    private void AccessHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetTransientStatus("アクセス履歴は準備中です。");
+    }
+
+    private void UpdateHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetTransientStatus("更新履歴は準備中です。");
+    }
+
+    private void NotificationHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetTransientStatus("通知履歴は準備中です。");
     }
 
     private void StartFolderSizeCalculation()
@@ -3291,3 +3447,5 @@ public sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonElement? ReservedForV22 { get; set; }
 }
+
+public sealed record ExplorerTarget(string Label, Friend? Friend);

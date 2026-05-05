@@ -271,6 +271,12 @@
                                     Margin="8,0,0,0"
                                     IsEnabled="False"
                                     Click="ForwardButton_Click" />
+                            <Button x:Name="TopButton"
+                                    Content="トップ"
+                                    Width="70"
+                                    Height="30"
+                                    Margin="8,0,0,0"
+                                    Click="TopButton_Click" />
                         </StackPanel>
 
                         <Button x:Name="RefreshButton"
@@ -286,17 +292,14 @@
                         <StackPanel Orientation="Horizontal"
                                     VerticalAlignment="Center"
                                     Margin="0,0,16,0">
-                            <Button x:Name="SectionTitleButton"
-                                    Content="お店の中身"
-                                    FontSize="20"
-                                    FontWeight="SemiBold"
-                                    Foreground="#2F2A22"
-                                    Background="Transparent"
-                                    BorderBrush="Transparent"
-                                    BorderThickness="0"
-                                    Padding="6,1"
-                                    VerticalAlignment="Center"
-                                    Click="SectionTitleButton_Click" />
+                            <ComboBox x:Name="ExplorerTargetComboBox"
+                                      DisplayMemberPath="Label"
+                                      MinWidth="130"
+                                      Height="32"
+                                      FontSize="16"
+                                      FontWeight="SemiBold"
+                                      VerticalContentAlignment="Center"
+                                      SelectionChanged="ExplorerTargetComboBox_SelectionChanged" />
                             <TextBlock x:Name="CurrentPathTextBlock"
                                        Text=""
                                        FontSize="12"
@@ -549,30 +552,38 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="12" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="12" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="16" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0"
+                <TextBlock x:Name="FooterMessageTextBlock"
+                           Grid.Column="0"
                            Text="ShareWorkin - お店の気配を受け取ります"
                            Foreground="#5D5448"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"
                            FontSize="12" />
                 <Button Grid.Column="2"
-                        x:Name="HoldViewButton"
-                        Content="保留を見る"
-                        Width="108"
-                        Height="26"
-                        Click="HoldViewButton_Click" />
-                <Button Grid.Column="4"
-                        Content="履歴を見る"
+                        x:Name="AccessHistoryButton"
+                        Content="アクセス履歴"
                         Width="92"
                         Height="26"
-                        Click="HistoryButton_Click" />
-                <StackPanel Grid.Column="6"
+                        Click="AccessHistoryButton_Click" />
+                <Button Grid.Column="4"
+                        x:Name="UpdateHistoryButton"
+                        Content="更新履歴"
+                        Width="80"
+                        Height="26"
+                        Click="UpdateHistoryButton_Click" />
+                <Button Grid.Column="6"
+                        x:Name="NotificationHistoryButton"
+                        Content="通知履歴"
+                        Width="80"
+                        Height="26"
+                        Click="NotificationHistoryButton_Click" />
+                <StackPanel Grid.Column="8"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
                     <TextBlock Text="通知:"
@@ -590,11 +601,6 @@
                         <ComboBoxItem Content="なし" Tag="Off" />
                     </ComboBox>
                 </StackPanel>
-                <TextBlock Grid.Column="8"
-                           Text=""
-                           Foreground="#9A8F7E"
-                           VerticalAlignment="Center"
-                           FontSize="11" />
             </Grid>
         </Border>
     </Grid>

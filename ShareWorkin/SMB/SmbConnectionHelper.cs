@@ -38,6 +38,22 @@ public static class SmbConnectionHelper
     private const uint CONNECT_TEMPORARY = 0x00000004;
 
     /// <summary>
+    /// 認証情報をセッションに登録する（エクスプローラーは開かない）
+    /// </summary>
+    public static bool EnsureConnection(string uncPath, string userName, string password)
+    {
+        try
+        {
+            return AddConnection(uncPath, userName, password);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"EnsureConnection failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 認証情報をセッションに登録して、UNC パスを開く
     /// </summary>
     public static bool ConnectAndOpen(string uncPath, string userName, string password)
