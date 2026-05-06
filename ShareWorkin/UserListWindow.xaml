@@ -67,7 +67,10 @@
                                     Width="28"
                                     Height="28"
                                     Background="{Binding IconBrush}"
-                                    CornerRadius="3" />
+                                    CornerRadius="3">
+                                <Image Source="{Binding IconImage}"
+                                       Stretch="Uniform" />
+                            </Border>
 
                             <TextBlock Grid.Column="2"
                                        Text="{Binding NameLabel}"

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using ShareWorkin.SMB;
 using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
@@ -224,6 +225,7 @@ public sealed class UserListRow
     public string IpLabel { get; init; } = string.Empty;
     public UserListRowKind Kind { get; init; }
     public Brush IconBrush { get; init; } = Brushes.LightGray;
+    public ImageSource? IconImage { get; init; }
     public Brush RowBackground { get; init; } = Brushes.Transparent;
     public Brush NameForeground { get; init; } = Brushes.Black;
     public FontWeight NameWeight { get; init; } = FontWeights.Medium;
@@ -233,6 +235,26 @@ public sealed class UserListRow
     public LanCandidate? Candidate { get; init; }
     public SwkNotificationListener.ShopInfo? ShopInfo { get; init; }
 
+    private static ImageSource? LoadIconImage(string? iconKey)
+    {
+        string? path = IconService.ResolvePath(iconKey);
+        if (path == null) return null;
+        try
+        {
+            BitmapImage img = new();
+            img.BeginInit();
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.UriSource = new Uri(path);
+            img.EndInit();
+            img.Freeze();
+            return img;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static UserListRow ForConnectedFriend(Friend friend) => new()
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
@@ -241,6 +263,7 @@ public sealed class UserListRow
         IpLabel = friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.ConnectedFriend,
         IconBrush = new SolidColorBrush(Color.FromRgb(76, 175, 80)),
+        IconImage = LoadIconImage(friend.IconKey),
         RowBackground = Brushes.Transparent,
         NameForeground = new SolidColorBrush(Color.FromRgb(76, 175, 80)),
         NameWeight = FontWeights.Normal,
@@ -255,6 +278,7 @@ public sealed class UserListRow
         IpLabel = friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.UnreachableFriend,
         IconBrush = new SolidColorBrush(Color.FromRgb(244, 67, 54)),
+        IconImage = LoadIconImage(friend.IconKey),
         RowBackground = new SolidColorBrush(Color.FromRgb(255, 235, 230)),
         NameForeground = new SolidColorBrush(Color.FromRgb(150, 50, 40)),
         NameWeight = FontWeights.SemiBold,

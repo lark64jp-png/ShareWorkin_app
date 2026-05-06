@@ -334,7 +334,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private string GetHoldFolderPath() => DefaultHoldFolderPath;
+    private string GetHoldFolderPath() =>
+        !string.IsNullOrWhiteSpace(_shopFolder)
+            ? Path.Combine(_shopFolder, HoldFolderName)
+            : DefaultHoldFolderPath;
 
     private static string DeriveShareName(string? shopFolder)
     {
@@ -2280,6 +2283,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
+            if (_currentMode == DisplayMode.FriendShop && !string.IsNullOrWhiteSpace(_currentFolder))
+                SetTransientStatus("接続できません");
             UpdateBreadcrumb();
             return;
         }
@@ -2289,7 +2294,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             EnsureHoldFolderForShopChange(notifyWhenRecreated: false);
 
             List<ShopItem> all = Directory.EnumerateDirectories(_currentFolder)
-                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: IsHoldFolderPath(path)))
+                .Where(path => !IsHoldFolderPath(path))
+                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
                 .Concat(Directory.EnumerateFiles(_currentFolder)
                     .Select(path => ShopItem.FromPath(path, isDirectory: false)))
                 .ToList();
@@ -2686,13 +2692,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
-        if (!string.IsNullOrEmpty(password))
-        {
-            await Task.Run(() => SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password));
-        }
-
         bool accessible = await Task.Run(() =>
         {
+            if (!string.IsNullOrEmpty(password))
+                SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password);
             try { return Directory.Exists(uncPath); }
             catch { return false; }
         });

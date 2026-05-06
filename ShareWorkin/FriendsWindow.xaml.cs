@@ -452,18 +452,25 @@ public partial class FriendsWindow : Window
         ApplyActiveTarget();
     }
 
-    private void IconButton_Click(object sender, RoutedEventArgs e)
+    private void OpenIconPicker()
     {
-        // 既存友達は friend.Id を、新規は仮IDを使ってオリジナル画像を保存する。
         string friendId = _activeFriend?.Id ?? "_pending_" + Guid.NewGuid().ToString("N");
         IconPickerWindow picker = new(this, _pendingIconKey, friendId);
-        SwkLogger.Debug($"FriendsWindow.IconButton_Click: opening picker (current={_pendingIconKey})");
+        SwkLogger.Debug($"FriendsWindow: opening icon picker (current={_pendingIconKey})");
         bool? result = picker.ShowDialog();
         if (result != true || !picker.Picked) return;
         _pendingIconKey = picker.SelectedIconKey ?? string.Empty;
-        SwkLogger.Debug($"FriendsWindow.IconButton_Click: selected={_pendingIconKey}");
+        SwkLogger.Debug($"FriendsWindow: icon selected={_pendingIconKey}");
         RenderIcon();
         UpdateOkState();
+    }
+
+    private void IconButton_Click(object sender, RoutedEventArgs e) => OpenIconPicker();
+
+    private void IconPlaceholder_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        OpenIconPicker();
     }
 
     private void OkButton_Click(object sender, RoutedEventArgs e)

@@ -112,7 +112,9 @@
                             Background="#EEEAE1"
                             BorderBrush="#D8D2C3"
                             BorderThickness="1"
-                            CornerRadius="3" />
+                            CornerRadius="3"
+                            Cursor="Hand"
+                            MouseLeftButtonDown="IconPlaceholder_MouseLeftButtonDown" />
 
                     <!-- お友達名 -->
                     <TextBlock Grid.Row="2" Grid.Column="0"
