@@ -153,8 +153,21 @@ public partial class MainWindow : Window
             .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
                 typeof(MainWindow).Assembly))
             ?.InformationalVersion;
-        AppVersionTextBlock.Text = string.IsNullOrEmpty(ver) ? string.Empty : $"v{ver}";
+        AppVersionTextBlock.Text = FormatVersionLabel(ver);
         Loaded += MainWindow_Loaded;
+    }
+
+    // SDK 既定で InformationalVersion に "+<full git sha>" が付く。SHAは7文字に短縮し、
+    // SHAが付かないビルド（git なし環境）では "v<ver>" だけ返す。
+    private static string FormatVersionLabel(string? ver)
+    {
+        if (string.IsNullOrEmpty(ver)) return string.Empty;
+        int plus = ver.IndexOf('+');
+        if (plus < 0) return $"v{ver}";
+        string baseVer = ver[..plus];
+        string sha = ver[(plus + 1)..];
+        if (sha.Length > 7) sha = sha[..7];
+        return string.IsNullOrEmpty(sha) ? $"v{baseVer}" : $"v{baseVer}+{sha}";
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)

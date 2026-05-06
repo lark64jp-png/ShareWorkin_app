@@ -1,12 +1,19 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using ShareWorkin.SMB;
+using Brush = System.Windows.Media.Brush;
+using Brushes = System.Windows.Media.Brushes;
+using Color = System.Windows.Media.Color;
+using Image = System.Windows.Controls.Image;
 
 namespace ShareWorkin;
 
@@ -24,8 +31,11 @@ public partial class FriendsWindow : Window
     private readonly ObservableCollection<CandidateRow> _candidateRows = new();
     private string _initialName = string.Empty;
     private string _initialMemo = string.Empty;
+    private string _initialIconKey = string.Empty;
+    private string _pendingIconKey = string.Empty;
     private bool _initialApplied;
     private bool _suppressFormEvents;
+    private bool _suppressSelectionChanged;
     private CancellationTokenSource? _cancellationTokenSource;
 
     // 従来フロー: 既存友達（Update）または候補指定（New）
@@ -56,6 +66,7 @@ public partial class FriendsWindow : Window
             $"candidate={initialCandidate?.HostName ?? "null"}");
         Loaded += (_, _) =>
         {
+            SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
@@ -80,11 +91,17 @@ public partial class FriendsWindow : Window
         SwkLogger.Debug($"FriendsWindow ctor (ShopInfo): {shopInfo.MachineName}/{shopInfo.ShareName}");
         Loaded += (_, _) =>
         {
+            SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
             _initialApplied = true;
         };
+    }
+
+    private void SyncScanModeFromCache()
+    {
+        ScanModeComboBox.SelectedIndex = SwkNetworkCache.LastScanMode == ScanMode.Full ? 1 : 0;
     }
 
     // ── フォーム適用 ──────────────────────────────────────────────────
@@ -96,17 +113,9 @@ public partial class FriendsWindow : Window
         finally { _suppressFormEvents = false; }
     }
 
-    private void UpdateButtonColumns()
-    {
-        int count = ButtonPanel.Children.Cast<System.Windows.UIElement>()
-            .Count(e => e.Visibility == Visibility.Visible);
-        ButtonPanel.Columns = Math.Max(1, count);
-    }
-
     private void ApplyActiveTargetInternal()
     {
-        DeleteButton.Visibility = Visibility.Collapsed;
-        OpenFolderButton.Visibility = Visibility.Collapsed;
+        DeleteButton.IsEnabled = false;
 
         if (_activeFriend != null)
         {
@@ -119,6 +128,15 @@ public partial class FriendsWindow : Window
                 TitleTextBlock.Text = "接続先を変更";
                 SubtitleTextBlock.Text =
                     $"「{friendName}」の接続先を「{targetHost}」に変更します。お友達名を確認してください。";
+            }
+            else if (_activeShopInfo != null)
+            {
+                // 接続先変更モード: 招待コード交換で接続先を更新
+                string shopHost = NormalizeHost(_activeShopInfo.MachineName);
+                string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
+                TitleTextBlock.Text = "接続先を変更";
+                SubtitleTextBlock.Text =
+                    $"「{friendName}」の接続先を「{shopHost}」{shopIp}に変更します。招待コードを取得して更新します。";
             }
             else if (_activeFriend.IsCurrentlyFound)
             {
@@ -139,9 +157,13 @@ public partial class FriendsWindow : Window
                 string.Equals(_activeFriend.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
                     ? "見るだけ" : "自由に編集";
             PresenceTextBlock.Text = ResolvePresence(_activeFriend);
-            DeleteButton.Visibility = Visibility.Visible;
-            OpenFolderButton.Visibility =
-                _activeFriend.IsCurrentlyFound ? Visibility.Visible : Visibility.Collapsed;
+            DeleteButton.IsEnabled = true;
+            if (_activeShopInfo != null)
+            {
+                ShareFolderTextBlock.Text = "(招待コードから取得します)";
+                AccessTextBlock.Text = "(招待コードから取得します)";
+                PresenceTextBlock.Text = "更新予定";
+            }
         }
         else if (_activeShopInfo != null)
         {
@@ -184,8 +206,44 @@ public partial class FriendsWindow : Window
 
         _initialName = NameTextBox.Text;
         _initialMemo = MemoTextBox.Text;
-        UpdateButtonColumns();
+        _initialIconKey = _activeFriend?.IconKey ?? string.Empty;
+        _pendingIconKey = _initialIconKey;
+        RenderIcon();
         UpdateOkState();
+    }
+
+    private void RenderIcon()
+    {
+        string? path = IconService.ResolvePath(_pendingIconKey);
+        if (path == null)
+        {
+            IconPlaceholder.Background = new SolidColorBrush(Color.FromRgb(238, 234, 225));
+            IconPlaceholder.Child = null;
+            return;
+        }
+        try
+        {
+            BitmapImage img = new();
+            img.BeginInit();
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+            img.UriSource = new Uri(path);
+            img.EndInit();
+            img.Freeze();
+            Image control = new()
+            {
+                Source = img,
+                Stretch = Stretch.Uniform,
+            };
+            IconPlaceholder.Background = Brushes.White;
+            IconPlaceholder.Child = control;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"FriendsWindow.RenderIcon failed for {_pendingIconKey}: {ex.Message}");
+            IconPlaceholder.Background = new SolidColorBrush(Color.FromRgb(238, 234, 225));
+            IconPlaceholder.Child = null;
+        }
     }
 
     // ── 下部リスト（接続未確定）────────────────────────────────────────
@@ -198,6 +256,12 @@ public partial class FriendsWindow : Window
         // 確立済み = friends.json に登録済み かつ IsCurrentlyFound
         HashSet<string> establishedHosts = allFriends
             .Where(f => f.IsCurrentlyFound)
+            .Select(f => NormalizeHost(f.HostMachineName))
+            .Where(h => !string.IsNullOrEmpty(h))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        HashSet<string> offlineFriendHosts = allFriends
+            .Where(f => !f.IsCurrentlyFound)
             .Select(f => NormalizeHost(f.HostMachineName))
             .Where(h => !string.IsNullOrEmpty(h))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -215,7 +279,9 @@ public partial class FriendsWindow : Window
 
             SwkNotificationListener.ShopInfo? shopInfo = _shopInfos.FirstOrDefault(s =>
                 string.Equals(NormalizeHost(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
-            _candidateRows.Add(new CandidateRow(c, shopInfo));
+            // 登録可能 = ShopInfo あり（ShareWorkin 起動中）または 既存オフライン友達と一致（接続先変更/再開できる）
+            bool isSelectable = shopInfo != null || offlineFriendHosts.Contains(host);
+            _candidateRows.Add(new CandidateRow(c, shopInfo, isSelectable));
             addedHosts.Add(host);
         }
 
@@ -241,6 +307,7 @@ public partial class FriendsWindow : Window
 
     private void CandidateListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressSelectionChanged) return;
         if (!_initialApplied) return;
         if (CandidateListView.SelectedItem is not CandidateRow selected) return;
 
@@ -267,6 +334,31 @@ public partial class FriendsWindow : Window
                 _activeFriend = matchedFriend;
                 _activeShopInfo = null;
                 _activeNewCandidate = selected.Source;
+            }
+            else if (_activeFriend != null && !_activeFriend.IsCurrentlyFound && selected.ShopInfo != null)
+            {
+                // 未接続の登録済み友達が表示中 → 接続先変更を提案
+                string dlgHost = NormalizeHost(selected.Source.HostName);
+                if (string.IsNullOrEmpty(dlgHost)) dlgHost = selected.Source.Address.ToString();
+                MessageBoxResult confirm = System.Windows.MessageBox.Show(
+                    this,
+                    $"「{_activeFriend.DisplayName}」の接続先を「{dlgHost}」に変更しますか？",
+                    "ShareWorkin",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question,
+                    MessageBoxResult.No);
+                if (confirm == MessageBoxResult.Yes)
+                {
+                    _activeShopInfo = selected.ShopInfo;
+                    _activeNewCandidate = null;
+                }
+                else
+                {
+                    _suppressSelectionChanged = true;
+                    try { CandidateListView.SelectedItem = null; }
+                    finally { _suppressSelectionChanged = false; }
+                    return;
+                }
             }
             else
             {
@@ -300,8 +392,9 @@ public partial class FriendsWindow : Window
             }
             bool nameChanged = !string.Equals(name, _initialName, StringComparison.Ordinal);
             bool memoChanged = !string.Equals(MemoTextBox.Text ?? string.Empty, _initialMemo, StringComparison.Ordinal);
-            bool candidateChanged = _activeNewCandidate != null;
-            if (!nameChanged && !memoChanged && !candidateChanged)
+            bool iconChanged = !string.Equals(_pendingIconKey, _initialIconKey, StringComparison.Ordinal);
+            bool candidateChanged = _activeNewCandidate != null || _activeShopInfo != null;
+            if (!nameChanged && !memoChanged && !iconChanged && !candidateChanged)
             {
                 error = "変更がありません。";
                 return false;
@@ -329,12 +422,13 @@ public partial class FriendsWindow : Window
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
-        SwkLogger.Debug("FriendsWindow.ReloadButton_Click");
+        ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
+        SwkLogger.Debug($"FriendsWindow.ReloadButton_Click: mode={mode}");
         ReloadButton.IsEnabled = false;
-        StatusTextBlock.Text = "周りを見ています…";
+        StatusTextBlock.Text = mode == ScanMode.Full ? "全PCスキャン中…" : "接続可能スキャン中…";
         try
         {
-            await SwkNetworkCache.RefreshAsync(SwkNetworkCache.LastScanMode);
+            await SwkNetworkCache.RefreshAsync(mode);
         }
         catch (Exception ex)
         {
@@ -358,6 +452,20 @@ public partial class FriendsWindow : Window
         ApplyActiveTarget();
     }
 
+    private void IconButton_Click(object sender, RoutedEventArgs e)
+    {
+        // 既存友達は friend.Id を、新規は仮IDを使ってオリジナル画像を保存する。
+        string friendId = _activeFriend?.Id ?? "_pending_" + Guid.NewGuid().ToString("N");
+        IconPickerWindow picker = new(this, _pendingIconKey, friendId);
+        SwkLogger.Debug($"FriendsWindow.IconButton_Click: opening picker (current={_pendingIconKey})");
+        bool? result = picker.ShowDialog();
+        if (result != true || !picker.Picked) return;
+        _pendingIconKey = picker.SelectedIconKey ?? string.Empty;
+        SwkLogger.Debug($"FriendsWindow.IconButton_Click: selected={_pendingIconKey}");
+        RenderIcon();
+        UpdateOkState();
+    }
+
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         if (!ValidateForOk(out string? error))
@@ -371,6 +479,13 @@ public partial class FriendsWindow : Window
 
         if (_activeFriend != null)
         {
+            if (_activeShopInfo != null)
+            {
+                OkButton.IsEnabled = false;
+                StatusTextBlock.Text = "接続先を変更中…";
+                _ = ChangeConnectionAsync(name, memo);
+                return;
+            }
             UpdateExistingFriend(name, memo);
             return;
         }
@@ -384,6 +499,75 @@ public partial class FriendsWindow : Window
         }
 
         StatusTextBlock.Text = "登録できる相手が選ばれていません。";
+    }
+
+    private async Task ChangeConnectionAsync(string name, string memo)
+    {
+        try
+        {
+            _cancellationTokenSource = new CancellationTokenSource();
+            _cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
+
+            var listener = new SwkNotificationListener();
+            var result = await listener.RequestInviteCodeAsync(_activeShopInfo!, _cancellationTokenSource.Token);
+
+            if (result.errorMessage != null)
+            {
+                StatusTextBlock.Text = $"接続先の変更に失敗しました: {result.errorMessage}";
+                OkButton.IsEnabled = true;
+                return;
+            }
+
+            if (string.IsNullOrEmpty(result.inviteCode) || string.IsNullOrEmpty(result.password))
+            {
+                StatusTextBlock.Text = "招待コードを取得できませんでした。";
+                OkButton.IsEnabled = true;
+                return;
+            }
+
+            string nowIso = DateTime.UtcNow.ToString("o");
+            Friend target = _activeFriend!;
+            target.DisplayName = name;
+            target.Memo = memo;
+            target.IconKey = _pendingIconKey;
+            target.HostMachineName = _activeShopInfo!.MachineName;
+            target.ShareName = _activeShopInfo.ShareName;
+            target.PasswordProtected = FriendsRepository.ProtectPassword(result.password);
+            target.LastKnownAddress = _activeShopInfo.IpAddress ?? string.Empty;
+            target.LastFoundAt = nowIso;
+            target.LastCheckedAt = nowIso;
+
+            List<Friend> all = FriendsRepository.LoadAll().ToList();
+            int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
+            if (idx >= 0) all[idx] = target; else all.Add(target);
+
+            if (!FriendsRepository.SaveAll(all))
+            {
+                StatusTextBlock.Text = "保存できませんでした。";
+                OkButton.IsEnabled = true;
+                return;
+            }
+
+            SwkLogger.Debug(
+                $"FriendsWindow.ChangeConnectionAsync: id={target.Id} newHost={target.HostMachineName}");
+            DialogResult = true;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTextBlock.Text = "接続タイムアウト";
+            OkButton.IsEnabled = true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"FriendsWindow.ChangeConnectionAsync failed: {ex.Message}");
+            StatusTextBlock.Text = $"エラー: {ex.Message}";
+            OkButton.IsEnabled = true;
+        }
+        finally
+        {
+            _cancellationTokenSource?.Dispose();
+        }
     }
 
     private async Task RegisterFromShopInfoAsync(string name, string memo)
@@ -426,6 +610,7 @@ public partial class FriendsWindow : Window
                 LastFoundAt = nowIso,
                 LastCheckedAt = nowIso,
             };
+            friend.IconKey = PromoteIconKeyToFriendId(_pendingIconKey, friend.Id);
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             all.RemoveAll(f =>
@@ -470,6 +655,7 @@ public partial class FriendsWindow : Window
         Friend target = _activeFriend;
         target.DisplayName = name;
         target.Memo = memo;
+        target.IconKey = _pendingIconKey;
 
         if (_activeNewCandidate != null)
         {
@@ -493,6 +679,34 @@ public partial class FriendsWindow : Window
             $"FriendsWindow.UpdateExistingFriend: id={target.Id} newHost={_activeNewCandidate?.Address}");
         DialogResult = true;
         Close();
+    }
+
+    // 新規モードで仮ID保存されたオリジナル画像を、確定後の friend.Id へ改名する。
+    private static string PromoteIconKeyToFriendId(string pendingKey, string friendId)
+    {
+        if (string.IsNullOrEmpty(pendingKey)) return string.Empty;
+        if (!pendingKey.StartsWith(IconService.CustomPrefix, StringComparison.Ordinal)) return pendingKey;
+        string fileName = pendingKey[IconService.CustomPrefix.Length..];
+        if (!fileName.StartsWith("_pending_", StringComparison.Ordinal)) return pendingKey;
+        string ext = Path.GetExtension(fileName);
+        if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+        string oldPath = Path.Combine(IconService.CustomDirectory, fileName);
+        string newName = friendId + ext.ToLowerInvariant();
+        string newPath = Path.Combine(IconService.CustomDirectory, newName);
+        try
+        {
+            if (File.Exists(oldPath))
+            {
+                if (File.Exists(newPath)) File.Delete(newPath);
+                File.Move(oldPath, newPath);
+            }
+            return IconService.MakeCustomKey(newName);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"PromoteIconKey failed: {ex.Message}");
+            return pendingKey;
+        }
     }
 
     private static string ResolvePresence(Friend f)
@@ -521,18 +735,6 @@ public partial class FriendsWindow : Window
             SwkLogger.Warn($"OpenFriendFolder failed: {ex.Message}");
             return false;
         }
-    }
-
-    private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_activeFriend is null) return;
-        SwkLogger.Debug($"FriendsWindow.OpenFolderButton_Click: target={_activeFriend.DisplayName}");
-        OpenFolderButton.IsEnabled = false;
-        StatusTextBlock.Text = "フォルダーを開いています…";
-        StatusTextBlock.Text = OpenFriendFolder(_activeFriend)
-            ? "フォルダーを開きました。"
-            : "フォルダーを開けませんでした。";
-        OpenFolderButton.IsEnabled = true;
     }
 
     private void DeleteButton_Click(object sender, RoutedEventArgs e)
@@ -573,11 +775,12 @@ public partial class FriendsWindow : Window
 
     // ── CandidateRow ──────────────────────────────────────────────────
 
-    private sealed class CandidateRow
+    public sealed class CandidateRow
     {
         public LanCandidate? Source { get; }
         public Friend? ExistingFriend { get; }
         public SwkNotificationListener.ShopInfo? ShopInfo { get; }
+        public bool IsSelectable { get; }
 
         public string HostNameLabel
         {
@@ -608,19 +811,21 @@ public partial class FriendsWindow : Window
             {
                 if (ShopInfo != null) return "ShareWorkin 起動中";
                 if (ExistingFriend != null) return "登録済・不通";
-                return string.Empty;
+                return "登録不可";
             }
         }
 
-        public CandidateRow(LanCandidate source, SwkNotificationListener.ShopInfo? shopInfo = null)
+        public CandidateRow(LanCandidate source, SwkNotificationListener.ShopInfo? shopInfo, bool isSelectable)
         {
             Source = source;
             ShopInfo = shopInfo;
+            IsSelectable = isSelectable;
         }
 
         public CandidateRow(Friend friend)
         {
             ExistingFriend = friend;
+            IsSelectable = true;
         }
     }
 }

@@ -46,7 +46,8 @@ public partial class UserListWindow : Window
 
         ReloadButton.IsEnabled = false;
         LoadingBar.Visibility = Visibility.Visible;
-        StatusTextBlock.Text = mode == ScanMode.Full ? "全PCをスキャンしています…" : "周りを見ています…";
+        ScanStateTextBlock.Text = mode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
+        StatusTextBlock.Text = "スキャン中…";
 
         try
         {
@@ -143,17 +144,11 @@ public partial class UserListWindow : Window
         int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
         int installCandidate = rows.Count(r => r.Kind == UserListRowKind.InstallCandidate);
 
-        if (_rows.Count == 0)
-        {
-            StatusTextBlock.Text = "周りには誰もいません。";
-        }
-        else
-        {
-            string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
-            int total = _rows.Count;
-            int noAccess = windowsPcOnly + installCandidate;
-            StatusTextBlock.Text = $"{modeLabel}：接続中 {total}、登録接続中 {connected} 登録接続不可 {unreach} 接続可能 {newShop} 接続不可 {noAccess}";
-        }
+        string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
+        ScanStateTextBlock.Text = modeLabel;
+        StatusTextBlock.Text = _rows.Count == 0
+            ? "周りには誰もいません。"
+            : $"登録済接続中 {connected}　登録済不在 {unreach}　登録可能 {newShop}　登録不可 {windowsPcOnly}　全PC分 {installCandidate}";
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
     }

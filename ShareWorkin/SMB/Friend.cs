@@ -35,6 +35,10 @@ public sealed class Friend
     [JsonPropertyName("memo")]
     public string Memo { get; set; } = string.Empty;
 
+    // アイコン識別子。"" = 未指定、"lib:<name>" = ライブラリ、"user:<filename>" = 利用者指定
+    [JsonPropertyName("iconKey")]
+    public string IconKey { get; set; } = string.Empty;
+
     [JsonPropertyName("addedAt")]
     public string AddedAt { get; set; } = string.Empty;
 

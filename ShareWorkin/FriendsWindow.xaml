@@ -3,167 +3,286 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ユーザー情報"
         Height="640"
-        Width="640"
+        Width="900"
         WindowStartupLocation="CenterOwner"
         Background="#FFFEFA"
         FontFamily="Yu Gothic UI">
     <Grid Margin="22">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />   <!-- 0: タイトル -->
-            <RowDefinition Height="6" />      <!-- 1: spacer -->
+            <RowDefinition Height="Auto" />   <!-- 0: タイトル行 + 削除/確定 -->
+            <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />   <!-- 2: サブタイトル -->
-            <RowDefinition Height="14" />     <!-- 3: spacer -->
-            <RowDefinition Height="Auto" />   <!-- 4: 情報部 -->
-            <RowDefinition Height="10" />     <!-- 5: spacer -->
-            <RowDefinition Height="Auto" />   <!-- 6: ボタン行 -->
-            <RowDefinition Height="4" />      <!-- 7: spacer -->
-            <RowDefinition Height="Auto" />   <!-- 8: ステータス行 -->
-            <RowDefinition Height="10" />     <!-- 9: spacer -->
-            <RowDefinition Height="*" />      <!-- 10: 接続未確定リスト -->
+            <RowDefinition Height="14" />
+            <RowDefinition Height="Auto" />   <!-- 4: 二列情報部 -->
+            <RowDefinition Height="10" />
+            <RowDefinition Height="Auto" />   <!-- 6: 中段ボタン行 -->
+            <RowDefinition Height="6" />
+            <RowDefinition Height="Auto" />   <!-- 8: 状態メッセージ -->
+            <RowDefinition Height="8" />
+            <RowDefinition Height="*" />      <!-- 10: 候補リスト -->
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0"
-                   x:Name="TitleTextBlock"
-                   Text="ピックアップ"
-                   FontSize="20"
-                   FontWeight="SemiBold"
-                   Foreground="#2F2A22" />
+        <!-- 0: タイトル + 削除/確定 -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0"
+                       x:Name="TitleTextBlock"
+                       Text="ピックアップ"
+                       FontSize="20"
+                       FontWeight="SemiBold"
+                       Foreground="#2F2A22"
+                       VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                <Button x:Name="DeleteButton"
+                        Content="削除"
+                        Height="32"
+                        MinWidth="80"
+                        Margin="0,0,8,0"
+                        IsEnabled="False"
+                        Click="DeleteButton_Click" />
+                <Button x:Name="OkButton"
+                        Content="確定"
+                        Height="32"
+                        MinWidth="80"
+                        IsEnabled="False"
+                        Click="OkButton_Click" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 2: サブタイトル -->
         <TextBlock Grid.Row="2"
                    x:Name="SubtitleTextBlock"
                    FontSize="12"
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
 
-        <!-- 情報部 -->
-        <Border Grid.Row="4"
-                BorderBrush="#D8D2C3"
-                BorderThickness="1"
-                CornerRadius="6"
-                Background="White"
-                Padding="14,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="120" />
-                    <ColumnDefinition Width="12" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+        <!-- 4: 二列情報部 -->
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="14" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左カラム: プロフィール -->
+            <Border Grid.Column="0"
+                    BorderBrush="#D8D2C3"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Background="White"
+                    Padding="14,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="100" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="4" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- アイコン -->
+                    <TextBlock Grid.Row="0" Grid.Column="0"
+                               Text="アイコン"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#4B5563" />
+                    <Border Grid.Row="0" Grid.Column="2"
+                            x:Name="IconPlaceholder"
+                            Width="56"
+                            Height="56"
+                            HorizontalAlignment="Left"
+                            Background="#EEEAE1"
+                            BorderBrush="#D8D2C3"
+                            BorderThickness="1"
+                            CornerRadius="3" />
+
+                    <!-- お友達名 -->
+                    <TextBlock Grid.Row="2" Grid.Column="0"
+                               Text="お友達名 *"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#2F2A22" />
+                    <TextBox Grid.Row="2" Grid.Column="2"
+                             x:Name="NameTextBox"
+                             FontSize="13"
+                             Padding="6,4"
+                             TextChanged="OnFormChanged" />
+
+                    <!-- 共有フォルダー名 -->
+                    <TextBlock Grid.Row="4" Grid.Column="0"
+                               Text="共有フォルダー名"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#4B5563" />
+                    <TextBlock Grid.Row="4" Grid.Column="2"
+                               x:Name="ShareFolderTextBlock"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="#2F2A22" />
+
+                    <!-- 権限 -->
+                    <TextBlock Grid.Row="6" Grid.Column="0"
+                               Text="権限"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#4B5563" />
+                    <TextBlock Grid.Row="6" Grid.Column="2"
+                               x:Name="AccessTextBlock"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="#2F2A22" />
+
+                    <!-- 状態 -->
+                    <TextBlock Grid.Row="8" Grid.Column="0"
+                               Text="状態"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#4B5563" />
+                    <TextBlock Grid.Row="8" Grid.Column="2"
+                               x:Name="PresenceTextBlock"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="#2F2A22" />
+
+                    <!-- メモ -->
+                    <TextBlock Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3"
+                               Text="メモ"
+                               FontSize="12"
+                               Foreground="#4B5563" />
+                    <TextBox Grid.Row="12" Grid.Column="0" Grid.ColumnSpan="3"
+                             x:Name="MemoTextBox"
+                             FontSize="13"
+                             Padding="6,4"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             MinHeight="72"
+                             VerticalScrollBarVisibility="Auto"
+                             TextChanged="OnFormChanged" />
+                </Grid>
+            </Border>
+
+            <!-- 右カラム: 空の枠先置き -->
+            <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="8" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="8" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="8" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="8" />
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="10" />
+                    <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Grid.Column="0"
-                           Text="お友達名 *"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="#2F2A22" />
-                <TextBox Grid.Row="0" Grid.Column="2"
-                         x:Name="NameTextBox"
-                         FontSize="13"
-                         Padding="6,4"
-                         TextChanged="OnFormChanged" />
+                <Border Grid.Row="0"
+                        BorderBrush="#D8D2C3"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Background="White"
+                        Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="わたしのお店の許可状況（フォルダー単位）"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#2F2A22" />
+                        <TextBlock Text="（後の抽出仕事で実装）"
+                                   FontSize="11"
+                                   Foreground="#9B9485"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
 
-                <TextBlock Grid.Row="2" Grid.Column="0"
-                           Text="共有フォルダー名"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="#4B5563" />
-                <TextBlock Grid.Row="2" Grid.Column="2"
-                           x:Name="ShareFolderTextBlock"
-                           VerticalAlignment="Center"
-                           FontSize="13"
-                           Foreground="#2F2A22" />
+                <Border Grid.Row="2"
+                        BorderBrush="#D8D2C3"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Background="White"
+                        Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="お友達からのアクセス履歴"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#2F2A22" />
+                        <TextBlock Text="（後の抽出仕事で実装）"
+                                   FontSize="11"
+                                   Foreground="#9B9485"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
 
-                <TextBlock Grid.Row="4" Grid.Column="0"
-                           Text="権限"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="#4B5563" />
-                <TextBlock Grid.Row="4" Grid.Column="2"
-                           x:Name="AccessTextBlock"
-                           VerticalAlignment="Center"
-                           FontSize="13"
-                           Foreground="#2F2A22" />
-
-                <TextBlock Grid.Row="6" Grid.Column="0"
-                           Text="状態"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="#4B5563" />
-                <TextBlock Grid.Row="6" Grid.Column="2"
-                           x:Name="PresenceTextBlock"
-                           VerticalAlignment="Center"
-                           FontSize="13"
-                           Foreground="#2F2A22" />
-
-                <TextBlock Grid.Row="8" Grid.Column="0"
-                           Text="メモ"
-                           VerticalAlignment="Top"
-                           FontSize="12"
-                           Foreground="#4B5563"
-                           Margin="0,4,0,0" />
-                <TextBox Grid.Row="8" Grid.Column="2"
-                         x:Name="MemoTextBox"
-                         FontSize="13"
-                         Padding="6,4"
-                         AcceptsReturn="True"
-                         TextWrapping="Wrap"
-                         Height="64"
-                         VerticalScrollBarVisibility="Auto"
-                         TextChanged="OnFormChanged" />
+                <Border Grid.Row="4"
+                        BorderBrush="#D8D2C3"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Background="White"
+                        Padding="14,10">
+                    <StackPanel>
+                        <TextBlock Text="お友達へのアクセス履歴"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#2F2A22" />
+                        <TextBlock Text="（後の抽出仕事で実装）"
+                                   FontSize="11"
+                                   Foreground="#9B9485"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                </Border>
             </Grid>
-        </Border>
+        </Grid>
 
-        <!-- ボタン行: 表示中のボタン数に応じて Columns をコードで更新し全幅均等割りを維持 -->
-        <UniformGrid x:Name="ButtonPanel"
-                     Grid.Row="6"
-                     Rows="1"
-                     Columns="3">
-            <Button x:Name="ReloadButton"
-                    Content="再読み込み"
-                    Height="32"
-                    Margin="0,0,4,0"
-                    Click="ReloadButton_Click" />
-            <Button x:Name="OpenFolderButton"
-                    Content="フォルダーを開く"
-                    Height="32"
-                    Margin="4,0,4,0"
-                    Visibility="Collapsed"
-                    Click="OpenFolderButton_Click" />
-            <Button x:Name="DeleteButton"
-                    Content="削除"
-                    Height="32"
-                    Margin="4,0,4,0"
-                    Visibility="Collapsed"
-                    Click="DeleteButton_Click" />
-            <Button x:Name="OkButton"
-                    Content="確定"
-                    Height="32"
-                    Margin="4,0,4,0"
-                    IsEnabled="False"
-                    Click="OkButton_Click" />
-            <Button Content="キャンセル"
-                    Height="32"
-                    Margin="4,0,0,0"
-                    IsCancel="True"
-                    Click="CancelButton_Click" />
-        </UniformGrid>
+        <!-- 6: 中段ボタン行 -->
+        <DockPanel Grid.Row="6" LastChildFill="False">
+            <UniformGrid DockPanel.Dock="Left" Rows="1" Columns="2" Width="280">
+                <ComboBox x:Name="ScanModeComboBox"
+                          Height="32"
+                          Margin="0,0,4,0"
+                          SelectedIndex="0">
+                    <ComboBoxItem Content="接続可能スキャン" />
+                    <ComboBoxItem Content="全PCスキャン" />
+                </ComboBox>
+                <Button x:Name="ReloadButton"
+                        Content="再スキャン"
+                        Height="32"
+                        Margin="4,0,0,0"
+                        Click="ReloadButton_Click" />
+            </UniformGrid>
+            <UniformGrid DockPanel.Dock="Right" Rows="1" Columns="2" Width="220">
+                <Button x:Name="IconButton"
+                        Content="アイコン"
+                        Height="32"
+                        Margin="0,0,4,0"
+                        Click="IconButton_Click" />
+                <Button Content="閉じる"
+                        Height="32"
+                        Margin="4,0,0,0"
+                        IsCancel="True"
+                        Click="CancelButton_Click" />
+            </UniformGrid>
+        </DockPanel>
 
-        <!-- ステータス行（ボタンの下） -->
+        <!-- 8: 状態メッセージ -->
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="8"
-                   VerticalAlignment="Center"
                    FontSize="12"
-                   Foreground="#4B5563" />
+                   Foreground="#4B5563"
+                   TextWrapping="Wrap" />
 
-        <!-- 接続未確定リスト -->
+        <!-- 10: 候補リスト（登録不可行はグレーダウン・選択不可） -->
         <Border Grid.Row="10"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
@@ -185,11 +304,23 @@
                           BorderThickness="0"
                           Background="Transparent"
                           SelectionChanged="CandidateListView_SelectionChanged">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="{x:Type ListViewItem}">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSelectable}" Value="False">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                    <Setter Property="Foreground" Value="#B5AEA0" />
+                                    <Setter Property="Focusable" Value="False" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListView.ItemContainerStyle>
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="ホスト名" Width="200" DisplayMemberBinding="{Binding HostNameLabel}" />
-                            <GridViewColumn Header="IP" Width="130" DisplayMemberBinding="{Binding IpLabel}" />
-                            <GridViewColumn Header="状態" Width="140" DisplayMemberBinding="{Binding StatusLabel}" />
+                            <GridViewColumn Header="ホスト名" Width="220" DisplayMemberBinding="{Binding HostNameLabel}" />
+                            <GridViewColumn Header="IP" Width="140" DisplayMemberBinding="{Binding IpLabel}" />
+                            <GridViewColumn Header="状態" Width="220" DisplayMemberBinding="{Binding StatusLabel}" />
                         </GridView>
                     </ListView.View>
                 </ListView>
