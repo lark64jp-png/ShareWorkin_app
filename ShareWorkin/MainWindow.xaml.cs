@@ -1847,11 +1847,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _wasOpenAtLastShutdown = true;
         SaveSettings();
 
+        ReapplyPermissionMapToNtfs(_shopFolder);
+
         UpdateShopState(true);
         if (_currentMode == DisplayMode.Shop)
         {
             NavigateTo(_shopFolder, addHistory: false, clearForward: true);
         }
+    }
+
+    private void ReapplyPermissionMapToNtfs(string shopRoot)
+    {
+        if (string.IsNullOrEmpty(shopRoot) || _permissionMap.Count == 0) return;
+        string root = shopRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        _ = Task.Run(() =>
+        {
+            foreach (var (path, (_, isReadOnly, isSharedOff)) in _permissionMap)
+            {
+                if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!Directory.Exists(path)) continue;
+                SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+            }
+        });
     }
 
     private void CloseShop(bool removeSmbShare = true)
