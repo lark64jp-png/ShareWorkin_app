@@ -2499,7 +2499,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         try
         {
             RefreshShopItems();
-            await ApplyFriendShopReadOnlyAsync(_currentFolder, ShopItems.ToList());
+            // 非表示中の OFF フォルダも復帰検知のために検査リストへ追加する
+            string folder = _currentFolder;
+            List<ShopItem> hiddenOff = _friendShopReadOnlyState
+                .Where(kv => kv.Value.IsSharedOff)
+                .Select(kv => kv.Key)
+                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase) &&
+                               Directory.Exists(path))
+                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
+                .ToList();
+            List<ShopItem> allItems = [.. ShopItems, .. hiddenOff];
+            await ApplyFriendShopReadOnlyAsync(folder, allItems);
         }
         finally
         {
@@ -2582,13 +2592,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             item.IsSharedOff = isSharedOff;
             if (isSharedOff)
             {
-                // OFF フォルダーは FriendShop では非表示にする
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    ShopItem? visible = ShopItems.FirstOrDefault(
-                        i => string.Equals(i.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase));
-                    if (visible != null) ShopItems.Remove(visible);
-                });
+                // OFF → FriendShop では非表示
+                await Dispatcher.InvokeAsync(() => ShopItems.Remove(item));
+            }
+            else if (prevState.IsSharedOff)
+            {
+                // OFF から復帰 → リストを再構築して表示
+                await Dispatcher.InvokeAsync(RefreshShopItems);
             }
             else if (itemChanged)
             {
