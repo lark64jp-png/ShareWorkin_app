@@ -2386,6 +2386,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (_currentMode == DisplayMode.FriendShop)
                 {
                     item.IsFromFriendShop = true;
+                    if (_friendShopReadOnlyState.TryGetValue(item.FullPath, out bool prevRo))
+                        item.IsReadOnly = prevRo;
                 }
                 else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
