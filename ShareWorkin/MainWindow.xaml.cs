@@ -2673,6 +2673,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        // キャッシュに生きた IP があれば優先使用（LastKnownAddress が空や古い場合も対応）
+        var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(liveShop?.IpAddress))
+            uncPath = $@"\\{liveShop.IpAddress}\{friend.ShareName}";
+
+        SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={uncPath}");
+
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
         bool accessible = await Task.Run(() =>
         {

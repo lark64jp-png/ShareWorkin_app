@@ -613,7 +613,7 @@ public partial class FriendsWindow : Window
                 AccessLevel = "Full",
                 ProfileLabel = string.Empty,
                 AddedAt = nowIso,
-                LastKnownAddress = string.Empty,
+                LastKnownAddress = _activeShopInfo!.IpAddress ?? string.Empty,
                 LastFoundAt = nowIso,
                 LastCheckedAt = nowIso,
             };
