@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -File build-installer.ps1)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

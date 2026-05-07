@@ -1,0 +1,20 @@
+# Memory Index — ShareWorkin コンテンツ層
+
+## 最優先参照
+- 新セッション着手前に必ず読む: [_app制作基準_草案6.md](../../_works/_app制作基準_草案6.md)
+- 現在地・次の作業: [project_current_state.md](project_current_state.md)
+- 最新テストレポート: `_works/` 直下の最新ファイルを確認（0505-1 が現在の最新）
+
+## Feedback
+- [対話優先](feedback_dialogue_first.md) — **最上位**。動く前に提案形で確認。指示待ちも独走もNG
+- [バージョン番号は指示があるまで触るな](feedback_version_bump.md) — インストーラー生成≠バージョンアップ。番号変更は西村さんの明示指示のみ
+- [ログを軽視するな](feedback_log_first.md) — テスト→修正サイクルの基盤。全失敗パスにログ必須。画面のエラーは事実として受け取る
+- [お店比喩は導入のみ](feedback_metaphor_only_for_intro.md) — UI表現はWindows標準語彙。「お店/開店/閉店」はトップレベル導線のみ
+- [訂正の意図を伝播](feedback_propagate_revision_intent.md) — 訂正の意図を関連箇所全体に揃えてから次へ進む
+- [SID境界は同意UX](feedback_sid_boundary.md) — SID違い=別人と機械的に弾かない。デュアルブート等は明示的同意UXで救う
+- [コンポーネント分割却下→直しミス](feedback_component_split_proposal.md) — 重複ロジック統一の提案却下が後の修正漏れバグにつながった事例
+- [インストーラー時はクリーンビルド＋SHA検証](feedback_installer_build_workflow.md) — 増分ビルドの罠を避ける毎回固定の手順
+
+## Project
+- [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
+- [アイコン機能 v1.08](project_icon_feature_v108.md) — ユーザー情報の構造変更とアイコン実装。残宿題3点（一覧反映・削除掃除・微調整）

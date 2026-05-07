@@ -2488,9 +2488,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return !handle.IsInvalid;
     }
 
-    private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items)
+    private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items, bool silent = false)
     {
         bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
+        bool anyChanged = false;
         foreach (ShopItem item in items)
         {
             bool isReadOnly = item.IsDirectory
@@ -2499,7 +2500,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (item.IsReadOnly == isReadOnly) continue;
             item.IsReadOnly = isReadOnly;
             await Dispatcher.InvokeAsync(item.RefreshShareStatus);
+            anyChanged = true;
         }
+        if (!silent && anyChanged)
+            await Dispatcher.InvokeAsync(NotifyExternalShopChange);
     }
 
     private IEnumerable<ShopItem> SortShopItems(IEnumerable<ShopItem> items)
@@ -2899,8 +2903,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        SuppressExternalChangeNotifications();
         NavigateTo(uncPath, addHistory: false, clearForward: true);
-        await ApplyFriendShopReadOnlyAsync(uncPath, ShopItems.ToList());
+        await ApplyFriendShopReadOnlyAsync(uncPath, ShopItems.ToList(), silent: true);
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)
