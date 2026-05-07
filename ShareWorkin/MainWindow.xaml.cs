@@ -61,6 +61,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
@@ -2478,31 +2479,52 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static bool IsDirectoryWritable(string path)
     {
-        if (!Directory.Exists(path)) return false;
+        if (!Directory.Exists(path))
+        {
+            SwkLogger.Debug($"IsDirectoryWritable: not found: {path}");
+            return false;
+        }
         const uint GENERIC_WRITE = 0x40000000;
         const uint FILE_SHARE_ALL = 7;
         const uint OPEN_EXISTING = 3;
         const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
         using var handle = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_ALL,
             IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
-        return !handle.IsInvalid;
+        bool writable = !handle.IsInvalid;
+        if (!writable)
+        {
+            int err = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            SwkLogger.Debug($"IsDirectoryWritable: denied path={path} win32err={err}");
+        }
+        return writable;
     }
 
     private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items, bool silent = false)
     {
         bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
+        SwkLogger.Debug($"ApplyFriendShopReadOnly: folder={folder} writable={folderWritable} silent={silent} items={items.Count}");
         bool anyChanged = false;
         foreach (ShopItem item in items)
         {
             bool isReadOnly = item.IsDirectory
                 ? !await Task.Run(() => IsDirectoryWritable(item.FullPath))
                 : !folderWritable;
-            if (item.IsReadOnly == isReadOnly) continue;
+
+            // item.IsReadOnly は RefreshShopItems() のたびにリセットされるため使わない。
+            // 前回の実測値を辞書で保持して比較する。
+            bool prevReadOnly = _friendShopReadOnlyState.TryGetValue(item.FullPath, out bool prev) ? prev : false;
+            bool stateChanged = prevReadOnly != isReadOnly;
+
+            SwkLogger.Debug($"  {item.Name}: isReadOnly={isReadOnly} prev={prevReadOnly} changed={stateChanged}");
+
+            _friendShopReadOnlyState[item.FullPath] = isReadOnly;
             item.IsReadOnly = isReadOnly;
-            await Dispatcher.InvokeAsync(item.RefreshShareStatus);
-            anyChanged = true;
+            if (stateChanged)
+                await Dispatcher.InvokeAsync(item.RefreshShareStatus);
+            if (!silent && stateChanged)
+                anyChanged = true;
         }
-        if (!silent && anyChanged)
+        if (anyChanged)
             await Dispatcher.InvokeAsync(NotifyExternalShopChange);
     }
 
@@ -2866,6 +2888,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         DisposeContentsWatcher();
         _currentFolder = null;
         ShopItems.Clear();
+        _friendShopReadOnlyState.Clear();
         _backStack.Clear();
         _forwardStack.Clear();
         UpdateBreadcrumb();
