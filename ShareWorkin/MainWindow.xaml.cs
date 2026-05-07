@@ -71,6 +71,7 @@ public partial class MainWindow : Window
     private FileSystemWatcher? _arrivalSensor;
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
+    private DispatcherTimer? _friendShopPermTimer;
     private string? _shopFolder;
     private string? _currentFolder;
     private string? _lastNotificationFolder;
@@ -2415,6 +2416,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             UpdateBreadcrumb();
             ApplyPendingFocus();
+            if (_currentMode == DisplayMode.FriendShop)
+            {
+                _ = CheckFriendShopWriteAccessAsync(_currentFolder, ShopItems.ToList());
+                StartFriendShopPermTimer();
+            }
+            else
+            {
+                StopFriendShopPermTimer();
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2424,6 +2434,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_isSizeCalcEnabled)
         {
             StartFolderSizeCalculation();
+        }
+    }
+
+    private void StartFriendShopPermTimer()
+    {
+        if (_friendShopPermTimer != null) return;
+        _friendShopPermTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        _friendShopPermTimer.Tick += FriendShopPermTimer_Tick;
+        _friendShopPermTimer.Start();
+    }
+
+    private void StopFriendShopPermTimer()
+    {
+        if (_friendShopPermTimer == null) return;
+        _friendShopPermTimer.Stop();
+        _friendShopPermTimer.Tick -= FriendShopPermTimer_Tick;
+        _friendShopPermTimer = null;
+    }
+
+    private async void FriendShopPermTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_currentMode != DisplayMode.FriendShop || ShopItems.Count == 0 || string.IsNullOrEmpty(_currentFolder)) return;
+        await CheckFriendShopWriteAccessAsync(_currentFolder, ShopItems.ToList());
+    }
+
+    private async Task CheckFriendShopWriteAccessAsync(string folder, List<ShopItem> items)
+    {
+        bool folderWritable = await Task.Run(() => CanWriteToDirectory(folder));
+        foreach (ShopItem item in items)
+        {
+            bool isReadOnly = item.IsDirectory
+                ? !await Task.Run(() => CanWriteToDirectory(item.FullPath))
+                : !folderWritable;
+            if (item.IsReadOnly == isReadOnly) continue;
+            item.IsReadOnly = isReadOnly;
+            await Dispatcher.InvokeAsync(item.RefreshShareStatus);
+        }
+    }
+
+    private static bool CanWriteToDirectory(string path)
+    {
+        if (!Directory.Exists(path)) return false;
+        try
+        {
+            string tmp = Path.Combine(path, $".swk_{Path.GetRandomFileName()}");
+            File.WriteAllText(tmp, string.Empty);
+            File.Delete(tmp);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -3472,8 +3534,7 @@ public sealed class ShopItem : INotifyPropertyChanged
 
     public bool IsFromFriendShop { get; set; }
 
-    public string ShareStatusText => IsFromFriendShop ? string.Empty
-        : IsHoldFolder ? "非公開"
+    public string ShareStatusText => IsHoldFolder ? "非公開"
         : IsSharedOff ? "OFF"
         : AllowedUsers.Count == 0
             ? (IsReadOnly ? "全員R" : "全員")
