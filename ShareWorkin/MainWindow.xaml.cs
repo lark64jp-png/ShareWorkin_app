@@ -2608,7 +2608,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 anyChanged = true;
         }
         if (anyChanged)
-            await Dispatcher.InvokeAsync(NotifyExternalShopChange);
+            await Dispatcher.InvokeAsync(() =>
+                NotifyShopMaintenance("共有状況が変わりました。", "共有状況が変わりました。"));
     }
 
     private IEnumerable<ShopItem> SortShopItems(IEnumerable<ShopItem> items)
