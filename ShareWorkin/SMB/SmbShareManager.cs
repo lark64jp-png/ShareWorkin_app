@@ -44,7 +44,7 @@ if ($s) {{ Write-Output 'EXISTS' }} else {{ Write-Output 'MISSING' }}
 
         string account = EscapeSingleQuotes(SmbAccountManager.LocalQualifiedAccountName);
         string script = $@"
-New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}';
+New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}' -AccessBasedEnumeration $true;
 ";
         PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);
         if (result.Succeeded)
@@ -75,7 +75,7 @@ New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAcce
 $s = Get-SmbShare -Name '{esName}' -ErrorAction SilentlyContinue;
 if ($s) {{
     Remove-SmbShare -Name '{esName}' -Force | Out-Null;
-    New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}' | Out-Null;
+    New-SmbShare -Name '{esName}' -Path '{esPath}' -Description '{esDesc}' -FullAccess '{account}' -AccessBasedEnumeration $true | Out-Null;
 }}
 ";
         PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 15000);

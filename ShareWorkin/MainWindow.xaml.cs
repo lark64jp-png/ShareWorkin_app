@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static readonly string SettingsPath = Path.Combine(AppHomeDirectory, "settings.json");
+    private static readonly string PermissionsPath = Path.Combine(AppHomeDirectory, "permissions.json");
 
     private static readonly string DefaultHoldFolderPath = Path.Combine(AppHomeDirectory, "hold");
 
@@ -149,6 +150,7 @@ public partial class MainWindow : Window
         _transientStatusTimer.Tick += TransientStatusTimer_Tick;
 
         LoadSettings();
+        LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
         ExplorerTargetComboBox.SelectionChanged += ExplorerTargetComboBox_SelectionChanged;
         PopulateExplorerDropdown();
@@ -651,11 +653,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         VisitShop(_shopFolder);
     }
 
-    private void RefreshButton_Click(object sender, RoutedEventArgs e)
+    private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_currentFolder))
-        {
             return;
+
+        if (_currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
+        {
+            string password = FriendsRepository.UnprotectPassword(_activeFriendShop.PasswordProtected);
+            if (!string.IsNullOrEmpty(password))
+            {
+                string uncRoot = _activeFriendShop.ConnectUncPath;
+                var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+                    string.Equals(s.MachineName, _activeFriendShop.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(s.ShareName, _activeFriendShop.ShareName, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(liveShop?.IpAddress))
+                    uncRoot = $@"\\{liveShop.IpAddress}\{_activeFriendShop.ShareName}";
+                await Task.Run(() => SmbConnectionHelper.EnsureConnection(uncRoot, _activeFriendShop.UserName, password, _activeFriendShop.HostMachineName));
+            }
         }
 
         InvalidateSizeCacheUnder(_currentFolder);
@@ -713,6 +728,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (window.ShowDialog() == true)
         {
             _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly, item.IsSharedOff);
+            if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
+            {
+                if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
+                    SetTransientStatus("権限の設定に失敗しました。");
+            }
+            SavePermissionMap();
             item.RefreshShareStatus();
         }
     }
@@ -2357,7 +2378,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     item.SetSize(cached);
                 }
 
-                if (_permissionMap.TryGetValue(item.FullPath, out var perm))
+                if (_currentMode == DisplayMode.FriendShop)
+                {
+                    item.IsFromFriendShop = true;
+                }
+                else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
                     foreach (string user in perm.Users) item.AllowedUsers.Add(user);
                     item.IsReadOnly = perm.IsReadOnly;
@@ -3263,6 +3288,39 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             : NotificationMode.All;
     }
 
+    private void SavePermissionMap()
+    {
+        try
+        {
+            var entries = _permissionMap.Select(kv => new PermissionEntry
+            {
+                Path = kv.Key,
+                Users = kv.Value.Users,
+                IsReadOnly = kv.Value.IsReadOnly,
+                IsSharedOff = kv.Value.IsSharedOff
+            }).ToList();
+            File.WriteAllText(PermissionsPath, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException) { }
+    }
+
+    private void LoadPermissionMap()
+    {
+        _permissionMap.Clear();
+        if (!File.Exists(PermissionsPath)) return;
+        try
+        {
+            var entries = JsonSerializer.Deserialize<List<PermissionEntry>>(File.ReadAllText(PermissionsPath));
+            if (entries is null) return;
+            foreach (var e in entries)
+            {
+                if (!string.IsNullOrEmpty(e.Path))
+                    _permissionMap[e.Path] = (e.Users ?? [], e.IsReadOnly, e.IsSharedOff);
+            }
+        }
+        catch { }
+    }
+
     private void SaveSettings()
     {
         try
@@ -3412,7 +3470,10 @@ public sealed class ShopItem : INotifyPropertyChanged
 
     public bool IsSharedOff { get; set; }
 
-    public string ShareStatusText => IsHoldFolder ? "非公開"
+    public bool IsFromFriendShop { get; set; }
+
+    public string ShareStatusText => IsFromFriendShop ? string.Empty
+        : IsHoldFolder ? "非公開"
         : IsSharedOff ? "OFF"
         : AllowedUsers.Count == 0
             ? (IsReadOnly ? "全員R" : "全員")
@@ -3529,6 +3590,14 @@ public enum NotificationMode
 public sealed record ArrivedItem(string Name, string FolderPath, DateTime ArrivedAt)
 {
     public string ArrivedAtText => ArrivedAt.ToString("yyyy/MM/dd HH:mm:ss");
+}
+
+public sealed class PermissionEntry
+{
+    [JsonPropertyName("path")] public string Path { get; set; } = "";
+    [JsonPropertyName("users")] public List<string> Users { get; set; } = [];
+    [JsonPropertyName("readOnly")] public bool IsReadOnly { get; set; }
+    [JsonPropertyName("sharedOff")] public bool IsSharedOff { get; set; }
 }
 
 public sealed class AppSettings

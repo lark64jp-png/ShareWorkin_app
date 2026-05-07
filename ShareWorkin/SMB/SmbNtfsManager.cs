@@ -18,6 +18,7 @@ public static class SmbNtfsManager
     private const string SidSystem = "*S-1-5-18";
     private const string SidAdministrators = "*S-1-5-32-544";
     private const string PermFull = "(OI)(CI)(F)";
+    private const string PermReadOnly = "(OI)(CI)(RX)";
 
     private const uint WRITE_DAC = 0x00040000;
     private const uint WRITE_OWNER = 0x00080000;
@@ -232,6 +233,52 @@ public static class SmbNtfsManager
         }
 
         SwkLogger.Info("IsolateShopRoot ok");
+        return true;
+    }
+
+    public static bool SetSubfolderPermission(string subfolderPath, bool isSharedOff, bool isReadOnly)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(subfolderPath);
+        if (!Directory.Exists(subfolderPath))
+        {
+            SwkLogger.Warn($"SetSubfolderPermission skipped: path not found ({subfolderPath})");
+            return false;
+        }
+
+        if (!isSharedOff && !isReadOnly)
+        {
+            SwkLogger.Info($"SetSubfolderPermission reset (全員): {subfolderPath}");
+            return RunIcacls(new[] { subfolderPath, "/reset" }, "Reset to inherited");
+        }
+
+        string? ownerSid;
+        try
+        {
+            ownerSid = WindowsIdentity.GetCurrent().User?.Value;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Error("SetSubfolderPermission: failed to read current user SID", ex);
+            return false;
+        }
+        if (string.IsNullOrEmpty(ownerSid))
+        {
+            SwkLogger.Warn("SetSubfolderPermission: current user SID is empty");
+            return false;
+        }
+
+        if (!RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance")) return false;
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidSystem}:{PermFull}" }, "Grant SYSTEM")) return false;
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidAdministrators}:{PermFull}" }, "Grant Admins")) return false;
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"*{ownerSid}:{PermFull}" }, "Grant Owner")) return false;
+
+        if (isReadOnly && !isSharedOff)
+        {
+            SwkLogger.Info($"SetSubfolderPermission read-only: {subfolderPath}");
+            return RunIcacls(new[] { subfolderPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{PermReadOnly}" }, "Grant swkguest read-only");
+        }
+
+        SwkLogger.Info($"SetSubfolderPermission shared-off: {subfolderPath}");
         return true;
     }
 
