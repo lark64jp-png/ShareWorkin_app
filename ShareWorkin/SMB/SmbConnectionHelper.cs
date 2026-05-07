@@ -6,45 +6,46 @@ namespace ShareWorkin.SMB;
 
 public static class SmbConnectionHelper
 {
-    // WNetAddConnection2 API for mapping network drives
-    [DllImport("mpr.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int WNetAddConnection2(
-        ref NetResource netResource,
-        string password,
-        string username,
-        uint flags);
+    // WNetAddConnection2 (mpr.dll) は P9NP (WSL Plan 9) が MPR チェーンに入っている環境で
+    // error 67 を返すことが確認されたため、NetUseAdd (netapi32.dll) に置き換える。
+    // NetUseAdd は LanmanWorkstation サービスに直接つながり、MPR を経由しない。
+    [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern int NetUseAdd(
+        string? serverName,
+        int level,
+        ref UseInfo2 buf,
+        out int parmError);
 
-    [DllImport("mpr.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int WNetCancelConnection2(
-        string name,
-        uint flags,
-        bool force);
+    [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern int NetUseDel(
+        string? serverName,
+        string useName,
+        int forceLevel);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NetResource
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct UseInfo2
     {
-        public uint dwScope;
-        public uint dwType;
-        public uint dwDisplayType;
-        public uint dwUsage;
-        public string lpLocalName;
-        public string lpRemoteName;
-        public string lpComment;
-        public string lpProvider;
+        public string? ui2_local;
+        public string ui2_remote;
+        public string ui2_password;
+        public uint ui2_status;
+        public uint ui2_asg_type;
+        public uint ui2_refcount;
+        public uint ui2_usecount;
+        public string ui2_username;
+        public string? ui2_domainname;
     }
 
-    private const uint RESOURCETYPE_DISK = 1;
-    private const uint CONNECT_UPDATE_PROFILE = 0x00000001;
-    private const uint CONNECT_TEMPORARY = 0x00000004;
+    private const int USE_DISKDEV = 0;
 
     /// <summary>
     /// 認証情報をセッションに登録する（エクスプローラーは開かない）
     /// </summary>
-    public static bool EnsureConnection(string uncPath, string userName, string password)
+    public static bool EnsureConnection(string uncPath, string userName, string password, string? machineName = null)
     {
         try
         {
-            return AddConnection(uncPath, userName, password);
+            return AddConnection(uncPath, userName, password, machineName);
         }
         catch (Exception ex)
         {
@@ -56,18 +57,16 @@ public static class SmbConnectionHelper
     /// <summary>
     /// 認証情報をセッションに登録して、UNC パスを開く
     /// </summary>
-    public static bool ConnectAndOpen(string uncPath, string userName, string password)
+    public static bool ConnectAndOpen(string uncPath, string userName, string password, string? machineName = null)
     {
         try
         {
-            // パスワードをセッションに登録
-            if (!AddConnection(uncPath, userName, password))
+            if (!AddConnection(uncPath, userName, password, machineName))
             {
                 SwkLogger.Warn($"Failed to add connection for {uncPath}");
                 return false;
             }
 
-            // エクスプローラーで開く
             OpenInExplorer(uncPath);
             return true;
         }
@@ -78,39 +77,33 @@ public static class SmbConnectionHelper
         }
     }
 
-    /// <summary>
-    /// 認証情報をセッションに登録
-    /// </summary>
-    private static bool AddConnection(string uncPath, string userName, string password)
+    private static bool AddConnection(string uncPath, string userName, string password, string? machineName)
     {
-        var netResource = new NetResource
+        // 一度接続を切る（再接続時のため）
+        NetUseDel(null, uncPath, 0);
+
+        var useInfo = new UseInfo2
         {
-            dwScope = 2,           // RESOURCE_GLOBALNET
-            dwType = RESOURCETYPE_DISK,
-            dwDisplayType = 3,     // RESOURCEDISPLAYTYPE_SHARE
-            dwUsage = 1,           // RESOURCEUSAGE_CONNECTABLE
-            lpRemoteName = uncPath,
+            ui2_local = null,
+            ui2_remote = uncPath,
+            ui2_password = password,
+            ui2_asg_type = USE_DISKDEV,
+            ui2_username = userName,
+            ui2_domainname = string.IsNullOrWhiteSpace(machineName) ? null : machineName,
         };
 
-        // 一度接続を切る（再接続時のため）
-        WNetCancelConnection2(uncPath, 0, false);
+        int result = NetUseAdd(null, 2, ref useInfo, out int parmError);
 
-        // 接続を追加（セッション内のみ）
-        int result = WNetAddConnection2(ref netResource, password, userName, CONNECT_TEMPORARY);
-
-        if (result == 0) // NO_ERROR
+        if (result == 0)
         {
             SwkLogger.Debug($"Successfully connected to {uncPath}");
             return true;
         }
 
-        SwkLogger.Warn($"WNetAddConnection2 returned {result} for {uncPath}");
+        SwkLogger.Warn($"NetUseAdd returned {result} for {uncPath} (parmError={parmError})");
         return false;
     }
 
-    /// <summary>
-    /// エクスプローラーで UNC パスを開く
-    /// </summary>
     private static void OpenInExplorer(string uncPath)
     {
         try

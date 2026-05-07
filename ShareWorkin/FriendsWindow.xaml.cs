@@ -733,7 +733,7 @@ public partial class FriendsWindow : Window
                 SwkLogger.Warn("Failed to decrypt password for opening folder");
                 return false;
             }
-            bool ok = SmbConnectionHelper.ConnectAndOpen(friend.ConnectUncPath, friend.UserName, password);
+            bool ok = SmbConnectionHelper.ConnectAndOpen(friend.ConnectUncPath, friend.UserName, password, friend.HostMachineName);
             SwkLogger.Info($"OpenFriendFolder: {friend.DisplayName} - {(ok ? "success" : "failed")}");
             return ok;
         }

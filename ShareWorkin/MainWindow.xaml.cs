@@ -2686,7 +2686,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool accessible = await Task.Run(() =>
         {
             if (!string.IsNullOrEmpty(password))
-                SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password);
+                SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password, friend.HostMachineName);
             try { return Directory.Exists(uncPath); }
             catch { return false; }
         });
