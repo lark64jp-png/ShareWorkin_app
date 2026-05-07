@@ -146,7 +146,7 @@ public partial class MainWindow : Window
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
         ExplorerTargetComboBox.SelectionChanged += ExplorerTargetComboBox_SelectionChanged;
         PopulateExplorerDropdown();
-        MigrateLegacyHoldContents();
+        MigrateLegacyAppHomeHold();
         UpdateShopState(false);
         UpdateColumnHeaders();
         string? ver = (System.Reflection.CustomAttributeExtensions
@@ -195,85 +195,67 @@ public partial class MainWindow : Window
         _ = SwkNetworkCache.RefreshAsync(ScanMode.Quick);
     }
 
-    private void MigrateLegacyHoldContents()
+    // v1.04〜v1.08 では GetHoldFolderPath() が AppHomeDirectory\hold を返す実装だった。
+    // v1.09 で _shopFolder\保留 に戻したため、AppHomeDirectory\hold にあるファイルを移動する。
+    private void MigrateLegacyAppHomeHold()
     {
-        if (string.IsNullOrWhiteSpace(_shopFolder))
-        {
+        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
             return;
-        }
 
-        string legacyHoldPath;
+        if (!Directory.Exists(DefaultHoldFolderPath))
+            return;
+
+        List<string> entries;
         try
         {
-            legacyHoldPath = Path.Combine(_shopFolder, HoldFolderName);
-        }
-        catch (ArgumentException)
-        {
-            return;
-        }
-
-        if (!Directory.Exists(legacyHoldPath))
-        {
-            return;
-        }
-
-        try
-        {
-            List<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(legacyHoldPath).ToList();
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                SwkLogger.Warn($"Hold migration: enumerate failed ({ex.Message})");
-                return;
-            }
-
-            if (entries.Count == 0)
-            {
-                TryDeleteEmptyDirectory(legacyHoldPath);
-                return;
-            }
-
-            Directory.CreateDirectory(DefaultHoldFolderPath);
-
-            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            int movedCount = 0;
-            foreach (string entry in entries)
-            {
-                string baseName = Path.GetFileName(entry);
-                string destinationPath = ResolveNonConflictingPath(DefaultHoldFolderPath, baseName, timestamp);
-
-                try
-                {
-                    if (Directory.Exists(entry))
-                    {
-                        Directory.Move(entry, destinationPath);
-                    }
-                    else
-                    {
-                        File.Move(entry, destinationPath);
-                    }
-                    movedCount++;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    SwkLogger.Warn($"Hold migration: could not move ({ex.Message})");
-                }
-            }
-
-            TryDeleteEmptyDirectory(legacyHoldPath);
-
-            if (movedCount > 0)
-            {
-                SwkLogger.Info($"Hold migration: moved {movedCount} entries to LocalAppData hold");
-                SetTransientStatus("保留領域を移しました。");
-            }
+            entries = Directory.EnumerateFileSystemEntries(DefaultHoldFolderPath).ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            SwkLogger.Warn($"Hold migration error: {ex.Message}");
+            SwkLogger.Warn($"Hold migration: enumerate failed ({ex.Message})");
+            return;
+        }
+
+        if (entries.Count == 0)
+        {
+            TryDeleteEmptyDirectory(DefaultHoldFolderPath);
+            return;
+        }
+
+        if (!TryEnsureHoldFolder())
+        {
+            SwkLogger.Warn("Hold migration: could not create hold folder, skipping");
+            return;
+        }
+
+        string holdFolderPath = GetHoldFolderPath();
+        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        int movedCount = 0;
+        foreach (string entry in entries)
+        {
+            string baseName = Path.GetFileName(entry);
+            string destinationPath = ResolveNonConflictingPath(holdFolderPath, baseName, timestamp);
+
+            try
+            {
+                if (Directory.Exists(entry))
+                    Directory.Move(entry, destinationPath);
+                else
+                    File.Move(entry, destinationPath);
+                movedCount++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                SwkLogger.Warn($"Hold migration: could not move ({ex.Message})");
+            }
+        }
+
+        TryDeleteEmptyDirectory(DefaultHoldFolderPath);
+
+        if (movedCount > 0)
+        {
+            SwkLogger.Info($"Hold migration: moved {movedCount} entries from AppHome to shop hold folder");
+            SetTransientStatus("保留領域を移しました。");
         }
     }
 
