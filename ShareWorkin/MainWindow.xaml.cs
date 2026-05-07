@@ -71,7 +71,7 @@ public partial class MainWindow : Window
     private FileSystemWatcher? _arrivalSensor;
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
-    private DispatcherTimer? _friendShopPermTimer;
+    private DispatcherTimer? _friendShopPollTimer;
     private string? _shopFolder;
     private string? _currentFolder;
     private string? _lastNotificationFolder;
@@ -1619,6 +1619,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _notificationTimer.Tick -= NotificationTimer_Tick;
         _pollingTimer.Stop();
         _pollingTimer.Tick -= PollingTimer_Tick;
+        StopFriendShopPolling();
         _transientStatusTimer.Stop();
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
         _notifyIcon.BalloonTipClicked -= NotifyIcon_BalloonTipClicked;
@@ -2417,14 +2418,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             UpdateBreadcrumb();
             ApplyPendingFocus();
             if (_currentMode == DisplayMode.FriendShop)
-            {
-                _ = CheckFriendShopWriteAccessAsync(_currentFolder, ShopItems.ToList());
-                StartFriendShopPermTimer();
-            }
+                StartFriendShopPolling();
             else
-            {
-                StopFriendShopPermTimer();
-            }
+                StopFriendShopPolling();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2437,56 +2433,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void StartFriendShopPermTimer()
+    private void StartFriendShopPolling()
     {
-        if (_friendShopPermTimer != null) return;
-        _friendShopPermTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-        _friendShopPermTimer.Tick += FriendShopPermTimer_Tick;
-        _friendShopPermTimer.Start();
+        if (_friendShopPollTimer != null) return;
+        _friendShopPollTimer = new DispatcherTimer { Interval = PollingInterval };
+        _friendShopPollTimer.Tick += FriendShopPollTimer_Tick;
+        _friendShopPollTimer.Start();
     }
 
-    private void StopFriendShopPermTimer()
+    private void StopFriendShopPolling()
     {
-        if (_friendShopPermTimer == null) return;
-        _friendShopPermTimer.Stop();
-        _friendShopPermTimer.Tick -= FriendShopPermTimer_Tick;
-        _friendShopPermTimer = null;
+        if (_friendShopPollTimer == null) return;
+        _friendShopPollTimer.Stop();
+        _friendShopPollTimer.Tick -= FriendShopPollTimer_Tick;
+        _friendShopPollTimer = null;
     }
 
-    private async void FriendShopPermTimer_Tick(object? sender, EventArgs e)
+    private void FriendShopPollTimer_Tick(object? sender, EventArgs e)
     {
-        if (_currentMode != DisplayMode.FriendShop || ShopItems.Count == 0 || string.IsNullOrEmpty(_currentFolder)) return;
-        await CheckFriendShopWriteAccessAsync(_currentFolder, ShopItems.ToList());
-    }
-
-    private async Task CheckFriendShopWriteAccessAsync(string folder, List<ShopItem> items)
-    {
-        bool folderWritable = await Task.Run(() => CanWriteToDirectory(folder));
-        foreach (ShopItem item in items)
-        {
-            bool isReadOnly = item.IsDirectory
-                ? !await Task.Run(() => CanWriteToDirectory(item.FullPath))
-                : !folderWritable;
-            if (item.IsReadOnly == isReadOnly) continue;
-            item.IsReadOnly = isReadOnly;
-            await Dispatcher.InvokeAsync(item.RefreshShareStatus);
-        }
-    }
-
-    private static bool CanWriteToDirectory(string path)
-    {
-        if (!Directory.Exists(path)) return false;
-        try
-        {
-            string tmp = Path.Combine(path, $".swk_{Path.GetRandomFileName()}");
-            File.WriteAllText(tmp, string.Empty);
-            File.Delete(tmp);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
+        RefreshShopItems();
     }
 
     private IEnumerable<ShopItem> SortShopItems(IEnumerable<ShopItem> items)
