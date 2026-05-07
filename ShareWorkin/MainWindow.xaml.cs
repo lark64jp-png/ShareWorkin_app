@@ -63,10 +63,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
     // セッション中のアイテム別許可設定。AllowedUsers は ShopItem ごとに in-memory のため
     // ナビゲーションで再生成されるたびに消えるのを防ぐ。キー = FullPath。
-    private readonly Dictionary<string, (List<string> Users, bool IsReadOnly)> _permissionMap
+    private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> _permissionMap
         = new(StringComparer.OrdinalIgnoreCase);
     // 現在フォルダーを基点に祖先を遡って得た有効な許可設定（継承用）。
-    private (List<string> Users, bool IsReadOnly)? _effectiveParentPerm;
+    private (List<string> Users, bool IsReadOnly, bool IsSharedOff)? _effectiveParentPerm;
     private FileSystemWatcher? _arrivalSensor;
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
@@ -712,7 +712,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionWindow window = new(item) { Owner = this };
         if (window.ShowDialog() == true)
         {
-            _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly);
+            _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly, item.IsSharedOff);
             item.RefreshShareStatus();
         }
     }
@@ -837,10 +837,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        List<ShopItem> itemsToDrag;
+        if (ShopItemsListView.SelectedItems.Contains(_dragStartItem))
+        {
+            itemsToDrag = ShopItemsListView.SelectedItems.Cast<ShopItem>()
+                .Where(i => !i.IsHoldFolder)
+                .ToList();
+        }
+        else
+        {
+            itemsToDrag = new List<ShopItem> { _dragStartItem };
+        }
+
+        if (itemsToDrag.Count == 0)
+        {
+            return;
+        }
+
         System.Windows.DataObject data = new();
-        data.SetData(InternalDragPathFormat, _dragStartItem.FullPath);
-        ShowDragHint(_dragStartItem.Name);
-        System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Move);
+        data.SetData(System.Windows.DataFormats.FileDrop, itemsToDrag.Select(i => i.FullPath).ToArray());
+        if (itemsToDrag.Count == 1)
+        {
+            data.SetData(InternalDragPathFormat, itemsToDrag[0].FullPath);
+        }
+
+        string hint = itemsToDrag.Count == 1 ? itemsToDrag[0].Name : $"{itemsToDrag.Count} つのアイテム";
+        ShowDragHint(hint);
+        System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Copy | System.Windows.DragDropEffects.Move);
         HideDragHint();
         ClearDropTargetHighlight();
         _dragStartItem = null;
@@ -849,13 +872,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void ShopItemsListView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         ShopItem? item = GetShopItemFromSource(e.OriginalSource as DependencyObject);
-        if (item is not null)
-        {
-            ShopItemsListView.SelectedItem = item;
-        }
-        else
+        if (item is null)
         {
             ShopItemsListView.SelectedItem = null;
+        }
+        else if (!ShopItemsListView.SelectedItems.Contains(item))
+        {
+            ShopItemsListView.SelectedItem = item;
         }
     }
 
@@ -1168,6 +1191,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void ShopItemsContextMenu_Opened(object sender, RoutedEventArgs e)
     {
         ShopItem? selected = ShopItemsListView.SelectedItem as ShopItem;
+        int selectedCount = ShopItemsListView.SelectedItems.Count;
         bool inHoldMode = _currentMode == DisplayMode.Hold;
         bool canAddFolder = !string.IsNullOrWhiteSpace(_currentFolder);
 
@@ -1179,6 +1203,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             DeleteShopItemMenuItem.Visibility = Visibility.Collapsed;
             AddFolderSeparator.Visibility = Visibility.Collapsed;
             AddFolderMenuItem.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else if (selectedCount > 1)
+        {
+            MoveShopItemMenuItem.Visibility = Visibility.Collapsed;
+            MoveToFolderMenuItem.Visibility = Visibility.Collapsed;
+            HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
+            DeleteShopItemMenuItem.Visibility = Visibility.Visible;
+            AddFolderSeparator.Visibility = Visibility.Collapsed;
+            AddFolderMenuItem.Visibility = Visibility.Collapsed;
         }
         else if (selected.IsDirectory)
         {
@@ -1195,8 +1228,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             MoveToFolderMenuItem.Visibility = Visibility.Visible;
             HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
             DeleteShopItemMenuItem.Visibility = Visibility.Visible;
-            AddFolderSeparator.Visibility = Visibility.Collapsed;
-            AddFolderMenuItem.Visibility = Visibility.Collapsed;
+            AddFolderSeparator.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
+            AddFolderMenuItem.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -1331,10 +1364,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        if (ShopItemsListView.SelectedItem is not ShopItem item)
-        {
-            return;
-        }
+        List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
+            .Where(i => !i.IsHoldFolder)
+            .ToList();
+        if (items.Count == 0) return;
 
         if (!TryEnsureHoldFolder())
         {
@@ -1343,35 +1376,40 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         string holdFolderPath = GetHoldFolderPath();
-        string destinationPath = Path.Combine(holdFolderPath, item.Name);
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        int movedCount = 0;
+        string? lastName = null;
+
+        foreach (ShopItem item in items)
         {
-            SetTransientStatus("同じ名前が保留にあるので、しまえません。");
-            return;
+            string destinationPath = Path.Combine(holdFolderPath, item.Name);
+            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) continue;
+
+            try
+            {
+                SuppressExternalChangeNotifications();
+                if (item.IsDirectory)
+                    Directory.Move(item.FullPath, destinationPath);
+                else
+                    File.Move(item.FullPath, destinationPath);
+
+                movedCount++;
+                lastName = item.Name;
+                string? sourceParent = Path.GetDirectoryName(item.FullPath);
+                if (!string.IsNullOrWhiteSpace(sourceParent))
+                    InvalidateSizeCacheUnder(sourceParent);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
 
-        try
+        if (movedCount > 0)
         {
-            SuppressExternalChangeNotifications();
-            if (item.IsDirectory)
-            {
-                Directory.Move(item.FullPath, destinationPath);
-            }
-            else
-            {
-                File.Move(item.FullPath, destinationPath);
-            }
-
-            SetTransientStatus($"{item.Name} を保留にしまいました。");
-            string? sourceParent = Path.GetDirectoryName(item.FullPath);
-            if (!string.IsNullOrWhiteSpace(sourceParent))
-            {
-                InvalidateSizeCacheUnder(sourceParent);
-            }
             InvalidateSizeCacheUnder(holdFolderPath);
+            SetTransientStatus(movedCount == 1 && lastName is not null
+                ? $"{lastName} を保留にしまいました。"
+                : $"{movedCount} つ保留にしまいました。");
             RefreshShopItems();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        else
         {
             SetTransientStatus("しまえませんでした。");
         }
@@ -1379,43 +1417,48 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void DeleteShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        if (ShopItemsListView.SelectedItem is not ShopItem item)
-        {
-            return;
-        }
+        List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
+            .Where(i => !i.IsHoldFolder)
+            .ToList();
+        if (items.Count == 0) return;
 
+        string confirmMsg = items.Count == 1
+            ? $"{items[0].Name} を完全に消します。よろしいですか?"
+            : $"{items.Count} つのアイテムを完全に消します。よろしいですか?";
         MessageBoxResult result = System.Windows.MessageBox.Show(
-            this,
-            $"{item.Name} を完全に消します。よろしいですか?",
-            "削除",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.None);
-        if (result != MessageBoxResult.OK)
+            this, confirmMsg, "削除", MessageBoxButton.OKCancel, MessageBoxImage.None);
+        if (result != MessageBoxResult.OK) return;
+
+        int deletedCount = 0;
+        string? lastName = null;
+
+        foreach (ShopItem item in items)
         {
-            return;
+            try
+            {
+                SuppressExternalChangeNotifications();
+                if (item.IsDirectory)
+                    Directory.Delete(item.FullPath, recursive: true);
+                else
+                    File.Delete(item.FullPath);
+
+                deletedCount++;
+                lastName = item.Name;
+                string? sourceParent = Path.GetDirectoryName(item.FullPath);
+                if (!string.IsNullOrWhiteSpace(sourceParent))
+                    InvalidateSizeCacheUnder(sourceParent);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
 
-        try
+        if (deletedCount > 0)
         {
-            SuppressExternalChangeNotifications();
-            if (item.IsDirectory)
-            {
-                Directory.Delete(item.FullPath, recursive: true);
-            }
-            else
-            {
-                File.Delete(item.FullPath);
-            }
-
-            SetTransientStatus($"{item.Name} を消しました。");
-            string? sourceParent = Path.GetDirectoryName(item.FullPath);
-            if (!string.IsNullOrWhiteSpace(sourceParent))
-            {
-                InvalidateSizeCacheUnder(sourceParent);
-            }
+            SetTransientStatus(deletedCount == 1 && lastName is not null
+                ? $"{lastName} を消しました。"
+                : $"{deletedCount} つ消しました。");
             RefreshShopItems();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        else
         {
             SetTransientStatus("消せませんでした。");
         }
@@ -2318,11 +2361,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 {
                     foreach (string user in perm.Users) item.AllowedUsers.Add(user);
                     item.IsReadOnly = perm.IsReadOnly;
+                    item.IsSharedOff = perm.IsSharedOff;
                 }
                 else if (!item.IsHoldFolder && _effectiveParentPerm.HasValue)
                 {
                     foreach (string user in _effectiveParentPerm.Value.Users) item.AllowedUsers.Add(user);
                     item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
+                    item.IsSharedOff = _effectiveParentPerm.Value.IsSharedOff;
                 }
             }
 
@@ -2569,13 +2614,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ForwardButton.IsEnabled = _forwardStack.Count > 0;
     }
 
-    private (List<string> Users, bool IsReadOnly)? FindEffectiveAncestorPermission(string folderPath)
+    private (List<string> Users, bool IsReadOnly, bool IsSharedOff)? FindEffectiveAncestorPermission(string folderPath)
     {
         string? root = GetCurrentRootPath();
         string? p = folderPath;
         while (!string.IsNullOrEmpty(p))
         {
-            if (_permissionMap.TryGetValue(p, out var perm) && (perm.Users.Count > 0 || perm.IsReadOnly))
+            if (_permissionMap.TryGetValue(p, out var perm) && (perm.Users.Count > 0 || perm.IsReadOnly || perm.IsSharedOff))
                 return perm;
             if (root != null && string.Equals(p, root, StringComparison.OrdinalIgnoreCase))
                 break;
@@ -2944,6 +2989,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private bool CanAcceptDrop(System.Windows.DragEventArgs e)
     {
+        if (_currentMode == DisplayMode.FriendShop) return false;
         return !string.IsNullOrWhiteSpace(_currentFolder) &&
                Directory.Exists(_currentFolder) &&
                (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ||
@@ -3364,7 +3410,10 @@ public sealed class ShopItem : INotifyPropertyChanged
     // R suffix = read-only. W is implicit (omitted) when false.
     public bool IsReadOnly { get; set; }
 
+    public bool IsSharedOff { get; set; }
+
     public string ShareStatusText => IsHoldFolder ? "非公開"
+        : IsSharedOff ? "OFF"
         : AllowedUsers.Count == 0
             ? (IsReadOnly ? "全員R" : "全員")
             : (IsReadOnly ? "指定R" : "指定");

@@ -125,6 +125,7 @@
                     <ComboBox x:Name="ScanModeComboBox"
                               Height="32"
                               Margin="4,0,0,0"
+                              VerticalContentAlignment="Center"
                               SelectedIndex="0">
                         <ComboBoxItem Content="接続可能スキャン" />
                         <ComboBoxItem Content="全PCスキャン" />

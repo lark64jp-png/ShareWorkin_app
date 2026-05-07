@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Input;
 using ShareWorkin.SMB;
 
 namespace ShareWorkin;
@@ -20,8 +21,9 @@ public partial class PermissionWindow : Window
         Title = $"許可指定  {target.Name}";
         TargetItemTextBlock.Text = target.Name;
 
-        ReadWriteRadio.IsChecked = !target.IsReadOnly;
-        ReadOnlyRadio.IsChecked = target.IsReadOnly;
+        ReadWriteRadio.IsChecked = !target.IsReadOnly && !target.IsSharedOff;
+        ReadOnlyRadio.IsChecked = target.IsReadOnly && !target.IsSharedOff;
+        SharedOffRadio.IsChecked = target.IsSharedOff;
 
         AllowedListBox.ItemsSource = _allowed;
         UnsetListBox.ItemsSource = _unset;
@@ -40,7 +42,9 @@ public partial class PermissionWindow : Window
         }
 
         _allowed.CollectionChanged += (_, _) => UpdateOverlay();
+        _unset.CollectionChanged += (_, _) => UpdateUnsetOverlay();
         UpdateOverlay();
+        UpdateUnsetOverlay();
     }
 
     private void UpdateOverlay()
@@ -48,35 +52,45 @@ public partial class PermissionWindow : Window
         EveryoneOverlay.Visibility = _allowed.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void MoveLeftButton_Click(object sender, RoutedEventArgs e)
+    private void UpdateUnsetOverlay()
+    {
+        UnsetOverlay.Visibility = _unset.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void MoveLeftButton_Click(object sender, RoutedEventArgs e) => MoveUnsetToAllowed();
+
+    private void MoveRightButton_Click(object sender, RoutedEventArgs e) => MoveAllowedToUnset();
+
+    private void AllowedListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MoveAllowedToUnset();
+
+    private void UnsetListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MoveUnsetToAllowed();
+
+    private void MoveUnsetToAllowed()
     {
         List<string> picked = UnsetListBox.SelectedItems.Cast<string>().ToList();
         foreach (string name in picked)
         {
             _unset.Remove(name);
             if (!_allowed.Contains(name, StringComparer.OrdinalIgnoreCase))
-            {
                 _allowed.Add(name);
-            }
         }
     }
 
-    private void MoveRightButton_Click(object sender, RoutedEventArgs e)
+    private void MoveAllowedToUnset()
     {
         List<string> picked = AllowedListBox.SelectedItems.Cast<string>().ToList();
         foreach (string name in picked)
         {
             _allowed.Remove(name);
             if (!_unset.Contains(name, StringComparer.OrdinalIgnoreCase))
-            {
                 _unset.Add(name);
-            }
         }
     }
 
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         // In-memory commit only. NTFS ACL writes are deferred to v2.2 wiring.
+        _target.IsSharedOff = SharedOffRadio.IsChecked == true;
         _target.IsReadOnly = ReadOnlyRadio.IsChecked == true;
         _target.AllowedUsers.Clear();
         foreach (string name in _allowed)

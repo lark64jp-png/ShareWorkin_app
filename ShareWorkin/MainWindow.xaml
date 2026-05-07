@@ -315,6 +315,7 @@
                         <ListView x:Name="ShopItemsListView"
                                   ItemsSource="{Binding ShopItems}"
                                   ItemContainerStyle="{StaticResource ShopListViewItemStyle}"
+                                  SelectionMode="Extended"
                                   AllowDrop="True"
                                   DragEnter="ShopItemsListView_DragEnter"
                                   DragOver="ShopItemsListView_DragEnter"

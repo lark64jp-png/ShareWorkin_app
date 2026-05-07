@@ -42,6 +42,15 @@
                          Foreground="#6F675C"
                          VerticalAlignment="Bottom"
                          Margin="10,0,0,5" />
+            <RadioButton DockPanel.Dock="Left"
+                         x:Name="SharedOffRadio"
+                         Content="共有OFF"
+                         GroupName="AccessLevel"
+                         IsChecked="False"
+                         FontSize="13"
+                         Foreground="#6F675C"
+                         VerticalAlignment="Bottom"
+                         Margin="10,0,0,5" />
             <TextBlock DockPanel.Dock="Right"
                        x:Name="TargetItemTextBlock"
                        Text=""
@@ -74,7 +83,8 @@
                     <ListBox x:Name="AllowedListBox"
                              BorderThickness="0"
                              Background="Transparent"
-                             SelectionMode="Extended">
+                             SelectionMode="Extended"
+                             MouseDoubleClick="AllowedListBox_MouseDoubleClick">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <TextBlock Text="{Binding}" FontSize="13" Padding="6,4" />
@@ -117,26 +127,25 @@
                     CornerRadius="6"
                     Background="White">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0"
-                               Text="未設定ユーザー"
-                               FontSize="12"
-                               Foreground="#6F675C"
-                               Padding="8,6,8,0" />
-                    <ListBox Grid.Row="1"
-                             x:Name="UnsetListBox"
+                    <ListBox x:Name="UnsetListBox"
                              BorderThickness="0"
                              Background="Transparent"
-                             SelectionMode="Extended">
+                             SelectionMode="Extended"
+                             MouseDoubleClick="UnsetListBox_MouseDoubleClick">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <TextBlock Text="{Binding}" FontSize="13" Padding="6,4" />
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                    <TextBlock x:Name="UnsetOverlay"
+                               Text="未設定ユーザー"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="#C8C2B5"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               IsHitTestVisible="False" />
                 </Grid>
             </Border>
         </Grid>

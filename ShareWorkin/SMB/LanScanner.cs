@@ -22,7 +22,9 @@ public static class LanScanner
     // FTP(21) または SSH(22) が応答すればコンピューターと見なす（インストール候補）。
     private const int FtpPort = 21;
     private const int SshPort = 22;
-    private const int ProbeTimeoutMs = 1000;
+    // Quick は応答の速い既存接続 PC だけ見つければよいので短め。Full はインストール候補も探すため余裕を持たせる。
+    private const int QuickProbeTimeoutMs = 600;
+    private const int FullProbeTimeoutMs = 1200;
     private const int MaxParallel = 64;
 
     public static IReadOnlyList<IPNetwork2> EnumerateLocalSubnets()
@@ -87,12 +89,13 @@ public static class LanScanner
     private static async Task<ProbeOutcome> ProbeAsync(IPAddress address, SemaphoreSlim gate, bool fullScan, CancellationToken token)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
+        int timeoutMs = fullScan ? FullProbeTimeoutMs : QuickProbeTimeoutMs;
         try
         {
-            bool smbOpen = await TryConnectAsync(address, SmbPort, token).ConfigureAwait(false);
+            bool smbOpen = await TryConnectAsync(address, SmbPort, timeoutMs, token).ConfigureAwait(false);
             if (smbOpen)
             {
-                bool rpcOpen = await TryConnectAsync(address, RpcPort, token).ConfigureAwait(false);
+                bool rpcOpen = await TryConnectAsync(address, RpcPort, timeoutMs, token).ConfigureAwait(false);
                 if (!rpcOpen)
                 {
                     SwkLogger.Debug($"LanScanner: skip {address} (445 open, 135 closed; likely NAS/家電)");
@@ -105,8 +108,8 @@ public static class LanScanner
 
             if (fullScan)
             {
-                bool ftpOpen = await TryConnectAsync(address, FtpPort, token).ConfigureAwait(false);
-                bool sshOpen = !ftpOpen && await TryConnectAsync(address, SshPort, token).ConfigureAwait(false);
+                bool ftpOpen = await TryConnectAsync(address, FtpPort, timeoutMs, token).ConfigureAwait(false);
+                bool sshOpen = !ftpOpen && await TryConnectAsync(address, SshPort, timeoutMs, token).ConfigureAwait(false);
                 if (ftpOpen || sshOpen)
                 {
                     string? hostName = await ResolveHostNameAsync(address).ConfigureAwait(false);
@@ -135,13 +138,13 @@ public static class LanScanner
         }
     }
 
-    private static async Task<bool> TryConnectAsync(IPAddress address, int port, CancellationToken token)
+    private static async Task<bool> TryConnectAsync(IPAddress address, int port, int timeoutMs, CancellationToken token)
     {
         try
         {
             using TcpClient client = new();
             Task connect = client.ConnectAsync(address, port, token).AsTask();
-            Task delay = Task.Delay(ProbeTimeoutMs, token);
+            Task delay = Task.Delay(timeoutMs, token);
             Task done = await Task.WhenAny(connect, delay).ConfigureAwait(false);
             return done == connect && client.Connected;
         }
