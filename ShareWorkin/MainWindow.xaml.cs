@@ -13,7 +13,9 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Runtime.InteropServices;
 using System.Windows.Threading;
+using Microsoft.Win32.SafeHandles;
 using ShareWorkin.SMB;
 using Forms = System.Windows.Forms;
 
@@ -2449,36 +2451,54 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopPollTimer = null;
     }
 
-    private void FriendShopPollTimer_Tick(object? sender, EventArgs e)
+    private bool _friendShopPollRunning;
+
+    private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
-        RefreshShopItems();
+        if (_friendShopPollRunning) return;
+        _friendShopPollRunning = true;
+        try
+        {
+            RefreshShopItems();
+            await ApplyFriendShopReadOnlyAsync(_currentFolder, ShopItems.ToList());
+        }
+        finally
+        {
+            _friendShopPollRunning = false;
+        }
     }
 
-    private static async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items)
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+    private static bool IsDirectoryWritable(string path)
     {
-        bool folderWritable = await Task.Run(() => ProbeWriteAccess(folder));
+        if (!Directory.Exists(path)) return false;
+        const uint GENERIC_WRITE = 0x40000000;
+        const uint FILE_SHARE_ALL = 7;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        using var handle = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_ALL,
+            IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        return !handle.IsInvalid;
+    }
+
+    private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items)
+    {
+        bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
         foreach (ShopItem item in items)
         {
             bool isReadOnly = item.IsDirectory
-                ? !await Task.Run(() => ProbeWriteAccess(item.FullPath))
+                ? !await Task.Run(() => IsDirectoryWritable(item.FullPath))
                 : !folderWritable;
+            if (item.IsReadOnly == isReadOnly) continue;
             item.IsReadOnly = isReadOnly;
-        }
-    }
-
-    private static bool ProbeWriteAccess(string path)
-    {
-        if (!Directory.Exists(path)) return false;
-        try
-        {
-            string tmp = Path.Combine(path, $".swk_{Path.GetRandomFileName()}");
-            using var _ = File.Create(tmp, 1, FileOptions.DeleteOnClose);
-            return true;
-        }
-        catch
-        {
-            return false;
+            await Dispatcher.InvokeAsync(item.RefreshShareStatus);
         }
     }
 
