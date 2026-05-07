@@ -1858,15 +1858,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ReapplyPermissionMapToNtfs(string shopRoot)
     {
-        if (string.IsNullOrEmpty(shopRoot) || _permissionMap.Count == 0) return;
+        if (string.IsNullOrEmpty(shopRoot)) return;
         string root = shopRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // UI スレッドでスナップショットを取ってから Task.Run へ渡す
+        var snapshot = _permissionMap
+            .Where(kv => kv.Key.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
         _ = Task.Run(() =>
         {
-            foreach (var (path, (_, isReadOnly, isSharedOff)) in _permissionMap)
+            if (!Directory.Exists(root)) return;
+            // permissionMap に記録済みのフォルダは保存状態を適用
+            foreach (var (path, (_, isReadOnly, isSharedOff)) in snapshot)
             {
-                if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
                 if (!Directory.Exists(path)) continue;
                 SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+            }
+            // permissionMap に未登録のトップレベルフォルダは継承リセット
+            // （旧セッションで全員R が設定され permissionMap に残らなかった場合の修復）
+            foreach (string dir in Directory.EnumerateDirectories(root))
+            {
+                if (snapshot.ContainsKey(dir)) continue;
+                if (string.Equals(Path.GetFileName(dir), HoldFolderName, StringComparison.OrdinalIgnoreCase)) continue;
+                SmbNtfsManager.SetSubfolderPermission(dir, false, false);
             }
         });
     }
