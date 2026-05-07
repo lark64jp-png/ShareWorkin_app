@@ -662,6 +662,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(_currentFolder))
             return;
 
+        ShopItems.Clear();
+        await Task.Delay(80);
+
         if (_currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
         {
             string password = FriendsRepository.UnprotectPassword(_activeFriendShop.PasswordProtected);
