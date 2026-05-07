@@ -61,7 +61,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, bool> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (bool IsReadOnly, bool IsSharedOff)> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
@@ -2400,7 +2400,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             List<ShopItem> all = Directory.EnumerateDirectories(_currentFolder)
                 .Where(path => !IsHoldFolderPath(path) &&
                                !(_currentMode == DisplayMode.FriendShop &&
-                                 string.Equals(Path.GetFileName(path), HoldFolderName, StringComparison.OrdinalIgnoreCase)))
+                                 string.Equals(Path.GetFileName(path), HoldFolderName, StringComparison.OrdinalIgnoreCase)) &&
+                               !(_currentMode == DisplayMode.FriendShop &&
+                                 _friendShopReadOnlyState.TryGetValue(path, out var cached) && cached.IsSharedOff))
                 .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
                 .Concat(Directory.EnumerateFiles(_currentFolder)
                     .Select(path => ShopItem.FromPath(path, isDirectory: false)))
@@ -2416,8 +2418,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (_currentMode == DisplayMode.FriendShop)
                 {
                     item.IsFromFriendShop = true;
-                    if (_friendShopReadOnlyState.TryGetValue(item.FullPath, out bool prevRo))
-                        item.IsReadOnly = prevRo;
+                    if (_friendShopReadOnlyState.TryGetValue(item.FullPath, out var prevState))
+                    {
+                        item.IsReadOnly = prevState.IsReadOnly;
+                        item.IsSharedOff = prevState.IsSharedOff;
+                    }
                 }
                 else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
@@ -2531,29 +2536,64 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return writable;
     }
 
+    private static bool IsDirectoryReadable(string path)
+    {
+        if (!Directory.Exists(path)) return false;
+        const uint GENERIC_READ = 0x80000000;
+        const uint FILE_SHARE_ALL = 7;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        using var handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_ALL,
+            IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        return !handle.IsInvalid;
+    }
+
     private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items, bool silent = false)
     {
         bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
-        SwkLogger.Debug($"ApplyFriendShopReadOnly: folder={folder} writable={folderWritable} silent={silent} items={items.Count}");
+        bool folderReadable = folderWritable || await Task.Run(() => IsDirectoryReadable(folder));
+        SwkLogger.Debug($"ApplyFriendShopReadOnly: folder={folder} writable={folderWritable} readable={folderReadable} silent={silent} items={items.Count}");
         bool anyChanged = false;
         foreach (ShopItem item in items)
         {
-            bool isReadOnly = item.IsDirectory
-                ? !await Task.Run(() => IsDirectoryWritable(item.FullPath))
-                : !folderWritable;
+            bool isWritable;
+            bool isReadable;
+            if (item.IsDirectory)
+            {
+                isWritable = await Task.Run(() => IsDirectoryWritable(item.FullPath));
+                isReadable = isWritable || await Task.Run(() => IsDirectoryReadable(item.FullPath));
+            }
+            else
+            {
+                isWritable = folderWritable;
+                isReadable = folderReadable;
+            }
+            bool isReadOnly = !isWritable && isReadable;
+            bool isSharedOff = !isWritable && !isReadable;
 
-            // item.IsReadOnly は RefreshShopItems() のたびにリセットされるため使わない。
-            // 前回の実測値を辞書で保持して比較する。
-            bool prevReadOnly = _friendShopReadOnlyState.TryGetValue(item.FullPath, out bool prev) ? prev : false;
-            bool stateChanged = prevReadOnly != isReadOnly;
+            _friendShopReadOnlyState.TryGetValue(item.FullPath, out var prevState);
+            bool stateChanged = prevState.IsReadOnly != isReadOnly || prevState.IsSharedOff != isSharedOff;
 
-            SwkLogger.Debug($"  {item.Name}: isReadOnly={isReadOnly} prev={prevReadOnly} changed={stateChanged}");
+            SwkLogger.Debug($"  {item.Name}: isReadOnly={isReadOnly} isSharedOff={isSharedOff} prev=({prevState.IsReadOnly},{prevState.IsSharedOff}) changed={stateChanged}");
 
-            _friendShopReadOnlyState[item.FullPath] = isReadOnly;
-            bool itemChanged = item.IsReadOnly != isReadOnly;
+            _friendShopReadOnlyState[item.FullPath] = (isReadOnly, isSharedOff);
+            bool itemChanged = item.IsReadOnly != isReadOnly || item.IsSharedOff != isSharedOff;
             item.IsReadOnly = isReadOnly;
-            if (itemChanged)
+            item.IsSharedOff = isSharedOff;
+            if (isSharedOff)
+            {
+                // OFF フォルダーは FriendShop では非表示にする
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    ShopItem? visible = ShopItems.FirstOrDefault(
+                        i => string.Equals(i.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase));
+                    if (visible != null) ShopItems.Remove(visible);
+                });
+            }
+            else if (itemChanged)
+            {
                 await Dispatcher.InvokeAsync(item.RefreshShareStatus);
+            }
             if (!silent && stateChanged)
                 anyChanged = true;
         }
