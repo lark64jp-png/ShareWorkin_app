@@ -61,6 +61,12 @@ public partial class MainWindow : Window
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    // セッション中のアイテム別許可設定。AllowedUsers は ShopItem ごとに in-memory のため
+    // ナビゲーションで再生成されるたびに消えるのを防ぐ。キー = FullPath。
+    private readonly Dictionary<string, (List<string> Users, bool IsReadOnly)> _permissionMap
+        = new(StringComparer.OrdinalIgnoreCase);
+    // 現在フォルダーを基点に祖先を遡って得た有効な許可設定（継承用）。
+    private (List<string> Users, bool IsReadOnly)? _effectiveParentPerm;
     private FileSystemWatcher? _arrivalSensor;
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
@@ -698,9 +704,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        if (item.IsHoldFolder || _currentMode == DisplayMode.FriendShop)
+        {
+            return;
+        }
+
         PermissionWindow window = new(item) { Owner = this };
         if (window.ShowDialog() == true)
         {
+            _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly);
             item.RefreshShareStatus();
         }
     }
@@ -2054,6 +2066,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        if (item.IsDirectory &&
+            _currentMode == DisplayMode.FriendShop &&
+            string.Equals(item.Name, HoldFolderName, StringComparison.OrdinalIgnoreCase))
+        {
+            System.Windows.MessageBox.Show("保留ホルダーは見られません。", "ShareWorkin",
+                System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            return;
+        }
+
         if (item.IsDirectory)
         {
             NavigateTo(item.FullPath, addHistory: true, clearForward: true);
@@ -2271,12 +2292,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        _effectiveParentPerm = FindEffectiveAncestorPermission(_currentFolder);
+
         try
         {
             EnsureHoldFolderForShopChange(notifyWhenRecreated: false);
 
             List<ShopItem> all = Directory.EnumerateDirectories(_currentFolder)
-                .Where(path => !IsHoldFolderPath(path))
+                .Where(path => !IsHoldFolderPath(path) &&
+                               !(_currentMode == DisplayMode.FriendShop &&
+                                 string.Equals(Path.GetFileName(path), HoldFolderName, StringComparison.OrdinalIgnoreCase)))
                 .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
                 .Concat(Directory.EnumerateFiles(_currentFolder)
                     .Select(path => ShopItem.FromPath(path, isDirectory: false)))
@@ -2287,6 +2312,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (item.IsDirectory && _folderSizeCache.TryGetValue(item.FullPath, out long cached))
                 {
                     item.SetSize(cached);
+                }
+
+                if (_permissionMap.TryGetValue(item.FullPath, out var perm))
+                {
+                    foreach (string user in perm.Users) item.AllowedUsers.Add(user);
+                    item.IsReadOnly = perm.IsReadOnly;
+                }
+                else if (!item.IsHoldFolder && _effectiveParentPerm.HasValue)
+                {
+                    foreach (string user in _effectiveParentPerm.Value.Users) item.AllowedUsers.Add(user);
+                    item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
                 }
             }
 
@@ -2533,6 +2569,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ForwardButton.IsEnabled = _forwardStack.Count > 0;
     }
 
+    private (List<string> Users, bool IsReadOnly)? FindEffectiveAncestorPermission(string folderPath)
+    {
+        string? root = GetCurrentRootPath();
+        string? p = folderPath;
+        while (!string.IsNullOrEmpty(p))
+        {
+            if (_permissionMap.TryGetValue(p, out var perm) && (perm.Users.Count > 0 || perm.IsReadOnly))
+                return perm;
+            if (root != null && string.Equals(p, root, StringComparison.OrdinalIgnoreCase))
+                break;
+            string? parent = Path.GetDirectoryName(p);
+            if (parent == null || string.Equals(parent, p, StringComparison.OrdinalIgnoreCase))
+                break;
+            p = parent;
+        }
+        return null;
+    }
+
     private void UpdateBreadcrumb()
     {
         _breadcrumbFullText = BuildRelativeLocationText();
@@ -2578,7 +2632,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void UpdateBreadcrumbDisplay()
     {
         SyncDropdownToCurrentMode();
-        CurrentPathTextBlock.Text = _breadcrumbFullText;
+        CurrentPathTextBlock.Text = string.IsNullOrEmpty(_breadcrumbFullText)
+            ? string.Empty
+            : $"›  {_breadcrumbFullText}";
         CurrentPathTextBlock.ToolTip = string.IsNullOrWhiteSpace(_currentFolder) ? null : _currentFolder;
     }
 
@@ -3305,7 +3361,13 @@ public sealed class ShopItem : INotifyPropertyChanged
     // v2.2 spec freeze, so this is currently in-memory only.
     public ObservableCollection<string> AllowedUsers { get; } = new();
 
-    public string ShareStatusText => AllowedUsers.Count == 0 ? "全員" : "指定";
+    // R suffix = read-only. W is implicit (omitted) when false.
+    public bool IsReadOnly { get; set; }
+
+    public string ShareStatusText => IsHoldFolder ? "非公開"
+        : AllowedUsers.Count == 0
+            ? (IsReadOnly ? "全員R" : "全員")
+            : (IsReadOnly ? "指定R" : "指定");
 
     public void RefreshShareStatus()
     {

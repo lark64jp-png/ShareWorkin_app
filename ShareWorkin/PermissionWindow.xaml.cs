@@ -17,7 +17,11 @@ public partial class PermissionWindow : Window
     {
         InitializeComponent();
         _target = target;
+        Title = $"許可指定  {target.Name}";
         TargetItemTextBlock.Text = target.Name;
+
+        ReadWriteRadio.IsChecked = !target.IsReadOnly;
+        ReadOnlyRadio.IsChecked = target.IsReadOnly;
 
         AllowedListBox.ItemsSource = _allowed;
         UnsetListBox.ItemsSource = _unset;
@@ -73,6 +77,7 @@ public partial class PermissionWindow : Window
     private void OkButton_Click(object sender, RoutedEventArgs e)
     {
         // In-memory commit only. NTFS ACL writes are deferred to v2.2 wiring.
+        _target.IsReadOnly = ReadOnlyRadio.IsChecked == true;
         _target.AllowedUsers.Clear();
         foreach (string name in _allowed)
         {
