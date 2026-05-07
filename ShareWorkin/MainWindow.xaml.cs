@@ -2449,22 +2449,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopPollTimer = null;
     }
 
-    private bool _friendShopPollRunning;
-
-    private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
+    private void FriendShopPollTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
-        if (_friendShopPollRunning) return;
-        _friendShopPollRunning = true;
-        try
-        {
-            RefreshShopItems();
-            await ApplyFriendShopReadOnlyAsync(_currentFolder, ShopItems.ToList());
-        }
-        finally
-        {
-            _friendShopPollRunning = false;
-        }
+        RefreshShopItems();
     }
 
     private static async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items)
@@ -2892,6 +2880,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         NavigateTo(uncPath, addHistory: false, clearForward: true);
+        await ApplyFriendShopReadOnlyAsync(uncPath, ShopItems.ToList());
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)
