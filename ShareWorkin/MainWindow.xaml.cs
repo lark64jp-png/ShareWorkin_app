@@ -2449,10 +2449,49 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopPollTimer = null;
     }
 
-    private void FriendShopPollTimer_Tick(object? sender, EventArgs e)
+    private bool _friendShopPollRunning;
+
+    private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
     {
         if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
-        RefreshShopItems();
+        if (_friendShopPollRunning) return;
+        _friendShopPollRunning = true;
+        try
+        {
+            RefreshShopItems();
+            await ApplyFriendShopReadOnlyAsync(_currentFolder, ShopItems.ToList());
+        }
+        finally
+        {
+            _friendShopPollRunning = false;
+        }
+    }
+
+    private static async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items)
+    {
+        bool folderWritable = await Task.Run(() => ProbeWriteAccess(folder));
+        foreach (ShopItem item in items)
+        {
+            bool isReadOnly = item.IsDirectory
+                ? !await Task.Run(() => ProbeWriteAccess(item.FullPath))
+                : !folderWritable;
+            item.IsReadOnly = isReadOnly;
+        }
+    }
+
+    private static bool ProbeWriteAccess(string path)
+    {
+        if (!Directory.Exists(path)) return false;
+        try
+        {
+            string tmp = Path.Combine(path, $".swk_{Path.GetRandomFileName()}");
+            using var _ = File.Create(tmp, 1, FileOptions.DeleteOnClose);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private IEnumerable<ShopItem> SortShopItems(IEnumerable<ShopItem> items)
