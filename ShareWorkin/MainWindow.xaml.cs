@@ -2518,8 +2518,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Debug($"  {item.Name}: isReadOnly={isReadOnly} prev={prevReadOnly} changed={stateChanged}");
 
             _friendShopReadOnlyState[item.FullPath] = isReadOnly;
+            bool itemChanged = item.IsReadOnly != isReadOnly;
             item.IsReadOnly = isReadOnly;
-            if (stateChanged)
+            if (itemChanged)
                 await Dispatcher.InvokeAsync(item.RefreshShareStatus);
             if (!silent && stateChanged)
                 anyChanged = true;
