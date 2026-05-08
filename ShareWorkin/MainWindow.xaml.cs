@@ -2544,8 +2544,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             List<ShopItem> hiddenOff = _friendShopReadOnlyState
                 .Where(kv => kv.Value.IsSharedOff)
                 .Select(kv => kv.Key)
-                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase) &&
-                               Directory.Exists(path))
+                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
                 .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
                 .ToList();
             List<ShopItem> allItems = [.. ShopItems, .. hiddenOff];
@@ -2566,11 +2565,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static bool IsDirectoryWritable(string path)
     {
-        if (!Directory.Exists(path))
-        {
-            SwkLogger.Debug($"IsDirectoryWritable: not found: {path}");
-            return false;
-        }
         const uint GENERIC_WRITE = 0x40000000;
         const uint FILE_SHARE_ALL = 7;
         const uint OPEN_EXISTING = 3;
@@ -2588,7 +2582,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static bool IsDirectoryReadable(string path)
     {
-        if (!Directory.Exists(path)) return false;
         const uint GENERIC_READ = 0x80000000;
         const uint FILE_SHARE_ALL = 7;
         const uint OPEN_EXISTING = 3;

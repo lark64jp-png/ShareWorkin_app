@@ -68,10 +68,14 @@ const
   SETTINGS_FILE = 'settings.json';
   SECURE_FILE = 'secure.dat';
   FRIENDS_FILE = 'friends.json';
+  PERMISSIONS_FILE = 'permissions.json';
+  INVITES_FILE = 'invites.json';
   HOLD_DIR = 'hold';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
   SECURE_BACKUP_FILE = 'ShareWorkin_secure_backup.dat';
   FRIENDS_BACKUP_FILE = 'ShareWorkin_friends_backup.json';
+  PERMISSIONS_BACKUP_FILE = 'ShareWorkin_permissions_backup.json';
+  INVITES_BACKUP_FILE = 'ShareWorkin_invites_backup.json';
   HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
   RUNTIME_REG_KEY = 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
@@ -134,6 +138,16 @@ begin
   Result := ExpandConstant('{tmp}\' + HOLD_BACKUP_DIR);
 end;
 
+function PermissionsBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + PERMISSIONS_BACKUP_FILE);
+end;
+
+function InvitesBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + INVITES_BACKUP_FILE);
+end;
+
 function FindExistingFile(FileName: String; var FoundPath: String): Boolean;
 begin
   Result := False;
@@ -192,6 +206,8 @@ begin
   DeleteFile(SettingsBackupPath());
   DeleteFile(SecureBackupPath());
   DeleteFile(FriendsBackupPath());
+  DeleteFile(PermissionsBackupPath());
+  DeleteFile(InvitesBackupPath());
   DelTree(HoldBackupPath(), True, True, True);
 
   if FindExistingFile(SETTINGS_FILE, Source) then
@@ -200,6 +216,10 @@ begin
     CopyFile(Source, SecureBackupPath(), False);
   if FindExistingFile(FRIENDS_FILE, Source) then
     CopyFile(Source, FriendsBackupPath(), False);
+  if FindExistingFile(PERMISSIONS_FILE, Source) then
+    CopyFile(Source, PermissionsBackupPath(), False);
+  if FindExistingFile(INVITES_FILE, Source) then
+    CopyFile(Source, InvitesBackupPath(), False);
   if FindExistingDirectory(HOLD_DIR, Source) then
     CopyDirectoryContents(Source, HoldBackupPath());
 end;
@@ -224,6 +244,16 @@ begin
   begin
     CopyFile(FriendsBackupPath(), AppDir + '\' + FRIENDS_FILE, False);
     DeleteFile(FriendsBackupPath());
+  end;
+  if FileExists(PermissionsBackupPath()) then
+  begin
+    CopyFile(PermissionsBackupPath(), AppDir + '\' + PERMISSIONS_FILE, False);
+    DeleteFile(PermissionsBackupPath());
+  end;
+  if FileExists(InvitesBackupPath()) then
+  begin
+    CopyFile(InvitesBackupPath(), AppDir + '\' + INVITES_FILE, False);
+    DeleteFile(InvitesBackupPath());
   end;
   if DirExists(HoldBackupPath()) then
   begin
