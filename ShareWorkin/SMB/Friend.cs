@@ -42,6 +42,12 @@ public sealed class Friend
     [JsonPropertyName("addedAt")]
     public string AddedAt { get; set; } = string.Empty;
 
+    // 招待を承認した時点で店主の自己署名証明書サムプリント(SHA-256)を保存し、
+    // 以降の TLS 接続時に一致を要求する(TOFU)。
+    // 既存 friends.json に存在しない場合は空文字で読み込まれる(System.Text.Json 既定)。
+    [JsonPropertyName("ownerCertThumbprint")]
+    public string OwnerCertThumbprint { get; set; } = string.Empty;
+
     [JsonPropertyName("lastSeenAt")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LastSeenAt { get; set; }

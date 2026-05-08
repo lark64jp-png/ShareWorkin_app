@@ -6,10 +6,15 @@ using System.Text.Json.Serialization;
 
 namespace ShareWorkin.SMB;
 
+/// <summary>
+/// 手動招待コードのペイロード。
+/// v1.13 から: 機密値(パスワード等)は含めず、招待 ID と接続先情報のみ。
+/// 実際のパスワードは TLS 経路で店主の承認を得て取得する。
+/// </summary>
 public sealed class InviteTokenPayload
 {
     [JsonPropertyName("v")]
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
 
     [JsonPropertyName("host")]
     public string HostMachineName { get; set; } = string.Empty;
@@ -20,9 +25,6 @@ public sealed class InviteTokenPayload
     [JsonPropertyName("user")]
     public string UserName { get; set; } = "swkguest";
 
-    [JsonPropertyName("pass")]
-    public string Password { get; set; } = string.Empty;
-
     [JsonPropertyName("access")]
     public string AccessLevel { get; set; } = "Full";
 
@@ -31,6 +33,11 @@ public sealed class InviteTokenPayload
 
     [JsonPropertyName("issued")]
     public string IssuedAt { get; set; } = string.Empty;
+
+    // 招待 ID。店主側 InviteRegistry に「未使用」で記録され、
+    // TLS 交換時に検証 + 使用済みマークされる(一回性)。
+    [JsonPropertyName("inviteId")]
+    public string InviteId { get; set; } = string.Empty;
 }
 
 public static class InviteToken
@@ -39,6 +46,8 @@ public static class InviteToken
     private const int NonceSize = 12;
     private const int TagSize = 16;
 
+    // 改ざん検出のため AES-GCM タグを使う。鍵はバイナリに固定値で埋め込む。
+    // Password を含めないため、鍵漏洩時のリスクは「招待トポロジーの一時的露出」に留まる。
     private static readonly byte[] SharedKey =
     {
         0x53, 0x68, 0x61, 0x72, 0x65, 0x57, 0x6F, 0x72,
@@ -130,6 +139,12 @@ public static class InviteToken
             if (payload is null)
             {
                 error = "招待コードの中身を読み取れません。";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(payload.InviteId))
+            {
+                // v1 形式(InviteId なし・Password 入り)で発行された旧コードはサポート外。
+                error = "古い形式の招待コードはご利用になれません。新しい招待コードを発行してもらってください。";
                 return false;
             }
             return true;

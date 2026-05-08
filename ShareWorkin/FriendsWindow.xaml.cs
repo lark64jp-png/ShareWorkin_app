@@ -516,18 +516,16 @@ public partial class FriendsWindow : Window
             _cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
 
             var listener = new SwkNotificationListener();
-            var result = await listener.RequestInviteCodeAsync(_activeShopInfo!, _cancellationTokenSource.Token);
+            // 接続先変更も再登録扱い: 既存サムプリントは捨てて新たに TOFU。
+            var result = await listener.RequestInviteCodeAsync(
+                _activeShopInfo!,
+                inviteId: null,
+                expectedThumbprint: null,
+                _cancellationTokenSource.Token);
 
-            if (result.errorMessage != null)
+            if (!result.Success)
             {
-                StatusTextBlock.Text = $"接続先の変更に失敗しました: {result.errorMessage}";
-                OkButton.IsEnabled = true;
-                return;
-            }
-
-            if (string.IsNullOrEmpty(result.inviteCode) || string.IsNullOrEmpty(result.password))
-            {
-                StatusTextBlock.Text = "招待コードを取得できませんでした。";
+                StatusTextBlock.Text = $"接続先の変更に失敗しました: {result.ErrorMessage ?? "招待コードを取得できませんでした。"}";
                 OkButton.IsEnabled = true;
                 return;
             }
@@ -539,7 +537,8 @@ public partial class FriendsWindow : Window
             target.IconKey = _pendingIconKey;
             target.HostMachineName = _activeShopInfo!.MachineName;
             target.ShareName = _activeShopInfo.ShareName;
-            target.PasswordProtected = FriendsRepository.ProtectPassword(result.password);
+            target.PasswordProtected = FriendsRepository.ProtectPassword(result.Password!);
+            target.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
             target.LastKnownAddress = _activeShopInfo.IpAddress ?? string.Empty;
             target.LastFoundAt = nowIso;
             target.LastCheckedAt = nowIso;
@@ -585,18 +584,16 @@ public partial class FriendsWindow : Window
             _cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
 
             var listener = new SwkNotificationListener();
-            var result = await listener.RequestInviteCodeAsync(_activeShopInfo!, _cancellationTokenSource.Token);
+            // 新規登録は TOFU: 受信した自己署名証明書のサムプリントを Friend に保存。
+            var result = await listener.RequestInviteCodeAsync(
+                _activeShopInfo!,
+                inviteId: null,
+                expectedThumbprint: null,
+                _cancellationTokenSource.Token);
 
-            if (result.errorMessage != null)
+            if (!result.Success)
             {
-                StatusTextBlock.Text = $"登録に失敗しました: {result.errorMessage}";
-                OkButton.IsEnabled = true;
-                return;
-            }
-
-            if (string.IsNullOrEmpty(result.inviteCode) || string.IsNullOrEmpty(result.password))
-            {
-                StatusTextBlock.Text = "招待コードを取得できませんでした。";
+                StatusTextBlock.Text = $"登録に失敗しました: {result.ErrorMessage ?? "招待コードを取得できませんでした。"}";
                 OkButton.IsEnabled = true;
                 return;
             }
@@ -609,7 +606,8 @@ public partial class FriendsWindow : Window
                 HostMachineName = _activeShopInfo!.MachineName,
                 ShareName = _activeShopInfo.ShareName,
                 UserName = "swkguest",
-                PasswordProtected = FriendsRepository.ProtectPassword(result.password),
+                PasswordProtected = FriendsRepository.ProtectPassword(result.Password!),
+                OwnerCertThumbprint = result.CertThumbprint ?? string.Empty,
                 AccessLevel = "Full",
                 ProfileLabel = string.Empty,
                 AddedAt = nowIso,

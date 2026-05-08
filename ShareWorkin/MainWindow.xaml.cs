@@ -796,6 +796,39 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         dialog.ShowDialog();
     }
 
+    // 招待コード要求が来たときに呼ばれる承認ハンドラー。
+    // Broadcaster の TCP 受信スレッドから呼ばれるため、UI スレッドへ切り替えてダイアログを出す。
+    // 「Yes/No が選ばれるまで返らない」ことが一回性の鍵: 承認後にだけ MarkUsed が走る。
+    private Task<bool> HandleInviteApprovalAsync(SwkNotificationBroadcaster.InviteApprovalRequest request)
+    {
+        return Dispatcher.InvokeAsync(() =>
+        {
+            string body;
+            if (request.IsManualInvite)
+            {
+                string label = string.IsNullOrWhiteSpace(request.InviteLabel) ? "(不明)" : request.InviteLabel!;
+                body =
+                    $"「{request.ClientMachineName}」が招待コードを使ってお店『{label}』に入ろうとしています。\n" +
+                    "招待を受け付けますか?";
+            }
+            else
+            {
+                body =
+                    $"「{request.ClientMachineName}」がお店に入ろうとしています。\n" +
+                    "招待コードなしの飛び込みです。承認しますか?";
+            }
+
+            MessageBoxResult res = System.Windows.MessageBox.Show(
+                this,
+                body,
+                "接続の申請",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.No);
+            return res == MessageBoxResult.Yes;
+        }).Task;
+    }
+
     private NotificationMode GetSelectedNotificationMode()
     {
         if (NotificationModeComboBox.SelectedItem is ComboBoxItem { Tag: string tag } &&
@@ -1771,7 +1804,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
         try
         {
-            result = SmbController.OpenShopSequence(request);
+            result = SmbController.OpenShopSequence(request, onInviteRequested: HandleInviteApprovalAsync);
         }
         finally
         {
@@ -1802,7 +1835,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                result = SmbController.OpenShopSequence(request, userAuthorizedOwnershipChange: true);
+                result = SmbController.OpenShopSequence(request, userAuthorizedOwnershipChange: true, onInviteRequested: HandleInviteApprovalAsync);
             }
             finally
             {

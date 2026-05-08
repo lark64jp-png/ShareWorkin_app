@@ -29,6 +29,21 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 
     public int ListeningPort => _listeningPort;
 
+    /// <summary>
+    /// 招待コード要求を受け取ったとき、店主に承認を求めるコールバック。
+    /// 戻り値: true=承認, false=拒否。null の場合は自動拒否(コールバック未設定)。
+    /// </summary>
+    public Func<InviteApprovalRequest, Task<bool>>? OnInviteRequested { get; set; }
+
+    public sealed class InviteApprovalRequest
+    {
+        public required string ClientMachineName { get; init; }
+        // 手動招待コード経由なら InviteRegistry の Label、LAN 発見経由なら null。
+        public string? InviteLabel { get; init; }
+        // true=店主が事前に発行した手動コード経由、false=LAN 発見経由(飛び込み)。
+        public bool IsManualInvite { get; init; }
+    }
+
     public SwkNotificationBroadcaster(string shareName)
     {
         _shareName = shareName ?? throw new ArgumentNullException(nameof(shareName));
@@ -162,6 +177,13 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         {
             string? requestedShare = requestDoc.RootElement.GetProperty("shareName").GetString();
             string? clientMachine = requestDoc.RootElement.GetProperty("clientMachineName").GetString();
+            string? inviteId = null;
+            if (requestDoc.RootElement.TryGetProperty("inviteId", out var idElem))
+            {
+                inviteId = idElem.GetString();
+            }
+
+            string clientLabel = string.IsNullOrWhiteSpace(clientMachine) ? "不明な端末" : clientMachine!;
 
             if (requestedShare != _shareName)
             {
@@ -171,6 +193,58 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                     ErrorMessage = $"Share '{requestedShare}' not found"
                 };
                 await WriteJsonAsync(stream, errorResponse, cancellationToken);
+                return;
+            }
+
+            // 手動招待コード経由の場合は InviteRegistry で照合する。
+            InviteRegistry.InviteRecord? matchedInvite = null;
+            bool isManual = !string.IsNullOrWhiteSpace(inviteId);
+            if (isManual)
+            {
+                matchedInvite = InviteRegistry.FindUnused(inviteId!, _shareName);
+                if (matchedInvite is null)
+                {
+                    var invalidResponse = new SwkNotificationProtocol.InviteCodeResponse
+                    {
+                        Result = "InviteIdInvalid",
+                        ErrorMessage = "招待コードが見つからないか、既に使用済みです。"
+                    };
+                    await WriteJsonAsync(stream, invalidResponse, cancellationToken);
+                    SwkLogger.Warn($"Invite code request rejected: invalid/used inviteId from {clientLabel}");
+                    return;
+                }
+            }
+
+            // 店主に承認を求める(コールバック未設定なら自動拒否)。
+            bool approved = false;
+            if (OnInviteRequested != null)
+            {
+                var approvalRequest = new InviteApprovalRequest
+                {
+                    ClientMachineName = clientLabel,
+                    InviteLabel = matchedInvite?.Label,
+                    IsManualInvite = isManual,
+                };
+                try
+                {
+                    approved = await OnInviteRequested(approvalRequest);
+                }
+                catch (Exception ex)
+                {
+                    SwkLogger.Warn($"OnInviteRequested callback threw: {ex.Message}");
+                    approved = false;
+                }
+            }
+
+            if (!approved)
+            {
+                var deniedResponse = new SwkNotificationProtocol.InviteCodeResponse
+                {
+                    Result = "Denied",
+                    ErrorMessage = "店主が承認しませんでした。"
+                };
+                await WriteJsonAsync(stream, deniedResponse, cancellationToken);
+                SwkLogger.Info($"Invite request from {clientLabel} was denied by owner");
                 return;
             }
 
@@ -186,15 +260,31 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 return;
             }
 
+            // 承認後、手動コード経由なら使用済みにマーク(一回性)。
+            if (isManual && matchedInvite is not null)
+            {
+                if (!InviteRegistry.MarkUsed(matchedInvite.Id, clientLabel))
+                {
+                    // 競合などで失敗した場合は安全側に倒す。
+                    var raceResponse = new SwkNotificationProtocol.InviteCodeResponse
+                    {
+                        Result = "InviteIdUsed",
+                        ErrorMessage = "招待コードは別の端末で使用されました。"
+                    };
+                    await WriteJsonAsync(stream, raceResponse, cancellationToken);
+                    SwkLogger.Warn($"Invite race detected for id={matchedInvite.Id}");
+                    return;
+                }
+            }
+
             var successResponse = new SwkNotificationProtocol.InviteCodeResponse
             {
                 Result = "Ok",
-                InviteCode = "SWK1.auto",
                 Password = password
             };
             await WriteJsonAsync(stream, successResponse, cancellationToken);
 
-            SwkLogger.Info($"Sent invite code to {clientMachine} for share '{_shareName}'");
+            SwkLogger.Info($"Sent invite code to {clientLabel} for share '{_shareName}' (manual={isManual})");
         }
         catch (Exception ex)
         {

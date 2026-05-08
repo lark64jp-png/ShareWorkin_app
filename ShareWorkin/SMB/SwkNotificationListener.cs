@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -194,18 +195,32 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         }
     }
 
+    public sealed class InviteCodeResult
+    {
+        public string? Password { get; init; }
+        public string? CertThumbprint { get; init; }
+        public string? ErrorMessage { get; init; }
+        public bool Success => string.IsNullOrEmpty(ErrorMessage) && !string.IsNullOrEmpty(Password);
+    }
+
     /// <summary>
-    /// 発見済みのお店に対して招待コードを要求する
-    /// Broadcaster は接続直後に ShopNotification を送るので、先にそれを受信してから InviteCodeRequest を送る
+    /// 発見済みのお店に対して招待コードを要求する。
+    /// inviteId が非 null = 手動招待コード経由(店主側で InviteRegistry 照合 + 一回性)。
+    /// expectedThumbprint が非 null = 既存 Friend の TLS ピン留め検証(不一致なら失敗)。
+    /// expectedThumbprint が null = 初回 TOFU(成功した接続の証明書サムプリントを返す)。
     /// </summary>
-    public async Task<(string? inviteCode, string? password, string? errorMessage)> RequestInviteCodeAsync(
+    public async Task<InviteCodeResult> RequestInviteCodeAsync(
         ShopInfo shop,
+        string? inviteId,
+        string? expectedThumbprint,
         CancellationToken cancellationToken)
     {
+        string? capturedThumbprint = null;
+
         try
         {
             string connectTarget = shop.IpAddress ?? shop.MachineName;
-            SwkLogger.Info($"RequestInviteCodeAsync: connecting to {shop.MachineName}({connectTarget}):{shop.Port}");
+            SwkLogger.Info($"RequestInviteCodeAsync: connecting to {shop.MachineName}({connectTarget}):{shop.Port} (manual={inviteId != null}, pinned={expectedThumbprint != null})");
 
             using var client = new TcpClient();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -218,7 +233,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 SwkLogger.Warn($"RequestInviteCodeAsync: TCP connect timed out to {shop.MachineName}({connectTarget}):{shop.Port}");
-                return (null, null, "接続タイムアウト");
+                return new InviteCodeResult { ErrorMessage = "接続タイムアウト" };
             }
 
             using var sslStream = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
@@ -226,14 +241,57 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             {
                 TargetHost = shop.MachineName,
                 EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13,
-                RemoteCertificateValidationCallback = (s, c, ch, p) => true,
+                RemoteCertificateValidationCallback = (s, cert, ch, errors) =>
+                {
+                    if (cert is null) return false;
+
+                    // サムプリントを取り出す(self-signed なので chain/errors は無視)。
+                    string thumb;
+                    try
+                    {
+                        thumb = cert is X509Certificate2 c2
+                            ? c2.Thumbprint
+                            : new X509Certificate2(cert).Thumbprint;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+
+                    capturedThumbprint = thumb;
+
+                    if (string.IsNullOrEmpty(expectedThumbprint))
+                    {
+                        // 初回 TOFU: 任意の自己署名を受け入れて、後で Friend に保存する。
+                        return true;
+                    }
+
+                    bool match = string.Equals(thumb, expectedThumbprint, StringComparison.OrdinalIgnoreCase);
+                    if (!match)
+                    {
+                        SwkLogger.Warn($"TLS pinning mismatch for {shop.MachineName}: expected={expectedThumbprint} got={thumb}");
+                    }
+                    return match;
+                },
             };
-            await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
+
+            try
+            {
+                await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
+            }
+            catch (System.Security.Authentication.AuthenticationException)
+            {
+                return new InviteCodeResult
+                {
+                    CertThumbprint = capturedThumbprint,
+                    ErrorMessage = "店主の証明書が以前と違います。乗っ取りの可能性があるため接続を中止しました。"
+                };
+            }
 
             // Broadcaster は接続直後に ShopNotification を送るので、先に受信する
             string? notificationJson = await ReadJsonAsync(sslStream, cancellationToken);
             if (string.IsNullOrEmpty(notificationJson))
-                return (null, null, "応答なし");
+                return new InviteCodeResult { CertThumbprint = capturedThumbprint, ErrorMessage = "応答なし" };
 
             SwkLogger.Debug($"RequestInviteCodeAsync: received ShopNotification from {shop.MachineName}/{shop.ShareName}");
 
@@ -241,14 +299,15 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             var request = new SwkNotificationProtocol.InviteCodeRequest
             {
                 ShareName = shop.ShareName,
-                ClientMachineName = Environment.MachineName
+                ClientMachineName = Environment.MachineName,
+                InviteId = inviteId,
             };
             await WriteJsonAsync(sslStream, request, cancellationToken);
 
             // InviteCodeResponse を受信
             string? responseJson = await ReadJsonAsync(sslStream, cancellationToken);
             if (string.IsNullOrEmpty(responseJson))
-                return (null, null, "応答なし");
+                return new InviteCodeResult { CertThumbprint = capturedThumbprint, ErrorMessage = "応答なし" };
 
             using JsonDocument doc = JsonDocument.Parse(responseJson);
             string? result = doc.RootElement.GetProperty("result").GetString();
@@ -258,19 +317,30 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 string? errorMsg = null;
                 if (doc.RootElement.TryGetProperty("errorMessage", out var errorElement))
                     errorMsg = errorElement.GetString();
-                return (null, null, errorMsg ?? result);
+                return new InviteCodeResult
+                {
+                    CertThumbprint = capturedThumbprint,
+                    ErrorMessage = errorMsg ?? result
+                };
             }
 
-            string? inviteCode = doc.RootElement.GetProperty("inviteCode").GetString();
             string? password = doc.RootElement.GetProperty("password").GetString();
 
             SwkLogger.Info($"Received invite code from {shop.MachineName}/{shop.ShareName}");
-            return (inviteCode, password, null);
+            return new InviteCodeResult
+            {
+                Password = password,
+                CertThumbprint = capturedThumbprint,
+            };
         }
         catch (Exception ex)
         {
             SwkLogger.Warn($"RequestInviteCodeAsync failed: {ex.Message}");
-            return (null, null, ex.Message);
+            return new InviteCodeResult
+            {
+                CertThumbprint = capturedThumbprint,
+                ErrorMessage = ex.Message
+            };
         }
     }
 

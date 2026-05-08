@@ -23,8 +23,9 @@ public partial class InviteDialog : Window
 
     private void GenerateToken()
     {
-        string? password = SecureStorage.Get(SecureStorage.KeySwkGuestPassword);
-        if (string.IsNullOrWhiteSpace(password))
+        // 招待コードはお店の鍵を必要としない(パスワードは TLS 経路で別途渡る)が、
+        // 開店していない状況で発行できないようにここで確認する。
+        if (string.IsNullOrWhiteSpace(SecureStorage.Get(SecureStorage.KeySwkGuestPassword)))
         {
             HintTextBlock.Text = "招待コードを作れませんでした。";
             TokenTextBox.Text = string.Empty;
@@ -33,19 +34,21 @@ public partial class InviteDialog : Window
             return;
         }
 
+        string accessLevel = _accessRight == ShareAccessRight.Read ? "Read" : "Full";
+
+        // InviteRegistry に未使用として記録し、招待 ID を払い出す。
+        // この ID を相手が使うときに店主の承認ダイアログが立ち上がる仕組み。
+        string inviteId = InviteRegistry.Issue(_shareName, _shareName, accessLevel);
+
         InviteTokenPayload payload = new()
         {
-            // Invitation is one-way: the shop owner says "please come".
-            // This is not a visitor-side request or approval workflow.
             HostMachineName = Environment.MachineName,
             ShareName = _shareName,
             UserName = SmbAccountManager.AccountName,
-            // Current v1.04 uses one shared shop key. Rotating it affects every
-            // already-invited visitor, so future reset/reissue must be explicit.
-            Password = password,
-            AccessLevel = _accessRight == ShareAccessRight.Read ? "Read" : "Full",
+            AccessLevel = accessLevel,
             ProfileLabel = _shareName,
             IssuedAt = DateTime.UtcNow.ToString("o"),
+            InviteId = inviteId,
         };
 
         try
@@ -65,6 +68,7 @@ public partial class InviteDialog : Window
         HintTextBlock.Text =
             $"お店『{_shareName}』への招待コードです。\n" +
             "「コピー」でクリップボードに貼り付け、メールやチャットでお友達に送ってください。\n" +
+            "お友達が取り込もうとしたとき、こちらに承認の確認が出ます。\n" +
             "「シートで保存」を押すと、テキストファイルとして書き出せます。";
         TokenTextBox.Text = _tokenString;
     }

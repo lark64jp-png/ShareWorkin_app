@@ -34,6 +34,8 @@ public static class SwkNotificationProtocol
 
     /// <summary>
     /// お友達側が送信：招待コードをください、という要求
+    /// inviteId が空の場合は LAN 発見経由(その場で店主の承認を求める)、
+    /// inviteId が空でない場合は手動コード経由(店主側の InviteRegistry で照合 + 承認)。
     /// </summary>
     public sealed class InviteCodeRequest
     {
@@ -45,11 +47,15 @@ public static class SwkNotificationProtocol
 
         [JsonPropertyName("clientMachineName")]
         public required string ClientMachineName { get; set; }
+
+        [JsonPropertyName("inviteId")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? InviteId { get; set; }
     }
 
     /// <summary>
-    /// 店主側が応答：招待コード（と平文パスワード）をお友達に渡す
-    /// result が "Ok" の場合のみ inviteCode/password を含める
+    /// 店主側が応答：パスワードをお友達に渡す
+    /// result が "Ok" の場合のみ password を含める
     /// </summary>
     public sealed class InviteCodeResponse
     {
@@ -57,11 +63,7 @@ public static class SwkNotificationProtocol
         public string Type => "InviteCodeResponse";
 
         [JsonPropertyName("result")]
-        public required string Result { get; set; } // "Ok" / "ShopClosed" / "NotFound" / "Denied"
-
-        [JsonPropertyName("inviteCode")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? InviteCode { get; set; }
+        public required string Result { get; set; } // "Ok" / "ShopClosed" / "NotFound" / "Denied" / "InviteIdInvalid" / "InviteIdUsed"
 
         [JsonPropertyName("password")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
