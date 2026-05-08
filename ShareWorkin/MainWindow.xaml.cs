@@ -77,6 +77,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _friendShopPollTimer;
     private string? _shopFolder;
     private string? _currentFolder;
+    private string? _activeFriendShopRootPath;
     private string? _lastNotificationFolder;
     private string? _pendingFocusName;
     private ShopItem? _dropTargetItem;
@@ -1613,6 +1614,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         CancelFolderSizeCalculation();
         _currentMode = DisplayMode.Hold;
         _activeFriendShop = null;
+        _activeFriendShopRootPath = null;
         NavigateTo(GetHoldFolderPath(), addHistory: addHistory, clearForward: true);
     }
 
@@ -1626,6 +1628,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         CancelFolderSizeCalculation();
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
+        _activeFriendShopRootPath = null;
 
         if (_isShopOpen && !string.IsNullOrWhiteSpace(_shopFolder) && Directory.Exists(_shopFolder))
         {
@@ -1922,6 +1925,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (string.Equals(Path.GetFileName(dir), HoldFolderName, StringComparison.OrdinalIgnoreCase)) continue;
                 SmbNtfsManager.ResetPathToInherited(dir);
             }
+            if (Dispatcher.CheckAccess())
+                PublishPermissionManifest();
+            else
+                Dispatcher.Invoke(PublishPermissionManifest);
         }
 
         if (runInBackground)
@@ -1964,6 +1971,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             DisposeContentsWatcher();
             _currentFolder = null;
+            _activeFriendShopRootPath = null;
             _backStack.Clear();
             _forwardStack.Clear();
             ShopItems.Clear();
@@ -2403,11 +2411,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             _currentMode = DisplayMode.Hold;
             _activeFriendShop = null;
+            _activeFriendShopRootPath = null;
         }
         else
         {
             _currentMode = DisplayMode.Shop;
             _activeFriendShop = null;
+            _activeFriendShopRootPath = null;
         }
     }
 
@@ -2442,6 +2452,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         _effectiveParentPerm = FindEffectiveAncestorPermission(_currentFolder);
+        ShopPermissionManifest? friendPermissionManifest = LoadFriendPermissionManifest();
 
         try
         {
@@ -2455,6 +2466,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                                  _friendShopReadOnlyState.TryGetValue(path, out var cached) && cached.IsSharedOff))
                 .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
                 .Concat(Directory.EnumerateFiles(_currentFolder)
+                    .Where(path => !string.Equals(Path.GetFileName(path), ShopPermissionManifest.FileName, StringComparison.OrdinalIgnoreCase))
                     .Select(path => ShopItem.FromPath(path, isDirectory: false)))
                 .ToList();
 
@@ -2473,6 +2485,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                         item.IsReadOnly = prevState.IsReadOnly;
                         item.IsSharedOff = prevState.IsSharedOff;
                     }
+                    ApplyFriendPermissionManifest(item, friendPermissionManifest);
                 }
                 else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
@@ -2502,6 +2515,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
             foreach (ShopItem item in sorted)
             {
+                if (_currentMode == DisplayMode.FriendShop && item.IsSharedOff)
+                {
+                    continue;
+                }
                 ShopItems.Add(item);
             }
 
@@ -2521,6 +2538,73 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             StartFolderSizeCalculation();
         }
+    }
+
+    private ShopPermissionManifest? LoadFriendPermissionManifest()
+    {
+        if (_currentMode != DisplayMode.FriendShop)
+        {
+            return null;
+        }
+
+        string? root = GetCurrentRootPath();
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+        {
+            return null;
+        }
+
+        return ShopPermissionManifest.Load(root);
+    }
+
+    private void ApplyFriendPermissionManifest(ShopItem item, ShopPermissionManifest? manifest)
+    {
+        if (manifest is null)
+        {
+            return;
+        }
+
+        string? root = GetCurrentRootPath();
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return;
+        }
+
+        string relativePath = ToRelativeShopPath(root, item.FullPath);
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return;
+        }
+
+        ShopPermissionManifestEntry? entry = manifest.FindEffectiveEntry(relativePath);
+        if (entry is null)
+        {
+            return;
+        }
+
+        bool isAllowed = IsCurrentMachineAllowed(entry);
+        if (entry.IsSharedOff || !isAllowed)
+        {
+            item.IsSharedOff = true;
+            item.IsReadOnly = false;
+            return;
+        }
+
+        item.IsSharedOff = false;
+        item.IsReadOnly = entry.IsReadOnly;
+    }
+
+    private static bool IsCurrentMachineAllowed(ShopPermissionManifestEntry entry)
+    {
+        if (entry.AllowedMachineNames.Count == 0 && entry.Users.Count == 0)
+        {
+            return true;
+        }
+
+        string machineName = Environment.MachineName;
+        return entry.AllowedMachineNames.Any(name =>
+                   string.Equals(name, machineName, StringComparison.OrdinalIgnoreCase)) ||
+               entry.Users.Any(name =>
+                   string.Equals(name, machineName, StringComparison.OrdinalIgnoreCase));
     }
 
     private void StartFriendShopPolling()
@@ -2965,7 +3049,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private string? GetCurrentRootPath()
     {
         if (_currentMode == DisplayMode.FriendShop && _activeFriendShop != null)
-            return _activeFriendShop.ConnectUncPath;
+            return string.IsNullOrWhiteSpace(_activeFriendShopRootPath)
+                ? _activeFriendShop.ConnectUncPath
+                : _activeFriendShopRootPath;
         return string.IsNullOrWhiteSpace(_shopFolder) ? null : Path.GetFullPath(_shopFolder);
     }
 
@@ -3038,6 +3124,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (target.Friend == null)
         {
             _activeFriendShop = null;
+            _activeFriendShopRootPath = null;
             EnterShopMode();
         }
         else
@@ -3052,6 +3139,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Debug($"NavigateToFriendShopAsync: {label} ({friend.ConnectUncPath})");
 
         _activeFriendShop = friend;
+        _activeFriendShopRootPath = null;
         _currentMode = DisplayMode.FriendShop;
         CancelFolderSizeCalculation();
         DisposeContentsWatcher();
@@ -3078,6 +3166,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             uncPath = $@"\\{liveShop.IpAddress}\{friend.ShareName}";
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={uncPath}");
+        _activeFriendShopRootPath = uncPath;
 
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
         bool accessible = await Task.Run(() =>
@@ -3573,8 +3662,105 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 IsSharedOff = kv.Value.IsSharedOff
             }).ToList();
             File.WriteAllText(PermissionsPath, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+            PublishPermissionManifest();
         }
         catch (IOException) { }
+    }
+
+    private void PublishPermissionManifest()
+    {
+        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
+        {
+            return;
+        }
+
+        try
+        {
+            string root = Path.GetFullPath(_shopFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+            List<ShopPermissionManifestEntry> entries = [];
+
+            foreach (var (path, (users, isReadOnly, isSharedOff)) in _permissionMap)
+            {
+                if (!IsUnderFolder(path, root) || IsHoldFolderPath(path))
+                {
+                    continue;
+                }
+
+                string relativePath = ToRelativeShopPath(root, path);
+                if (string.IsNullOrWhiteSpace(relativePath))
+                {
+                    continue;
+                }
+
+                List<string> allowedMachines = ResolveAllowedMachineNames(users, friends);
+                entries.Add(new ShopPermissionManifestEntry
+                {
+                    RelativePath = relativePath,
+                    Users = users.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                    AllowedMachineNames = allowedMachines,
+                    IsReadOnly = isReadOnly,
+                    IsSharedOff = isSharedOff
+                });
+            }
+
+            ShopPermissionManifest.Save(root, entries);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            SwkLogger.Warn($"PublishPermissionManifest failed: {ex.Message}");
+        }
+    }
+
+    private static List<string> ResolveAllowedMachineNames(IReadOnlyList<string> users, IReadOnlyList<Friend> friends)
+    {
+        HashSet<string> result = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string user in users)
+        {
+            if (string.IsNullOrWhiteSpace(user))
+            {
+                continue;
+            }
+
+            foreach (Friend friend in friends)
+            {
+                string display = string.IsNullOrWhiteSpace(friend.DisplayName)
+                    ? friend.HostMachineName
+                    : friend.DisplayName;
+                if (string.Equals(user, display, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(user, friend.HostMachineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(friend.HostMachineName))
+                    {
+                        result.Add(friend.HostMachineName);
+                    }
+                }
+            }
+
+            result.Add(user);
+        }
+
+        return result.ToList();
+    }
+
+    private static string ToRelativeShopPath(string root, string path)
+    {
+        string normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string normalizedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (string.Equals(normalizedRoot, normalizedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        if (normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedPath[(normalizedRoot.Length + 1)..].Replace('/', '\\');
+        }
+
+        return string.Empty;
     }
 
     private void LoadPermissionMap()
@@ -3734,8 +3920,7 @@ public sealed class ShopItem : INotifyPropertyChanged
     public string KindText => IsDirectory ? "フォルダー" : "ファイル";
 
     // Per-item sharing state. Empty list = 全員, non-empty = 指定.
-    // The list holds nicknames as shown in 許可指定; ACL wiring is deferred to
-    // v2.2 spec freeze, so this is currently in-memory only.
+    // 指定は店主側の友達名を保持し、ShareWorkin 同士の表示制御用 manifest へ出力する。
     public ObservableCollection<string> AllowedUsers { get; } = new();
 
     // R suffix = read-only. W is implicit (omitted) when false.

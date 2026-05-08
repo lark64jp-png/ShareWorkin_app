@@ -13,10 +13,12 @@ public partial class PermissionWindow : Window
     private readonly ShopItem _target;
     private readonly ObservableCollection<string> _allowed = new();
     private readonly ObservableCollection<string> _unset = new();
+    private bool _isInitializing;
 
     public PermissionWindow(ShopItem target)
     {
         InitializeComponent();
+        _isInitializing = true;
         _target = target;
         Title = $"許可指定  {target.Name}";
         TargetItemTextBlock.Text = target.Name;
@@ -33,16 +35,17 @@ public partial class PermissionWindow : Window
             _allowed.Add(user);
         }
 
-        HashSet<string> already = new(_allowed, StringComparer.OrdinalIgnoreCase);
-        foreach (Friend f in FriendsRepository.LoadAll())
-        {
-            string name = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
-            if (string.IsNullOrWhiteSpace(name) || already.Contains(name)) continue;
-            _unset.Add(name);
-        }
+        ReloadUnsetUsers();
 
         _allowed.CollectionChanged += (_, _) => UpdateOverlay();
         _unset.CollectionChanged += (_, _) => UpdateUnsetOverlay();
+        _isInitializing = false;
+        if (SharedOffRadio.IsChecked == true)
+        {
+            _allowed.Clear();
+            ReloadUnsetUsers();
+        }
+        ApplyAccessLevelUiState();
         UpdateOverlay();
         UpdateUnsetOverlay();
     }
@@ -55,6 +58,43 @@ public partial class PermissionWindow : Window
     private void UpdateUnsetOverlay()
     {
         UnsetOverlay.Visibility = _unset.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AccessLevelRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        if (SharedOffRadio.IsChecked == true)
+        {
+            _allowed.Clear();
+            ReloadUnsetUsers();
+        }
+
+        ApplyAccessLevelUiState();
+    }
+
+    private void ApplyAccessLevelUiState()
+    {
+        bool canSpecifyUsers = SharedOffRadio.IsChecked != true;
+        AllowedListBox.IsEnabled = canSpecifyUsers;
+        UnsetListBox.IsEnabled = canSpecifyUsers;
+        MoveLeftButton.IsEnabled = canSpecifyUsers;
+        MoveRightButton.IsEnabled = canSpecifyUsers;
+    }
+
+    private void ReloadUnsetUsers()
+    {
+        _unset.Clear();
+        HashSet<string> already = new(_allowed, StringComparer.OrdinalIgnoreCase);
+        foreach (Friend f in FriendsRepository.LoadAll())
+        {
+            string name = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
+            if (string.IsNullOrWhiteSpace(name) || already.Contains(name)) continue;
+            _unset.Add(name);
+        }
     }
 
     private void MoveLeftButton_Click(object sender, RoutedEventArgs e) => MoveUnsetToAllowed();
