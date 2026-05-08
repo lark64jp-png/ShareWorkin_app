@@ -18,7 +18,7 @@ public partial class PermissionWindow : Window
     {
         InitializeComponent();
         _target = target;
-        Title = $"共有設定  {target.Name}";
+        Title = $"許可指定  {target.Name}";
         TargetItemTextBlock.Text = target.Name;
 
         ReadWriteRadio.IsChecked = !target.IsReadOnly && !target.IsSharedOff;
@@ -28,10 +28,16 @@ public partial class PermissionWindow : Window
         AllowedListBox.ItemsSource = _allowed;
         UnsetListBox.ItemsSource = _unset;
 
+        foreach (string user in target.AllowedUsers)
+        {
+            _allowed.Add(user);
+        }
+
+        HashSet<string> already = new(_allowed, StringComparer.OrdinalIgnoreCase);
         foreach (Friend f in FriendsRepository.LoadAll())
         {
             string name = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
-            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (string.IsNullOrWhiteSpace(name) || already.Contains(name)) continue;
             _unset.Add(name);
         }
 
@@ -85,9 +91,11 @@ public partial class PermissionWindow : Window
     {
         _target.IsSharedOff = SharedOffRadio.IsChecked == true;
         _target.IsReadOnly = ReadOnlyRadio.IsChecked == true;
-        // v1.13 keeps the live ACL surface to 全員 / 読みのみ / OFF.
-        // Per-friend selection needs per-friend credentials before it can be honest.
         _target.AllowedUsers.Clear();
+        foreach (string name in _allowed)
+        {
+            _target.AllowedUsers.Add(name);
+        }
 
         DialogResult = true;
         Close();
