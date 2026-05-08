@@ -169,7 +169,7 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
     }
 
-    // SDK 既定で InformationalVersion に "+<full git sha>" が付く。SHAは7文字に短縮し、
+    // InformationalVersion の "+<git sha>[.dirty]" を短く表示する。
     // SHAが付かないビルド（git なし環境）では "v<ver>" だけ返す。
     private static string FormatVersionLabel(string? ver)
     {
@@ -177,9 +177,12 @@ public partial class MainWindow : Window
         int plus = ver.IndexOf('+');
         if (plus < 0) return $"v{ver}";
         string baseVer = ver[..plus];
-        string sha = ver[(plus + 1)..];
+        string metadata = ver[(plus + 1)..];
+        bool dirty = metadata.Contains("dirty", StringComparison.OrdinalIgnoreCase);
+        string sha = metadata.Split('.')[0];
         if (sha.Length > 7) sha = sha[..7];
-        return string.IsNullOrEmpty(sha) ? $"v{baseVer}" : $"v{baseVer}+{sha}";
+        if (string.IsNullOrEmpty(sha)) return $"v{baseVer}";
+        return dirty ? $"v{baseVer}+{sha}-dirty" : $"v{baseVer}+{sha}";
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -734,7 +737,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionWindow window = new(item) { Owner = this };
         if (window.ShowDialog() == true)
         {
-            _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly, item.IsSharedOff);
+            // v1.13 keeps the applied Windows ACL states limited to 全員 / 読みのみ / OFF.
+            // Stored per-friend names from older trials are intentionally not applied.
+            item.AllowedUsers.Clear();
+            _permissionMap[item.FullPath] = ([], item.IsReadOnly, item.IsSharedOff);
             if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
             {
                 if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
@@ -2429,13 +2435,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 }
                 else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
-                    foreach (string user in perm.Users) item.AllowedUsers.Add(user);
                     item.IsReadOnly = perm.IsReadOnly;
                     item.IsSharedOff = perm.IsSharedOff;
                 }
                 else if (!item.IsHoldFolder && _effectiveParentPerm.HasValue)
                 {
-                    foreach (string user in _effectiveParentPerm.Value.Users) item.AllowedUsers.Add(user);
                     item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
                     item.IsSharedOff = _effectiveParentPerm.Value.IsSharedOff;
                 }
@@ -2833,8 +2837,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? p = folderPath;
         while (!string.IsNullOrEmpty(p))
         {
-            if (_permissionMap.TryGetValue(p, out var perm) && (perm.Users.Count > 0 || perm.IsReadOnly || perm.IsSharedOff))
-                return perm;
+            if (_permissionMap.TryGetValue(p, out var perm) && (perm.IsReadOnly || perm.IsSharedOff))
+                return ([], perm.IsReadOnly, perm.IsSharedOff);
             if (root != null && string.Equals(p, root, StringComparison.OrdinalIgnoreCase))
                 break;
             string? parent = Path.GetDirectoryName(p);
@@ -3486,7 +3490,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             var entries = _permissionMap.Select(kv => new PermissionEntry
             {
                 Path = kv.Key,
-                Users = kv.Value.Users,
+                Users = [],
                 IsReadOnly = kv.Value.IsReadOnly,
                 IsSharedOff = kv.Value.IsSharedOff
             }).ToList();
@@ -3506,7 +3510,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             foreach (var e in entries)
             {
                 if (!string.IsNullOrEmpty(e.Path))
-                    _permissionMap[e.Path] = (e.Users ?? [], e.IsReadOnly, e.IsSharedOff);
+                    _permissionMap[e.Path] = ([], e.IsReadOnly, e.IsSharedOff);
             }
         }
         catch { }
@@ -3665,9 +3669,7 @@ public sealed class ShopItem : INotifyPropertyChanged
 
     public string ShareStatusText => IsHoldFolder ? "非公開"
         : IsSharedOff ? "OFF"
-        : AllowedUsers.Count == 0
-            ? (IsReadOnly ? "全員R" : "全員")
-            : (IsReadOnly ? "指定R" : "指定");
+        : (IsReadOnly ? "全員R" : "全員");
 
     public void RefreshShareStatus()
     {
