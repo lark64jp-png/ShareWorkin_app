@@ -24,5 +24,6 @@ This folder is Codex's project memory area for ShareWorkin.
 
 - `.codex/memory/working_rules.md`
 - `.codex/memory/collaboration_support_role.md`
+- `.codex/memory/share_permission_model_rules.md`
 - `.codex/memory/v1.13_share_permission_notes.md`
 - `_works/_app制作基準_草案6.md`
