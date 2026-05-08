@@ -723,9 +723,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PopulateExplorerDropdown();
     }
 
-    private void ShareStatusButton_Click(object sender, RoutedEventArgs e)
+    private async void ShareStatusButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.Button { Tag: ShopItem item })
+        if (sender is not System.Windows.Controls.Button button || button.Tag is not ShopItem item)
         {
             return;
         }
@@ -741,15 +741,31 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (window.ShowDialog() == true)
             {
                 StorePermission(item);
-                if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
-                {
-                    if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
-                        SetTransientStatus("権限の設定に失敗しました。");
-                    else
-                        _ = SmbController.BroadcastPermissionChangedAsync();
-                }
                 SavePermissionMap();
                 item.RefreshShareStatus();
+
+                if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
+                {
+                    string path = item.FullPath;
+                    bool isSharedOff = item.IsSharedOff;
+                    bool isReadOnly = item.IsReadOnly;
+
+                    button.IsEnabled = false;
+                    Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                    try
+                    {
+                        bool ok = await Task.Run(() => SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly));
+                        if (!ok)
+                            SetTransientStatus("権限の設定に失敗しました。");
+                        else
+                            _ = SmbController.BroadcastPermissionChangedAsync();
+                    }
+                    finally
+                    {
+                        Mouse.OverrideCursor = null;
+                        button.IsEnabled = true;
+                    }
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
