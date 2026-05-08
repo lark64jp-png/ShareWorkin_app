@@ -43,23 +43,30 @@ public sealed class ShopPermissionManifest
 
     public static bool Save(string shopRootPath, IEnumerable<ShopPermissionManifestEntry> entries)
     {
+        string path = Path.Combine(shopRootPath, FileName);
         try
         {
             Directory.CreateDirectory(shopRootPath);
-            string path = Path.Combine(shopRootPath, FileName);
             ShopPermissionManifest manifest = new()
             {
                 GeneratedAt = DateTime.UtcNow.ToString("o"),
                 Entries = entries.ToList()
             };
             string json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+
+            if (File.Exists(path))
+            {
+                File.SetAttributes(path, File.GetAttributes(path) & ~(FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly));
+            }
+
             File.WriteAllText(path, json);
             File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden | FileAttributes.System);
+            SwkLogger.Info($"ShopPermissionManifest.Save ok: entries={manifest.Entries.Count}");
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            SwkLogger.Warn($"ShopPermissionManifest.Save failed: {ex.Message}");
+            SwkLogger.Warn($"ShopPermissionManifest.Save failed: {path} ({ex.Message})");
             return false;
         }
     }

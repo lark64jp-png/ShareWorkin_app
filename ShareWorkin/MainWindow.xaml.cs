@@ -3756,7 +3756,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 });
             }
 
-            ShopPermissionManifest.Save(root, entries);
+            if (!ShopPermissionManifest.Save(root, entries))
+            {
+                SetTransientStatus("共有設定の配布情報を保存できませんでした。");
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
