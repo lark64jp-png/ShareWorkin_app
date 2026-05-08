@@ -216,6 +216,9 @@ public static class SmbController
         return ok;
     }
 
+    public static Task BroadcastPermissionChangedAsync()
+        => _broadcaster?.BroadcastPermissionChangedAsync() ?? Task.CompletedTask;
+
     private static ShopOpenResult Fail(string message, SmbLayerStatus before, SmbLayerStatus? after)
     {
         SwkLogger.Warn($"OpenShopSequence failed: {message}");

@@ -745,6 +745,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
                     SetTransientStatus("権限の設定に失敗しました。");
+                else
+                    _ = SmbController.BroadcastPermissionChangedAsync();
             }
             SavePermissionMap();
             item.RefreshShareStatus();
@@ -2519,6 +2521,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopPollTimer = new DispatcherTimer { Interval = PollingInterval };
         _friendShopPollTimer.Tick += FriendShopPollTimer_Tick;
         _friendShopPollTimer.Start();
+        StartFriendShopPermissionListener(_activeFriendShop?.HostMachineName ?? "");
     }
 
     private void StopFriendShopPolling()
@@ -2527,11 +2530,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopPollTimer.Stop();
         _friendShopPollTimer.Tick -= FriendShopPollTimer_Tick;
         _friendShopPollTimer = null;
+        StopFriendShopPermissionListener();
     }
 
     private bool _friendShopPollRunning;
+    private CancellationTokenSource? _friendShopNotifCts;
 
     private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
+        => await RunFriendShopPollAsync();
+
+    private async Task RunFriendShopPollAsync()
     {
         if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
         if (_friendShopPollRunning) return;
@@ -2554,6 +2562,42 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             _friendShopPollRunning = false;
         }
+    }
+
+    private void StartFriendShopPermissionListener(string friendMachineName)
+    {
+        _friendShopNotifCts?.Cancel();
+        _friendShopNotifCts = new CancellationTokenSource();
+        var token = _friendShopNotifCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var udp = new System.Net.Sockets.UdpClient();
+                udp.Client.SetSocketOption(System.Net.Sockets.SocketOptionLevel.Socket, System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+                udp.Client.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, SwkNotificationBroadcaster.UdpDiscoveryPort));
+                SwkLogger.Debug($"FriendShop permission listener started for {friendMachineName}");
+                while (!token.IsCancellationRequested)
+                {
+                    var recv = await udp.ReceiveAsync(token);
+                    string json = System.Text.Encoding.UTF8.GetString(recv.Buffer);
+                    if (!json.Contains("\"SharePermissionChanged\"")) continue;
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    if (!doc.RootElement.TryGetProperty("machineName", out var mn)) continue;
+                    if (!string.Equals(mn.GetString(), friendMachineName, StringComparison.OrdinalIgnoreCase)) continue;
+                    SwkLogger.Info($"SharePermissionChanged received from {friendMachineName}: triggering immediate poll");
+                    await Dispatcher.InvokeAsync(() => _ = RunFriendShopPollAsync());
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { SwkLogger.Debug($"FriendShop permission listener error: {ex.Message}"); }
+        }, token);
+    }
+
+    private void StopFriendShopPermissionListener()
+    {
+        _friendShopNotifCts?.Cancel();
+        _friendShopNotifCts = null;
     }
 
 

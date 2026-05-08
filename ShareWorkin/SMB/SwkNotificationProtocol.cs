@@ -75,6 +75,22 @@ public static class SwkNotificationProtocol
     }
 
     /// <summary>
+    /// 店主側が共有制限を変更したときに LAN 全体へブロードキャストする通知。
+    /// 受信した友達側は即座に状態確認を行う。
+    /// </summary>
+    public sealed class SharePermissionChanged
+    {
+        [JsonPropertyName("type")]
+        public string Type => "SharePermissionChanged";
+
+        [JsonPropertyName("machineName")]
+        public required string MachineName { get; set; }
+
+        [JsonPropertyName("shareName")]
+        public required string ShareName { get; set; }
+    }
+
+    /// <summary>
     /// 店主側がお友達の登録を確認し、逆方向に通知を送る
     /// </summary>
     public sealed class VisitorNotification

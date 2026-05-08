@@ -387,6 +387,30 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 共有制限が変わったことを LAN 全体へブロードキャストする（fire-and-forget）。
+    /// </summary>
+    public async Task BroadcastPermissionChangedAsync()
+    {
+        try
+        {
+            using var udp = new UdpClient();
+            udp.EnableBroadcast = true;
+            var msg = new SwkNotificationProtocol.SharePermissionChanged
+            {
+                MachineName = Environment.MachineName,
+                ShareName = _shareName
+            };
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(msg));
+            await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Broadcast, UdpDiscoveryPort));
+            SwkLogger.Debug("BroadcastPermissionChangedAsync sent");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"BroadcastPermissionChangedAsync error: {ex.Message}");
+        }
+    }
+
     private static X509Certificate2 CreateSelfSignedCertificate()
     {
         using var rsa = RSA.Create(2048);
