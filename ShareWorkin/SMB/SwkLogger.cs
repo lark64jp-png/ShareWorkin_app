@@ -32,7 +32,7 @@ public static class SwkLogger
     public static void Error(string message) => Write(SwkLogLevel.Error, message);
 
     public static void Error(string message, Exception ex)
-        => Write(SwkLogLevel.Error, $"{message} :: {ex.GetType().Name}: {ex.Message}");
+        => Write(SwkLogLevel.Error, $"{message} :: {ex}");
 
     private static void Write(SwkLogLevel level, string message)
     {

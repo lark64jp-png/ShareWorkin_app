@@ -13,7 +13,7 @@ public partial class PermissionWindow : Window
     private readonly ShopItem _target;
     private readonly ObservableCollection<string> _allowed = new();
     private readonly ObservableCollection<string> _unset = new();
-    private bool _isInitializing;
+    private bool _isInitializing = true;
 
     public PermissionWindow(ShopItem target)
     {
