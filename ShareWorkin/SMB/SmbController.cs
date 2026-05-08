@@ -66,32 +66,25 @@ public static class SmbController
             return Fail("お店の鍵が用意できませんでした。", before, null);
         }
 
-        // 草案6 §A: 所有権が現ユーザーに無い場合、破壊的操作の前に「触らずに確かめる」。
-        // CanModifyAcl が false なら IsolateShopRoot は必ず失敗するため、事前検査と同意取得を挟む。
-        if (!SmbNtfsManager.CanModifyAcl(request.ShopRootPath))
+        // 草案6 §A: 所有権が現ユーザーに無い項目が配下に混ざる場合も、
+        // 開店時点でお店の管理下へ揃えるために同意取得を挟む。
+        AclRepairPreflight aclRepair = SmbNtfsManager.PreflightAclRepair(request.ShopRootPath);
+        if (aclRepair.NeedsOwnershipChange)
         {
-            TakeOwnershipPreflight preflight = SmbNtfsManager.PreflightTakeOwnership(request.ShopRootPath);
+            OwnershipChangePrompt prompt = aclRepair.EnumerationBlocked
+                ? OwnershipChangePrompt.Unverifiable
+                : OwnershipChangePrompt.Verified;
 
-            // 内包全件OK: 標準同意ダイアログを出す経路
-            // 列挙不能: 事前確認できないが所有権書き換えで救える可能性がある経路(別文言)
-            // それ以外(個別不能項目あり): 救済不可として停止
-            OwnershipChangePrompt prompt = preflight switch
+            if (!aclRepair.CanRepairWithOwnershipChange)
             {
-                { AllAccessible: true } => OwnershipChangePrompt.Verified,
-                { EnumerationBlocked: true } => OwnershipChangePrompt.Unverifiable,
-                _ => OwnershipChangePrompt.None,
-            };
-
-            if (prompt == OwnershipChangePrompt.None)
-            {
-                SwkLogger.Warn($"OpenShopSequence aborted: {preflight.BlockedPaths.Count} item(s) cannot have ownership changed");
+                SwkLogger.Warn($"OpenShopSequence aborted: {aclRepair.BlockedPaths.Count} item(s) cannot have ownership changed");
                 return new ShopOpenResult(
                     Succeeded: false,
-                    FailureMessage: "このフォルダーの一部のファイルは所有者を変更できないため、お店として開けません。",
+                    FailureMessage: "このフォルダーの一部のファイルはアクセス設定を整えられないため、お店として開けません。",
                     StatusBefore: before,
                     StatusAfter: null,
                     OwnershipPrompt: OwnershipChangePrompt.None,
-                    BlockedPaths: preflight.BlockedPaths);
+                    BlockedPaths: aclRepair.BlockedPaths);
             }
 
             if (!userAuthorizedOwnershipChange)
@@ -109,8 +102,14 @@ public static class SmbController
             SwkLogger.Info("OpenShopSequence: user authorized ownership change, executing takeown");
             if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
             {
-                return Fail("所有者の変更に失敗しました。", before, null);
+                return Fail("お店のアクセス設定を整えられませんでした。", before, null);
             }
+        }
+
+        SwkLogger.Info("OpenShopSequence: aligning ownership to current user");
+        if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
+        {
+            return Fail("お店のアクセス設定を整えられませんでした。", before, null);
         }
 
         if (!SmbNtfsManager.IsolateShopRoot(request.ShopRootPath))

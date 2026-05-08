@@ -1815,8 +1815,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (result.OwnershipPrompt != OwnershipChangePrompt.None)
         {
             string consentBody = result.OwnershipPrompt == OwnershipChangePrompt.Unverifiable
-                ? "このフォルダーは現在の権限では中身を確認できません。\n所有者を変更してから処理を進めますか?\n※内包されたデータがある場合、すべて公開されます。"
-                : "このフォルダーを利用するには、所有者の変更が必要です。\n※内包されたデータがある場合、すべて公開されます。";
+                ? "このフォルダーは現在の設定では中身を確認できません。\nお店として使えるようにアクセス設定を整えますか?\n※内包されたデータがある場合、すべて公開されます。"
+                : "このフォルダーをお店として使えるように、アクセス設定を整えますか?\n※内包されたデータがある場合、すべて公開されます。";
 
             MessageBoxResult consent = System.Windows.MessageBox.Show(
                 this,
@@ -1888,7 +1888,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _wasOpenAtLastShutdown = true;
         SaveSettings();
 
-        ReapplyPermissionMapToNtfs(_shopFolder);
+        ReapplyPermissionMapToNtfs(_shopFolder, runInBackground: false);
 
         UpdateShopState(true);
         if (_currentMode == DisplayMode.Shop)
@@ -1897,7 +1897,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void ReapplyPermissionMapToNtfs(string shopRoot)
+    private void ReapplyPermissionMapToNtfs(string shopRoot, bool runInBackground = true)
     {
         if (string.IsNullOrEmpty(shopRoot)) return;
         string root = shopRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -1905,7 +1905,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         var snapshot = _permissionMap
             .Where(kv => kv.Key.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
-        _ = Task.Run(() =>
+        void Apply()
         {
             if (!Directory.Exists(root)) return;
             // permissionMap に記録済みのフォルダは保存状態を適用
@@ -1920,9 +1920,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 if (snapshot.ContainsKey(dir)) continue;
                 if (string.Equals(Path.GetFileName(dir), HoldFolderName, StringComparison.OrdinalIgnoreCase)) continue;
-                SmbNtfsManager.SetSubfolderPermission(dir, false, false);
+                SmbNtfsManager.ResetPathToInherited(dir);
             }
-        });
+        }
+
+        if (runInBackground)
+        {
+            _ = Task.Run(Apply);
+        }
+        else
+        {
+            Apply();
+        }
     }
 
     private void CloseShop(bool removeSmbShare = true)

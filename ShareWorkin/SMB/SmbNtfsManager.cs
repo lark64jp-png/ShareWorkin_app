@@ -13,6 +13,12 @@ public sealed record TakeOwnershipPreflight(
     bool EnumerationBlocked,
     IReadOnlyList<string> BlockedPaths);
 
+public sealed record AclRepairPreflight(
+    bool NeedsOwnershipChange,
+    bool CanRepairWithOwnershipChange,
+    bool EnumerationBlocked,
+    IReadOnlyList<string> BlockedPaths);
+
 public static class SmbNtfsManager
 {
     private const string SidSystem = "*S-1-5-18";
@@ -125,16 +131,82 @@ public static class SmbNtfsManager
         return new TakeOwnershipPreflight(ok, enumerationBlocked, blocked.ToList());
     }
 
-    public static bool TakeOwnershipRecursive(string shopRootPath)
+    public static AclRepairPreflight PreflightAclRepair(string shopRootPath)
     {
         ArgumentException.ThrowIfNullOrEmpty(shopRootPath);
+        HashSet<string> needsOwnership = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> blocked = new(StringComparer.OrdinalIgnoreCase);
+        bool enumerationBlocked = false;
+
         if (!Directory.Exists(shopRootPath))
         {
-            SwkLogger.Warn($"TakeOwnershipRecursive skipped: path not found ({shopRootPath})");
+            blocked.Add(shopRootPath);
+            return new AclRepairPreflight(false, false, false, blocked.ToList());
+        }
+
+        CheckAclRepairTarget(shopRootPath, needsOwnership, blocked);
+
+        EnumerationOptions opts = new()
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = false,
+            AttributesToSkip = 0,
+            ReturnSpecialDirectories = false,
+        };
+
+        try
+        {
+            foreach (string entry in Directory.EnumerateFileSystemEntries(shopRootPath, "*", opts))
+            {
+                CheckAclRepairTarget(entry, needsOwnership, blocked);
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            SwkLogger.Warn($"PreflightAclRepair enumeration denied: {ex.Message}");
+            enumerationBlocked = true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Error("PreflightAclRepair enumeration error", ex);
+            enumerationBlocked = true;
+        }
+
+        bool needsOwnershipChange = needsOwnership.Count > 0 || enumerationBlocked;
+        bool canRepair = blocked.Count == 0;
+        SwkLogger.Info(
+            $"PreflightAclRepair: needsOwnership={needsOwnershipChange}, canRepair={canRepair}, enumBlocked={enumerationBlocked}, blockedCount={blocked.Count}");
+        return new AclRepairPreflight(needsOwnershipChange, canRepair, enumerationBlocked, blocked.ToList());
+    }
+
+    private static void CheckAclRepairTarget(string path, ISet<string> needsOwnership, ISet<string> blocked)
+    {
+        if (CanModifyAcl(path))
+        {
+            return;
+        }
+
+        needsOwnership.Add(path);
+        if (!CanTakeOwnership(path))
+        {
+            blocked.Add(path);
+        }
+    }
+
+    public static bool TakeOwnershipRecursive(string shopRootPath)
+        => TakeOwnershipPath(shopRootPath);
+
+    public static bool TakeOwnershipPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        bool isDirectory = Directory.Exists(path);
+        if (!isDirectory && !File.Exists(path))
+        {
+            SwkLogger.Warn($"TakeOwnershipPath skipped: path not found ({path})");
             return false;
         }
 
-        SwkLogger.Info($"TakeOwnershipRecursive start: {shopRootPath}");
+        SwkLogger.Info($"TakeOwnershipPath start: {path}");
 
         ProcessStartInfo psi = new()
         {
@@ -145,10 +217,13 @@ public static class SmbNtfsManager
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("/F");
-        psi.ArgumentList.Add(shopRootPath);
-        psi.ArgumentList.Add("/R");
-        psi.ArgumentList.Add("/D");
-        psi.ArgumentList.Add("Y");
+        psi.ArgumentList.Add(path);
+        if (isDirectory)
+        {
+            psi.ArgumentList.Add("/R");
+            psi.ArgumentList.Add("/D");
+            psi.ArgumentList.Add("Y");
+        }
 
         try
         {
@@ -164,7 +239,7 @@ public static class SmbNtfsManager
             }
             if (process.ExitCode == 0)
             {
-                SwkLogger.Info("TakeOwnershipRecursive ok");
+                SwkLogger.Info("TakeOwnershipPath ok");
                 return true;
             }
             SwkLogger.Warn($"takeown failed: exit={process.ExitCode}, stderr={stderr.Trim()}, stdout={stdout.Trim()}");
@@ -239,16 +314,22 @@ public static class SmbNtfsManager
     public static bool SetSubfolderPermission(string subfolderPath, bool isSharedOff, bool isReadOnly)
     {
         ArgumentException.ThrowIfNullOrEmpty(subfolderPath);
-        if (!Directory.Exists(subfolderPath))
+        if (!Directory.Exists(subfolderPath) && !File.Exists(subfolderPath))
         {
             SwkLogger.Warn($"SetSubfolderPermission skipped: path not found ({subfolderPath})");
+            return false;
+        }
+
+        if (!TakeOwnershipPath(subfolderPath))
+        {
+            SwkLogger.Warn($"SetSubfolderPermission: ownership repair failed ({subfolderPath})");
             return false;
         }
 
         if (!isSharedOff && !isReadOnly)
         {
             SwkLogger.Info($"SetSubfolderPermission reset (全員): {subfolderPath}");
-            return RunIcacls(new[] { subfolderPath, "/reset" }, "Reset to inherited");
+            return ResetPathToInherited(subfolderPath);
         }
 
         string? ownerSid;
@@ -267,7 +348,16 @@ public static class SmbNtfsManager
             return false;
         }
 
-        if (!RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance")) return false;
+        if (Directory.Exists(subfolderPath) &&
+            !RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance"))
+        {
+            return false;
+        }
+        if (File.Exists(subfolderPath) &&
+            !RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance"))
+        {
+            return false;
+        }
         if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidSystem}:{PermFull}" }, "Grant SYSTEM")) return false;
         if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidAdministrators}:{PermFull}" }, "Grant Admins")) return false;
         if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"*{ownerSid}:{PermFull}" }, "Grant Owner")) return false;
@@ -275,11 +365,59 @@ public static class SmbNtfsManager
         if (isReadOnly && !isSharedOff)
         {
             SwkLogger.Info($"SetSubfolderPermission read-only: {subfolderPath}");
-            return RunIcacls(new[] { subfolderPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{PermReadOnly}" }, "Grant swkguest read-only");
+            if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{PermReadOnly}" }, "Grant swkguest read-only"))
+            {
+                return false;
+            }
+
+            return ResetChildrenToInherited(subfolderPath);
         }
 
         SwkLogger.Info($"SetSubfolderPermission shared-off: {subfolderPath}");
-        return true;
+        return ResetChildrenToInherited(subfolderPath);
+    }
+
+    public static bool ResetPathToInherited(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        if (!Directory.Exists(path) && !File.Exists(path))
+        {
+            SwkLogger.Warn($"ResetPathToInherited skipped: path not found ({path})");
+            return false;
+        }
+
+        SwkLogger.Info($"ResetPathToInherited: {path}");
+        List<string> args = [path, "/reset"];
+        if (Directory.Exists(path))
+        {
+            args.Add("/T");
+        }
+
+        return RunIcacls(args, "Reset path to inherited");
+    }
+
+    private static bool ResetChildrenToInherited(string folderPath)
+    {
+        if (!Directory.Exists(folderPath))
+        {
+            return true;
+        }
+
+        bool ok = true;
+        try
+        {
+            foreach (string entry in Directory.EnumerateFileSystemEntries(folderPath))
+            {
+                ok = ResetPathToInherited(entry) && ok;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Warn($"ResetChildrenToInherited failed: {folderPath} ({ex.Message})");
+            return false;
+        }
+
+        return ok;
     }
 
     public static bool RevokeSwkGuest(string shopRootPath)
@@ -329,7 +467,7 @@ public static class SmbNtfsManager
 
             string stdout = process.StandardOutput.ReadToEnd();
             string stderr = process.StandardError.ReadToEnd();
-            if (!process.WaitForExit(15000))
+            if (!process.WaitForExit(120000))
             {
                 try { process.Kill(true); } catch { }
                 SwkLogger.Warn($"icacls timeout: {label}");
