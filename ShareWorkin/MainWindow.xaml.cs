@@ -735,20 +735,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        PermissionWindow window = new(item) { Owner = this };
-        if (window.ShowDialog() == true)
+        try
         {
-            _permissionMap[item.FullPath] = (item.AllowedUsers.ToList(), item.IsReadOnly, item.IsSharedOff);
-            if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
+            PermissionWindow window = new(item) { Owner = this };
+            if (window.ShowDialog() == true)
             {
-                if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
-                    SetTransientStatus("権限の設定に失敗しました。");
-                else
-                    _ = SmbController.BroadcastPermissionChangedAsync();
+                StorePermission(item);
+                if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
+                {
+                    if (!SmbNtfsManager.SetSubfolderPermission(item.FullPath, item.IsSharedOff, item.IsReadOnly))
+                        SetTransientStatus("権限の設定に失敗しました。");
+                    else
+                        _ = SmbController.BroadcastPermissionChangedAsync();
+                }
+                SavePermissionMap();
+                item.RefreshShareStatus();
             }
-            SavePermissionMap();
-            item.RefreshShareStatus();
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            SwkLogger.Error("Share permission UI failed", ex);
+            SetTransientStatus("共有設定を変更できませんでした。");
+        }
+    }
+
+    private void StorePermission(ShopItem item)
+    {
+        List<string> users = item.AllowedUsers
+            .Where(user => !string.IsNullOrWhiteSpace(user))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (users.Count == 0 && !item.IsReadOnly && !item.IsSharedOff)
+        {
+            _permissionMap.Remove(item.FullPath);
+            return;
+        }
+
+        _permissionMap[item.FullPath] = (users, item.IsReadOnly, item.IsSharedOff);
     }
 
     private void UpdateSidebar(bool isOpen)
@@ -3654,17 +3678,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         try
         {
-            var entries = _permissionMap.Select(kv => new PermissionEntry
-            {
-                Path = kv.Key,
-                Users = kv.Value.Users,
-                IsReadOnly = kv.Value.IsReadOnly,
-                IsSharedOff = kv.Value.IsSharedOff
-            }).ToList();
+            var entries = _permissionMap
+                .Where(kv => kv.Value.Users.Count > 0 || kv.Value.IsReadOnly || kv.Value.IsSharedOff)
+                .Select(kv => new PermissionEntry
+                {
+                    Path = kv.Key,
+                    Users = kv.Value.Users,
+                    IsReadOnly = kv.Value.IsReadOnly,
+                    IsSharedOff = kv.Value.IsSharedOff
+                }).ToList();
             File.WriteAllText(PermissionsPath, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
             PublishPermissionManifest();
         }
-        catch (IOException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            SwkLogger.Warn($"SavePermissionMap failed: {ex.Message}");
+            SetTransientStatus("共有設定を保存できませんでした。");
+        }
     }
 
     private void PublishPermissionManifest()
@@ -3683,6 +3713,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             foreach (var (path, (users, isReadOnly, isSharedOff)) in _permissionMap)
             {
+                if (users.Count == 0 && !isReadOnly && !isSharedOff)
+                {
+                    continue;
+                }
+
                 if (!IsUnderFolder(path, root) || IsHoldFolderPath(path))
                 {
                     continue;
@@ -3774,7 +3809,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             foreach (var e in entries)
             {
                 if (!string.IsNullOrEmpty(e.Path))
-                    _permissionMap[e.Path] = (e.Users ?? [], e.IsReadOnly, e.IsSharedOff);
+                {
+                    List<string> users = e.Users ?? [];
+                    if (users.Count == 0 && !e.IsReadOnly && !e.IsSharedOff)
+                    {
+                        continue;
+                    }
+                    _permissionMap[e.Path] = (users, e.IsReadOnly, e.IsSharedOff);
+                }
             }
         }
         catch { }
