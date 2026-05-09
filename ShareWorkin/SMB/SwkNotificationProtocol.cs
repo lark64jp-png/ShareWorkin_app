@@ -91,6 +91,25 @@ public static class SwkNotificationProtocol
     }
 
     /// <summary>
+    /// 店主側がお店を閉じるときに LAN 全体へ事前通知するメッセージ。
+    /// 受信した友達側は即座にキャッシュからそのお店を削除し、表示を更新する。
+    /// </summary>
+    public sealed class ShopClosing
+    {
+        [JsonPropertyName("type")]
+        public string Type => "ShopClosing";
+
+        [JsonPropertyName("shopMachineName")]
+        public required string ShopMachineName { get; set; }
+
+        [JsonPropertyName("shareName")]
+        public required string ShareName { get; set; }
+
+        [JsonPropertyName("issuedAt")]
+        public required string IssuedAt { get; set; }
+    }
+
+    /// <summary>
     /// 店主側がお友達の登録を確認し、逆方向に通知を送る
     /// </summary>
     public sealed class VisitorNotification

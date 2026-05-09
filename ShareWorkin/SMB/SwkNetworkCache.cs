@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -36,6 +37,19 @@ public static class SwkNetworkCache
             _lastScanMode = mode;
         }
         SwkLogger.Info($"SwkNetworkCache updated: candidates={candidates.Count} shopInfos={shopInfos.Count} mode={mode}");
+    }
+
+    public static void RemoveShop(string machineName, string shareName)
+    {
+        lock (_lock)
+        {
+            var updated = _shopInfos
+                .Where(s => !(string.Equals(s.MachineName, machineName, StringComparison.OrdinalIgnoreCase) &&
+                              string.Equals(s.ShareName, shareName, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            _shopInfos = updated;
+        }
+        SwkLogger.Info($"SwkNetworkCache.RemoveShop: {machineName}/{shareName}");
     }
 
     public static async Task RefreshAsync(ScanMode mode, CancellationToken ct = default)

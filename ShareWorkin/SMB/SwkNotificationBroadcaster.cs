@@ -35,6 +35,12 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     /// </summary>
     public Func<InviteApprovalRequest, Task<bool>>? OnInviteRequested { get; set; }
 
+    /// <summary>
+    /// 他店から ShopClosing を受信したときのコールバック。
+    /// 引数: machineName, shareName
+    /// </summary>
+    public Action<string, string>? OnShopClosingReceived { get; set; }
+
     public sealed class InviteApprovalRequest
     {
         public required string ClientMachineName { get; init; }
@@ -326,6 +332,25 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                         await udp.SendAsync(responseBytes, result.RemoteEndPoint, cancellationToken);
                         SwkLogger.Debug($"UDP probe response sent to {result.RemoteEndPoint}: port={_listeningPort}");
                     }
+                    else if (msg.Contains("\"ShopClosing\""))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(msg);
+                            string? closingMachine = doc.RootElement.GetProperty("shopMachineName").GetString();
+                            string? closingShare = doc.RootElement.GetProperty("shareName").GetString();
+                            if (!string.IsNullOrEmpty(closingMachine) && !string.IsNullOrEmpty(closingShare))
+                            {
+                                SwkNetworkCache.RemoveShop(closingMachine, closingShare);
+                                OnShopClosingReceived?.Invoke(closingMachine, closingShare);
+                                SwkLogger.Info($"ShopClosing received: {closingMachine}/{closingShare}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            SwkLogger.Debug($"ShopClosing parse error: {ex.Message}");
+                        }
+                    }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
@@ -384,6 +409,31 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         catch (Exception ex)
         {
             SwkLogger.Debug($"SendUdpBroadcastAsync error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// お店を閉じる直前に LAN 全体へ通知する。
+    /// </summary>
+    public async Task BroadcastShopClosingAsync()
+    {
+        try
+        {
+            using var udp = new UdpClient();
+            udp.EnableBroadcast = true;
+            var msg = new SwkNotificationProtocol.ShopClosing
+            {
+                ShopMachineName = Environment.MachineName,
+                ShareName = _shareName,
+                IssuedAt = DateTime.UtcNow.ToString("o")
+            };
+            byte[] bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(msg));
+            await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Broadcast, UdpDiscoveryPort));
+            SwkLogger.Info($"BroadcastShopClosingAsync sent: {_shareName}");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"BroadcastShopClosingAsync error: {ex.Message}");
         }
     }
 

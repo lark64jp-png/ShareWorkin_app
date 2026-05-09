@@ -165,9 +165,8 @@ public static class SmbController
         try
         {
             _broadcaster = new SwkNotificationBroadcaster(request.ShareName);
-            // 招待承認コールバックを購読する(MainWindow から渡される)。
-            // 未設定のままだと一律に拒否されるため、店主の意思介在が必須となる。
             _broadcaster.OnInviteRequested = onInviteRequested;
+            _broadcaster.OnShopClosingReceived = (machine, share) => OnShopClosingReceived?.Invoke(machine, share);
             _ = _broadcaster.StartAsync(); // 非同期で起動（待たない）
             SwkLogger.Info($"SwkNotificationBroadcaster started for '{request.ShareName}'");
         }
@@ -215,8 +214,16 @@ public static class SmbController
         return ok;
     }
 
+    public static Task BroadcastShopClosingAsync()
+        => _broadcaster?.BroadcastShopClosingAsync() ?? Task.CompletedTask;
+
     public static Task BroadcastPermissionChangedAsync()
         => _broadcaster?.BroadcastPermissionChangedAsync() ?? Task.CompletedTask;
+
+    /// <summary>
+    /// 他店から ShopClosing を受信したときのコールバック（MainWindow が購読する）。
+    /// </summary>
+    public static Action<string, string>? OnShopClosingReceived { get; set; }
 
     private static ShopOpenResult Fail(string message, SmbLayerStatus before, SmbLayerStatus? after)
     {

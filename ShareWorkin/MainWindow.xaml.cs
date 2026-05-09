@@ -647,13 +647,38 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void ShopDoorButton_Click(object sender, RoutedEventArgs e)
     {
         if (_isShopOpen)
-        {
-            CloseShop();
-        }
+            ExecuteCloseShop();
         else
+            ExecuteOpenShop();
+    }
+
+    private async void ExecuteCloseShop()
+    {
+        await SmbController.BroadcastShopClosingAsync();
+        await Task.Delay(300);
+        CloseShop();
+    }
+
+    private void ExecuteOpenShop()
+    {
+        SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
+        OpenShop();
+    }
+
+    private void HandleFriendShopClosingReceived(string machineName, string shareName)
+    {
+        Dispatcher.Invoke(() =>
         {
-            OpenShop();
-        }
+            if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null) return;
+            if (!string.Equals(_activeFriendShop.HostMachineName, machineName, StringComparison.OrdinalIgnoreCase)) return;
+            if (!string.Equals(_activeFriendShop.ShareName, shareName, StringComparison.OrdinalIgnoreCase)) return;
+
+            ShopItems.Clear();
+            string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
+                ? machineName
+                : _activeFriendShop.DisplayName;
+            SetTransientStatus($"{label} のお店が閉じました。");
+        });
     }
 
     private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
@@ -662,30 +687,74 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+        => await ExecuteRefreshAsync();
+
+    private async Task ExecuteRefreshAsync()
     {
-        if (string.IsNullOrWhiteSpace(_currentFolder))
-            return;
-
         ShopItems.Clear();
-        await Task.Delay(80);
 
-        if (_currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
+        if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null)
         {
-            string password = FriendsRepository.UnprotectPassword(_activeFriendShop.PasswordProtected);
-            if (!string.IsNullOrEmpty(password))
-            {
-                string uncRoot = _activeFriendShop.ConnectUncPath;
-                var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-                    string.Equals(s.MachineName, _activeFriendShop.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(s.ShareName, _activeFriendShop.ShareName, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrEmpty(liveShop?.IpAddress))
-                    uncRoot = $@"\\{liveShop.IpAddress}\{_activeFriendShop.ShareName}";
-                await Task.Run(() => SmbConnectionHelper.EnsureConnection(uncRoot, _activeFriendShop.UserName, password, _activeFriendShop.HostMachineName));
-            }
+            // Shop/Hold mode: 万が一の再取得
+            if (!string.IsNullOrWhiteSpace(_currentFolder))
+                RefreshShopItems();
+            return;
         }
 
-        InvalidateSizeCacheUnder(_currentFolder);
-        RefreshShopItems();
+        // FriendShop mode ① 単純再取得
+        await Task.Delay(80);
+        bool accessible = !string.IsNullOrWhiteSpace(_currentFolder) &&
+            await Task.Run(() => { try { return Directory.Exists(_currentFolder); } catch { return false; } });
+
+        if (accessible)
+        {
+            InvalidateSizeCacheUnder(_currentFolder!);
+            RefreshShopItems();
+            return;
+        }
+
+        // ② MachineName のみで UDP キャッシュを探索して再接続
+        var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(s.MachineName, _activeFriendShop.HostMachineName, StringComparison.OrdinalIgnoreCase));
+
+        if (liveShop is not null)
+        {
+            bool changed = false;
+            if (!string.Equals(_activeFriendShop.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase))
+            {
+                _activeFriendShop.ShareName = liveShop.ShareName;
+                changed = true;
+            }
+            if (!string.IsNullOrEmpty(liveShop.IpAddress) &&
+                !string.Equals(_activeFriendShop.LastKnownAddress, liveShop.IpAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                _activeFriendShop.LastKnownAddress = liveShop.IpAddress;
+                changed = true;
+            }
+            if (changed)
+            {
+                var all = FriendsRepository.LoadAll().ToList();
+                var stored = all.FirstOrDefault(f => f.Id == _activeFriendShop.Id);
+                if (stored is not null)
+                {
+                    stored.ShareName = _activeFriendShop.ShareName;
+                    stored.LastKnownAddress = _activeFriendShop.LastKnownAddress;
+                    FriendsRepository.SaveAll(all);
+                }
+            }
+            await NavigateToFriendShopAsync(_activeFriendShop);
+            return;
+        }
+
+        // ③ 見つからない → ユーザー一覧を促す
+        string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
+            ? _activeFriendShop.HostMachineName
+            : _activeFriendShop.DisplayName;
+        SetTransientStatus($"{label} が見つかりません。ユーザー一覧で確認してください。");
+        UserListWindow window = new(this) { Owner = this };
+        window.ShowDialog();
+        PopulateExplorerDropdown();
+        await ExecuteRefreshAsync();
     }
 
     private void SectionTitleButton_Click(object sender, RoutedEventArgs e)
@@ -716,11 +785,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SaveSettings();
     }
 
-    private void UserListButton_Click(object sender, RoutedEventArgs e)
+    private async void UserListButton_Click(object sender, RoutedEventArgs e)
     {
         UserListWindow window = new(this) { Owner = this };
         window.ShowDialog();
         PopulateExplorerDropdown();
+        await ExecuteRefreshAsync();
     }
 
     private async void ShareStatusButton_Click(object sender, RoutedEventArgs e)
@@ -2007,7 +2077,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
         }
 
-        if (_currentMode == DisplayMode.Shop)
+        if (_currentMode == DisplayMode.Shop || _currentMode == DisplayMode.Hold)
         {
             DisposeContentsWatcher();
             _currentFolder = null;
@@ -2541,6 +2611,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 }
             }
 
+            if (_currentMode == DisplayMode.FriendShop)
+            {
+                all = all.Where(item => !item.IsSharedOff).ToList();
+            }
+
             IEnumerable<ShopItem> sorted = SortShopItems(all);
             if (_isShopOpen && _currentMode == DisplayMode.Shop &&
                 !string.IsNullOrWhiteSpace(_shopFolder) &&
@@ -2631,6 +2706,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         item.IsSharedOff = false;
         item.IsReadOnly = entry.IsReadOnly;
+        item.AllowedUsers.Clear();
+        foreach (string user in entry.Users.Where(user => !string.IsNullOrWhiteSpace(user)))
+        {
+            item.AllowedUsers.Add(user);
+        }
     }
 
     private static bool IsCurrentMachineAllowed(ShopPermissionManifestEntry entry)
@@ -3166,6 +3246,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
             EnterShopMode();
+        }
+        else if (_currentMode == DisplayMode.FriendShop &&
+                 _activeFriendShop is not null &&
+                 string.Equals(_activeFriendShop.Id, target.Friend.Id, StringComparison.Ordinal))
+        {
+            // 同じ友達のお店を選び直した場合は単純リフレッシュ
+            if (!string.IsNullOrWhiteSpace(_currentFolder))
+                RefreshShopItems();
         }
         else
         {
