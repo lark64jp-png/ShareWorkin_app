@@ -683,7 +683,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
     {
-        VisitShop(_shopFolder);
+        VisitShop(_currentFolder ?? _shopFolder);
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
@@ -2387,13 +2387,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
+        string? searchRoot = _currentMode == DisplayMode.FriendShop
+            ? _activeFriendShopRootPath
+            : _shopFolder;
+
+        if (string.IsNullOrWhiteSpace(searchRoot) || !Directory.Exists(searchRoot))
         {
             SetTransientStatus("検索できるお店がありません。");
             return;
         }
 
-        string? match = FindFirstShopItem(_shopFolder, query);
+        string? match = FindFirstShopItem(searchRoot, query);
         if (string.IsNullOrWhiteSpace(match))
         {
             SetTransientStatus("見つかりませんでした。");

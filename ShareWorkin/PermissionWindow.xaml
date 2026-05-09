@@ -4,7 +4,11 @@
         Title="許可指定"
         Height="460"
         Width="640"
+        MinHeight="420"
+        MinWidth="540"
         WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False"
         Background="#FFFEFA"
         FontFamily="Yu Gothic UI">
     <Grid Margin="22">
@@ -12,65 +16,70 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="10" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="14" />
             <RowDefinition Height="*" />
             <RowDefinition Height="14" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" LastChildFill="False">
-            <TextBlock DockPanel.Dock="Left"
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0"
                        Text="許可指定"
                        FontSize="20"
                        FontWeight="SemiBold"
                        Foreground="#2F2A22" />
-            <RadioButton DockPanel.Dock="Left"
-                         x:Name="ReadWriteRadio"
+            <TextBlock Grid.Column="2"
+                       x:Name="TargetItemTextBlock"
+                       Text=""
+                       FontSize="13"
+                       Foreground="#52645E"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Bottom"
+                       TextTrimming="CharacterEllipsis" />
+        </Grid>
+
+        <WrapPanel Grid.Row="2">
+            <RadioButton x:Name="ReadWriteRadio"
                          Content="読み書き"
                          GroupName="AccessLevel"
                          IsChecked="True"
                          Checked="AccessLevelRadio_Checked"
                          FontSize="13"
                          Foreground="#6F675C"
-                         VerticalAlignment="Bottom"
-                         Margin="14,0,0,5" />
-            <RadioButton DockPanel.Dock="Left"
-                         x:Name="ReadOnlyRadio"
+                         Margin="0,0,16,4" />
+            <RadioButton x:Name="ReadOnlyRadio"
                          Content="読みのみ"
                          GroupName="AccessLevel"
                          IsChecked="False"
                          Checked="AccessLevelRadio_Checked"
                          FontSize="13"
                          Foreground="#6F675C"
-                         VerticalAlignment="Bottom"
-                         Margin="10,0,0,5" />
-            <RadioButton DockPanel.Dock="Left"
-                         x:Name="SharedOffRadio"
+                         Margin="0,0,16,4" />
+            <RadioButton x:Name="SharedOffRadio"
                          Content="共有OFF"
                          GroupName="AccessLevel"
                          IsChecked="False"
                          Checked="AccessLevelRadio_Checked"
                          FontSize="13"
                          Foreground="#6F675C"
-                         VerticalAlignment="Bottom"
-                         Margin="10,0,0,5" />
-            <TextBlock DockPanel.Dock="Right"
-                       x:Name="TargetItemTextBlock"
-                       Text=""
-                       FontSize="13"
-                       Foreground="#52645E"
-                       VerticalAlignment="Bottom"
-                       TextTrimming="CharacterEllipsis"
-                       MaxWidth="240" />
-        </DockPanel>
+                         Margin="0,0,16,4" />
+        </WrapPanel>
 
-        <TextBlock Grid.Row="2"
-                   Text="左に誰もいないと「全員」が読み書きできます。誰かを左に入れると、その人だけの指定になります。"
+        <TextBlock Grid.Row="4"
+                   x:Name="HintTextBlock"
                    FontSize="12"
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
 
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="60" />
@@ -153,7 +162,7 @@
             </Border>
         </Grid>
 
-        <StackPanel Grid.Row="6"
+        <StackPanel Grid.Row="8"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right">
             <TextBlock x:Name="StatusTextBlock"

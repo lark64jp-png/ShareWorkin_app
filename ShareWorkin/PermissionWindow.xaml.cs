@@ -46,12 +46,14 @@ public partial class PermissionWindow : Window
             ReloadUnsetUsers();
         }
         ApplyAccessLevelUiState();
+        UpdateHintText();
         UpdateOverlay();
         UpdateUnsetOverlay();
     }
 
     private void UpdateOverlay()
     {
+        EveryoneOverlay.Text = "全員";
         EveryoneOverlay.Visibility = _allowed.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -74,6 +76,7 @@ public partial class PermissionWindow : Window
         }
 
         ApplyAccessLevelUiState();
+        UpdateHintText();
     }
 
     private void ApplyAccessLevelUiState()
@@ -83,6 +86,15 @@ public partial class PermissionWindow : Window
         UnsetListBox.IsEnabled = canSpecifyUsers;
         MoveLeftButton.IsEnabled = canSpecifyUsers;
         MoveRightButton.IsEnabled = canSpecifyUsers;
+    }
+
+    private void UpdateHintText()
+    {
+        HintTextBlock.Text = SharedOffRadio.IsChecked == true
+            ? "共有OFFでは、この項目は誰にも共有されません。ユーザー指定は使いません。"
+            : ReadOnlyRadio.IsChecked == true
+                ? "左に誰もいないと「全員」が読みのみできます。左に入れた相手だけが指定対象になります。"
+                : "左に誰もいないと「全員」が読み書きできます。左に入れた相手だけが指定対象になります。";
     }
 
     private void ReloadUnsetUsers()
