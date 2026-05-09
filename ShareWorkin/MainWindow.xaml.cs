@@ -800,8 +800,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (item.IsHoldFolder || _currentMode == DisplayMode.FriendShop)
+        if (item.IsHoldFolder)
         {
+            return;
+        }
+
+        if (_currentMode == DisplayMode.FriendShop)
+        {
+            if (!item.IsSharedOff)
+            {
+                string stateText = item.ShareStatusText switch
+                {
+                    "全員"  => "全員に公開されています（読み書き可）",
+                    "全員R" => "全員に公開されています（読取専用）",
+                    "指定"  => "指定されたユーザーに公開されています（読み書き可）",
+                    "指定R" => "指定されたユーザーに公開されています（読取専用）",
+                    _       => item.ShareStatusText
+                };
+                System.Windows.MessageBox.Show(stateText, $"{item.Name} の共有設定",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            }
             return;
         }
 
@@ -3238,7 +3256,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void ExplorerTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void ExplorerTargetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressDropdownChange) return;
         if (ExplorerTargetComboBox.SelectedItem is not ExplorerTarget target) return;
@@ -3250,19 +3268,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
             EnterShopMode();
+            return;
         }
-        else if (_currentMode == DisplayMode.FriendShop &&
-                 _activeFriendShop is not null &&
-                 string.Equals(_activeFriendShop.Id, target.Friend.Id, StringComparison.Ordinal))
+
+        // 友達のお店選択 → リロードルーチンに合流（別の友達なら ① を素通りさせて ② の再接続経路へ）
+        bool isDifferentFriend = _activeFriendShop is null ||
+            !string.Equals(_activeFriendShop.Id, target.Friend.Id, StringComparison.Ordinal);
+        _activeFriendShop = target.Friend;
+        if (isDifferentFriend)
         {
-            // 同じ友達のお店を選び直した場合は単純リフレッシュ
-            if (!string.IsNullOrWhiteSpace(_currentFolder))
-                RefreshShopItems();
+            _activeFriendShopRootPath = null;
+            _currentFolder = null;
+            _currentMode = DisplayMode.FriendShop;
         }
-        else
-        {
-            _ = NavigateToFriendShopAsync(target.Friend);
-        }
+        await ExecuteRefreshAsync();
     }
 
     private async Task NavigateToFriendShopAsync(Friend friend)
