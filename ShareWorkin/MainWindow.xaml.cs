@@ -157,7 +157,7 @@ public partial class MainWindow : Window
         LoadSettings();
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
-        ExplorerTargetComboBox.SelectionChanged += ExplorerTargetComboBox_SelectionChanged;
+        // ExplorerTargetComboBox.SelectionChanged は XAML 側で登録済み (二重発火防止のため code-behind 登録は外す)
         PopulateExplorerDropdown();
         MigrateLegacyAppHomeHold();
         UpdateShopState(false);
