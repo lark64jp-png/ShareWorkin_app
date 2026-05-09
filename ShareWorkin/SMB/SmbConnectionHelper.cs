@@ -100,8 +100,36 @@ public static class SmbConnectionHelper
             return true;
         }
 
+        // 1219: SESSION_CREDENTIAL_CONFLICT
+        // 同じサーバーに別認証 (anonymous プローブセッション等) が居座っている場合に出る。
+        // サーバー全体と IPC$ のセッションを強制削除してリトライする。
+        if (result == 1219)
+        {
+            string server = ExtractServerPart(uncPath);
+            if (!string.IsNullOrEmpty(server))
+            {
+                SwkLogger.Debug($"NetUseAdd returned 1219; clearing existing sessions to {server} and retrying");
+                NetUseDel(null, server, 2);              // \\192.168.0.218
+                NetUseDel(null, server + @"\IPC$", 2);   // \\192.168.0.218\IPC$
+
+                result = NetUseAdd(null, 2, ref useInfo, out parmError);
+                if (result == 0)
+                {
+                    SwkLogger.Debug($"Successfully connected to {uncPath} after clearing conflicting sessions");
+                    return true;
+                }
+            }
+        }
+
         SwkLogger.Warn($"NetUseAdd returned {result} for {uncPath} (parmError={parmError})");
         return false;
+    }
+
+    private static string ExtractServerPart(string uncPath)
+    {
+        if (string.IsNullOrEmpty(uncPath) || !uncPath.StartsWith(@"\\")) return string.Empty;
+        int idx = uncPath.IndexOf('\\', 2);
+        return idx < 0 ? uncPath : uncPath.Substring(0, idx);
     }
 
     private static void OpenInExplorer(string uncPath)
