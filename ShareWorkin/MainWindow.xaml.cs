@@ -3271,17 +3271,40 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        // 友達のお店選択 → リロードルーチンに合流（別の友達なら ① を素通りさせて ② の再接続経路へ）
-        bool isDifferentFriend = _activeFriendShop is null ||
-            !string.Equals(_activeFriendShop.Id, target.Friend.Id, StringComparison.Ordinal);
-        _activeFriendShop = target.Friend;
-        if (isDifferentFriend)
+        // 友達のお店切替 = 共有トップへ移動 + リロード処理を発動。
+        // _currentFolder を UNC ルートにセットしてから ExecuteRefreshAsync を呼ぶことで、
+        // ① の Directory.Exists が既存セッション上で成功し、再認証(EnsureConnection)を呼ばずに表示できる。
+        string uncTop = ResolveFriendUncTop(target.Friend);
+        if (string.IsNullOrWhiteSpace(uncTop))
         {
-            _activeFriendShopRootPath = null;
-            _currentFolder = null;
-            _currentMode = DisplayMode.FriendShop;
+            SetTransientStatus("接続できません");
+            return;
         }
+
+        _activeFriendShop = target.Friend;
+        _activeFriendShopRootPath = uncTop;
+        _currentMode = DisplayMode.FriendShop;
+        _currentFolder = uncTop;
+        _backStack.Clear();
+        _forwardStack.Clear();
+        UpdateBreadcrumb();
+        UpdateNavigationState();
+
         await ExecuteRefreshAsync();
+    }
+
+    private static string ResolveFriendUncTop(Friend friend)
+    {
+        string uncPath = friend.ConnectUncPath ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(uncPath)) return string.Empty;
+
+        var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(liveShop?.IpAddress))
+            uncPath = $@"\\{liveShop.IpAddress}\{friend.ShareName}";
+
+        return uncPath;
     }
 
     private async Task NavigateToFriendShopAsync(Friend friend)
