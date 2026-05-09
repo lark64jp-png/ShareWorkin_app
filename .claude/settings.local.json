@@ -44,7 +44,11 @@
       "Bash(Get-Item \"H:\\\\ShareWorkin_app\\\\Output\\\\ShareWorkin_v1.11_install.exe\")",
       "Bash(xargs grep -l \"watcher\\\\|sensor\\\\|monitor\\\\|poll\" -i)",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(ls -la \"H:/ShareWorkin_app \\(2\\).zip\" 2>/dev/null && echo \"exists\")",
+      "Read(//h//**)",
+      "Bash(python3 -c ' *)",
+      "Bash(git status *)"
     ]
   }
 }
