@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.14"
+#define MyAppVersion "1.15"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.14_install
+OutputBaseFilename=ShareWorkin_v1.15_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -62,8 +62,10 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.14';
+  APP_VERSION = '1.15';
   APP_EXE = 'ShareWorkin.exe';
+  TRAY_EXE = 'ShareWorkinTray.exe';
+  STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';
   INSTALL_DIR = 'C:\MyApps\ShareWorkin';
   SETTINGS_FILE = 'settings.json';
   SECURE_FILE = 'secure.dat';
@@ -300,11 +302,12 @@ begin
   Result := True;
   SelectedAction := '';
 
-  if IsProcessRunning(APP_EXE) then
+  if IsProcessRunning(APP_EXE) or IsProcessRunning(TRAY_EXE) then
   begin
     if MsgBox(APP_NAME + ' が実行中です。終了してセットアップを続けますか？',
       mbConfirmation, MB_OKCANCEL) = IDOK then
     begin
+      Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       if not WaitForProcessExit(APP_EXE) then
       begin
@@ -388,6 +391,8 @@ var
 begin
   Result := True;
 
+  if IsProcessRunning(TRAY_EXE) then
+    Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if IsProcessRunning(APP_EXE) then
   begin
     Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -798,6 +803,10 @@ begin
   HideFile('ShareWorkin.dll');
   HideFile('ShareWorkin.deps.json');
   HideFile('ShareWorkin.runtimeconfig.json');
+  HideFile('ShareWorkinTray.dll');
+  HideFile('ShareWorkinTray.deps.json');
+  HideFile('ShareWorkinTray.runtimeconfig.json');
+  HideFile('ShareWorkin.SMB.dll');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -811,7 +820,10 @@ begin
 
     if (SelectedAction = 'both') or (SelectedAction = 'app') then
     begin
+      RegWriteStringValue(HKCU, STARTUP_REG_KEY, APP_NAME,
+        ExpandConstant('"' + '{app}\' + TRAY_EXE + '"'));
       MsgBox(APP_NAME + ' のインストールが完了しました。', mbInformation, MB_OK);
+      Exec(ExpandConstant('{app}\' + TRAY_EXE), '', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
       Exec(ExpandConstant('{app}\' + APP_EXE), '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
     end;
   end;
@@ -859,12 +871,15 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    if IsProcessRunning(TRAY_EXE) then
+      Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if IsProcessRunning(APP_EXE) then
     begin
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       WaitForProcessExit(APP_EXE);
     end;
 
+    RegDeleteValue(HKCU, STARTUP_REG_KEY, APP_NAME);
     CleanupShareWorkinShares();
     CleanupShareWorkinAccount();
 

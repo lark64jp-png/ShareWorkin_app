@@ -7,35 +7,27 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>ShareWorkin</AssemblyName>
-    <RootNamespace>ShareWorkin</RootNamespace>
+    <AssemblyName>ShareWorkinTray</AssemblyName>
+    <RootNamespace>ShareWorkinTray</RootNamespace>
     <Version>1.15.0</Version>
     <FileVersion>1.15.0.0</FileVersion>
     <AssemblyVersion>1.15.0.0</AssemblyVersion>
     <InformationalVersion>1.15</InformationalVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Company>ShareWorkin</Company>
     <Product>ShareWorkin</Product>
     <Copyright>Copyright (c) 2026 ShareWorkin</Copyright>
-    <ApplicationIcon>app.ico</ApplicationIcon>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="app.ico">
+    <Content Include="../ShareWorkin/app.ico">
+      <Link>app.ico</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Assets\icons\library\*.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>icons\library\%(Filename)%(Extension)</Link>
     </Content>
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="SMB\**\*.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\ShareWorkin.SMB\ShareWorkin.SMB.csproj" />
+    <ProjectReference Include="../ShareWorkin.SMB/ShareWorkin.SMB.csproj" />
   </ItemGroup>
 
 </Project>

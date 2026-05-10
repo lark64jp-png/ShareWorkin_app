@@ -52,10 +52,7 @@ public partial class MainWindow : Window
 
     private const string SettingsVersion = "1.04";
 
-    private readonly Forms.NotifyIcon _notifyIcon;
-    private readonly Forms.ContextMenuStrip _trayMenu;
-    private readonly Forms.ToolStripMenuItem _trayShowItem;
-    private readonly Forms.ToolStripMenuItem _trayExitItem;
+    private readonly UiPipeClient _pipeClient = new();
     private readonly DispatcherTimer _notificationTimer;
     private readonly DispatcherTimer _pollingTimer;
     private readonly DispatcherTimer _transientStatusTimer;
@@ -78,7 +75,6 @@ public partial class MainWindow : Window
     private string? _shopFolder;
     private string? _currentFolder;
     private string? _activeFriendShopRootPath;
-    private string? _lastNotificationFolder;
     private string? _pendingFocusName;
     private ShopItem? _dropTargetItem;
     private Popup? _dragPreviewPopup;
@@ -94,7 +90,6 @@ public partial class MainWindow : Window
     private bool _isShopOpen;
     private bool _isPollingMode;
     private bool _exitRequested;
-    private bool _trayHintShown;
     private bool _uiUnlocked;
     private bool _startupHandled;
     private bool _wasOpenAtLastShutdown;
@@ -126,24 +121,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        _notifyIcon = new Forms.NotifyIcon
-        {
-            Icon = LoadAppIcon(),
-            Text = "ShareWorkin",
-            Visible = true
-        };
-        _notifyIcon.BalloonTipClicked += NotifyIcon_BalloonTipClicked;
-        _notifyIcon.MouseDoubleClick += NotifyIcon_MouseDoubleClick;
-
-        _trayMenu = new Forms.ContextMenuStrip();
-        _trayShowItem = new Forms.ToolStripMenuItem("画面を開く");
-        _trayShowItem.Click += (_, _) => Dispatcher.Invoke(ShowMainWindowWithPassword);
-        _trayExitItem = new Forms.ToolStripMenuItem("アプリを終了");
-        _trayExitItem.Click += (_, _) => Dispatcher.Invoke(ExitApp);
-        _trayMenu.Items.Add(_trayShowItem);
-        _trayMenu.Items.Add(new Forms.ToolStripSeparator());
-        _trayMenu.Items.Add(_trayExitItem);
-        _notifyIcon.ContextMenuStrip = _trayMenu;
+        _pipeClient.InviteRequested += HandlePipeInviteRequestAsync;
+        _pipeClient.TrayExiting += () => Dispatcher.Invoke(() => { _exitRequested = true; Close(); });
+        _pipeClient.ShowRequested += () => Dispatcher.Invoke(ShowMainWindow);
 
         _notificationTimer = new DispatcherTimer { Interval = NotificationQuietTime };
         _notificationTimer.Tick += NotificationTimer_Tick;
@@ -200,14 +180,31 @@ public partial class MainWindow : Window
 
     private void HandleStartup()
     {
-        RestoreOpenShopIfNeeded();
         if (!EnsureUiUnlocked())
         {
-            if (!_isShopOpen)
-                ExitApp();
+            System.Windows.Application.Current.Shutdown();
             return;
         }
+        if (!_pipeClient.Connect())
+        {
+            System.Windows.MessageBox.Show(
+                "ShareWorkinTray が起動していません。\nタスクトレイに ShareWorkin のアイコンがあることを確認してください。",
+                "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.Application.Current.Shutdown();
+            return;
+        }
+        var status = _pipeClient.GetStatus();
+        if (status != null)
+        {
+            _isShopOpen = status.IsShopOpen;
+            if (status.IsShopOpen && !string.IsNullOrWhiteSpace(status.ShopFolder))
+            {
+                _shopFolder = status.ShopFolder;
+                MyShopTextBox.Text = _shopFolder;
+            }
+        }
         ShowMainWindow();
+        UpdateShopState(_isShopOpen);
         _ = SwkNetworkCache.RefreshAsync(ScanMode.Quick);
     }
 
@@ -652,10 +649,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ExecuteOpenShop();
     }
 
-    private async void ExecuteCloseShop()
+    private void ExecuteCloseShop()
     {
-        await SmbController.BroadcastShopClosingAsync();
-        await Task.Delay(300);
+        _pipeClient.BroadcastClosing();
         CloseShop();
     }
 
@@ -846,7 +842,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                         if (!ok)
                             SetTransientStatus("権限の設定に失敗しました。");
                         else
-                            _ = SmbController.BroadcastPermissionChangedAsync();
+                            _pipeClient.BroadcastPermission();
                     }
                     finally
                     {
@@ -922,39 +918,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Owner = this
         };
         dialog.ShowDialog();
-    }
-
-    // 招待コード要求が来たときに呼ばれる承認ハンドラー。
-    // Broadcaster の TCP 受信スレッドから呼ばれるため、UI スレッドへ切り替えてダイアログを出す。
-    // 「Yes/No が選ばれるまで返らない」ことが一回性の鍵: 承認後にだけ MarkUsed が走る。
-    private Task<bool> HandleInviteApprovalAsync(SwkNotificationBroadcaster.InviteApprovalRequest request)
-    {
-        return Dispatcher.InvokeAsync(() =>
-        {
-            string body;
-            if (request.IsManualInvite)
-            {
-                string label = string.IsNullOrWhiteSpace(request.InviteLabel) ? "(不明)" : request.InviteLabel!;
-                body =
-                    $"「{request.ClientMachineName}」が招待コードを使ってお店『{label}』に入ろうとしています。\n" +
-                    "招待を受け付けますか?";
-            }
-            else
-            {
-                body =
-                    $"「{request.ClientMachineName}」がお店に入ろうとしています。\n" +
-                    "招待コードなしの飛び込みです。承認しますか?";
-            }
-
-            MessageBoxResult res = System.Windows.MessageBox.Show(
-                this,
-                body,
-                "接続の申請",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question,
-                MessageBoxResult.No);
-            return res == MessageBoxResult.Yes;
-        }).Task;
     }
 
     private NotificationMode GetSelectedNotificationMode()
@@ -1774,20 +1737,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (!_exitRequested && _isShopOpen)
-        {
-            e.Cancel = true;
-            Hide();
-            if (!_trayHintShown)
-            {
-                _notifyIcon.BalloonTipTitle = "お店は開いたままです";
-                _notifyIcon.BalloonTipText = "お店は開いたまま、画面だけ閉じています。";
-                _notifyIcon.ShowBalloonTip(3000);
-                _trayHintShown = true;
-            }
-            return;
-        }
-
+        if (_exitRequested && _pipeClient.IsConnected)
+            _pipeClient.SendExitApp();
+        _uiUnlocked = false;
         CancelFolderSizeCalculation();
         CloseShop(removeSmbShare: false);
         _notificationTimer.Stop();
@@ -1797,11 +1749,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         StopFriendShopPolling();
         _transientStatusTimer.Stop();
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
-        _notifyIcon.BalloonTipClicked -= NotifyIcon_BalloonTipClicked;
-        _notifyIcon.MouseDoubleClick -= NotifyIcon_MouseDoubleClick;
-        _notifyIcon.Visible = false;
-        _notifyIcon.Dispose();
-        _trayMenu.Dispose();
+        _pipeClient.Dispose();
     }
 
     private void ShowMainWindow()
@@ -1830,9 +1778,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Close();
     }
 
-    private void NotifyIcon_MouseDoubleClick(object? sender, Forms.MouseEventArgs e)
+    // RestoreOpenShopIfNeeded は TrayApp に移動。HandleStartup から呼ばない。
+
+    private Task<bool> HandlePipeInviteRequestAsync(string requestId, string machineName, string? label, bool isManual)
     {
-        Dispatcher.Invoke(ShowMainWindowWithPassword);
+        return Dispatcher.InvokeAsync(() =>
+        {
+            string body = isManual
+                ? $"「{machineName}」が招待コードを使ってお店に入ろうとしています。\n招待を受け付けますか?"
+                : $"「{machineName}」がお店に入ろうとしています。\n招待コードなしの飛び込みです。承認しますか?";
+            MessageBoxResult res = System.Windows.MessageBox.Show(
+                this, body, "接続の申請",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+            return res == MessageBoxResult.Yes;
+        }).Task;
     }
 
     private bool EnsureUiUnlocked()
@@ -1881,22 +1840,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void RestoreOpenShopIfNeeded()
-    {
-        if (!_wasOpenAtLastShutdown || _isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            return;
-        }
-
-        if (!Directory.Exists(_shopFolder))
-        {
-            SwkLogger.Warn("Startup restore skipped: shop folder not found");
-            return;
-        }
-
-        OpenShop();
-    }
-
     private void OpenShop()
     {
         if (string.IsNullOrWhiteSpace(_shopFolder))
@@ -1924,28 +1867,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        ShopOpenRequest request = new(
-            ShareName: shareName,
-            ShopRootPath: _shopFolder,
-            ProfileLabel: shareName,
-            AccessRight: _shareAccessRight);
-
-        ShopOpenResult result;
+        ShopOpenOutcome? outcome;
         Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
         try
         {
-            result = SmbController.OpenShopSequence(request, onInviteRequested: HandleInviteApprovalAsync);
+            outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, false);
         }
         finally
         {
             Mouse.OverrideCursor = null;
         }
 
-        // 草案6 §A: 所有者書き換えが必要な場合は、利用者の明示同意を挟む。
-        // 事前確認できた場合と、フォルダーが完全ロックで確認すらできなかった場合で文言を分ける。
-        if (result.OwnershipPrompt != OwnershipChangePrompt.None)
+        if (outcome == null)
         {
-            string consentBody = result.OwnershipPrompt == OwnershipChangePrompt.Unverifiable
+            UpdateShopState(false, "トレイとの通信に失敗しました。");
+            return;
+        }
+
+        // 所有者書き換えが必要な場合は利用者の明示同意を挟む。
+        if (outcome.NeedsOwnership)
+        {
+            string consentBody = outcome.OwnershipPrompt == "Unverifiable"
                 ? "このフォルダーは現在の設定では中身を確認できません。\nお店として使えるようにアクセス設定を整えますか?\n※内包されたデータがある場合、すべて公開されます。"
                 : "このフォルダーをお店として使えるように、アクセス設定を整えますか?\n※内包されたデータがある場合、すべて公開されます。";
 
@@ -1965,20 +1907,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                result = SmbController.OpenShopSequence(request, userAuthorizedOwnershipChange: true, onInviteRequested: HandleInviteApprovalAsync);
+                outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, true);
             }
             finally
             {
                 Mouse.OverrideCursor = null;
             }
+
+            if (outcome == null)
+            {
+                UpdateShopState(false, "トレイとの通信に失敗しました。");
+                return;
+            }
         }
 
-        if (!result.Succeeded)
+        if (!outcome.Ok)
         {
-            string message = string.IsNullOrWhiteSpace(result.FailureMessage)
+            string message = string.IsNullOrWhiteSpace(outcome.Error)
                 ? "お店を開けませんでした。"
-                : result.FailureMessage!;
-            if (result.BlockedPaths is { Count: > 0 } blocked)
+                : outcome.Error!;
+            if (outcome.BlockedPaths is { Count: > 0 } blocked)
             {
                 int show = Math.Min(blocked.Count, 5);
                 string list = string.Join("\n", blocked.Take(show).Select(p => "・" + p));
@@ -2078,20 +2026,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _isPollingMode = false;
         CancelFolderSizeCalculation();
 
-        if (wasOpen && removeSmbShare && !string.IsNullOrWhiteSpace(_shopFolder))
+        if (wasOpen && removeSmbShare)
         {
-            string shareName = DeriveShareName(_shopFolder);
-            if (!string.IsNullOrWhiteSpace(shareName))
+            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+            try
             {
-                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-                try
-                {
-                    SmbController.CloseShopSequence(shareName, _shopFolder);
-                }
-                finally
-                {
-                    Mouse.OverrideCursor = null;
-                }
+                _pipeClient.CloseShop();
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
             }
         }
 
@@ -2312,10 +2256,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        _notifyIcon.BalloonTipTitle = "ShareWorkin のお知らせ";
-        _notifyIcon.BalloonTipText = notificationText;
-        _lastNotificationFolder = _shopFolder;
-        _notifyIcon.ShowBalloonTip(5000);
+        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", notificationText, _shopFolder);
     }
 
     private void NotificationTimer_Tick(object? sender, EventArgs e)
@@ -2331,17 +2272,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        _notifyIcon.BalloonTipTitle = "ShareWorkin のお知らせ";
-        _notifyIcon.BalloonTipText = "お店の中身が変更されました。";
-        _lastNotificationFolder = _pendingNotificationItems[0].FolderPath;
+        string notifFolder = _pendingNotificationItems[0].FolderPath;
         _pendingNotificationItems.Clear();
-        _notifyIcon.ShowBalloonTip(5000);
+        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", "お店の中身が変更されました。", notifFolder);
     }
 
-    private void NotifyIcon_BalloonTipClicked(object? sender, EventArgs e)
-    {
-        Dispatcher.Invoke(() => VisitShop(_lastNotificationFolder ?? _shopFolder));
-    }
 
     private void OpenShopItem(ShopItem item)
     {
@@ -3295,16 +3230,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static string ResolveFriendUncTop(Friend friend)
     {
-        string uncPath = friend.ConnectUncPath ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(uncPath)) return string.Empty;
+        return BuildFriendUncCandidates(friend).FirstOrDefault() ?? string.Empty;
+    }
+
+    private static List<string> BuildFriendUncCandidates(Friend friend)
+    {
+        List<string> candidates = [];
+        AddFriendUncCandidate(candidates, friend.HostMachineName, friend.ShareName);
 
         var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
             string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrEmpty(liveShop?.IpAddress))
-            uncPath = $@"\\{liveShop.IpAddress}\{friend.ShareName}";
 
-        return uncPath;
+        if (!string.IsNullOrWhiteSpace(liveShop?.IpAddress))
+        {
+            AddFriendUncCandidate(candidates, liveShop.IpAddress, friend.ShareName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
+        {
+            AddFriendUncCandidate(candidates, friend.LastKnownAddress, friend.ShareName);
+        }
+
+        AddFriendUncCandidate(candidates, friend.ConnectHost, friend.ShareName);
+        return candidates;
+    }
+
+    private static void AddFriendUncCandidate(List<string> candidates, string? host, string shareName)
+    {
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(shareName))
+        {
+            return;
+        }
+
+        string uncPath = $@"\\{host.TrimStart('\\')}\{shareName}";
+        if (!candidates.Contains(uncPath, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(uncPath);
+        }
     }
 
     private async Task NavigateToFriendShopAsync(Friend friend)
@@ -3325,8 +3288,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         UpdateBreadcrumb();
         UpdateNavigationState();
 
-        string uncPath = friend.ConnectUncPath;
-        if (string.IsNullOrWhiteSpace(uncPath))
+        List<string> uncCandidates = BuildFriendUncCandidates(friend);
+        if (uncCandidates.Count == 0)
         {
             SetTransientStatus("接続できません");
             return;
@@ -3337,30 +3300,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrEmpty(liveShop?.IpAddress))
-            uncPath = $@"\\{liveShop.IpAddress}\{friend.ShareName}";
+            AddFriendUncCandidate(uncCandidates, liveShop.IpAddress, friend.ShareName);
 
-        SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={uncPath}");
-        _activeFriendShopRootPath = uncPath;
-
+        SwkLogger.Debug($"NavigateToFriendShopAsync: candidates={string.Join(", ", uncCandidates)}");
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
-        bool accessible = await Task.Run(() =>
+        string? accessiblePath = await Task.Run(() =>
         {
-            if (!string.IsNullOrEmpty(password))
-                SmbConnectionHelper.EnsureConnection(uncPath, friend.UserName, password, friend.HostMachineName);
-            try { return Directory.Exists(uncPath); }
-            catch { return false; }
+            foreach (string candidate in uncCandidates)
+            {
+                SwkLogger.Debug($"NavigateToFriendShopAsync: trying={candidate}");
+                if (!string.IsNullOrEmpty(password))
+                    SmbConnectionHelper.EnsureConnection(candidate, friend.UserName, password, friend.HostMachineName);
+                try
+                {
+                    if (Directory.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
         });
 
-        if (!accessible)
+        if (string.IsNullOrWhiteSpace(accessiblePath))
         {
-            SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {uncPath}");
+            SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {string.Join(", ", uncCandidates)}");
             SetTransientStatus("接続できません");
             return;
         }
 
+        SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
+        _activeFriendShopRootPath = accessiblePath;
         SuppressExternalChangeNotifications();
-        NavigateTo(uncPath, addHistory: false, clearForward: true);
-        await ApplyFriendShopReadOnlyAsync(uncPath, ShopItems.ToList(), silent: true);
+        NavigateTo(accessiblePath, addHistory: false, clearForward: true);
+        await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)
