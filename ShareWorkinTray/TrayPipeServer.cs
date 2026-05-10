@@ -41,7 +41,7 @@ public sealed class TrayPipeServer
             try
             {
                 var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut,
-                    1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                    NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 await pipe.WaitForConnectionAsync(ct);
                 var session = new TrayPipeSession(pipe, _tray);
                 var prev = _activeSession;
