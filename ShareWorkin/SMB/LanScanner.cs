@@ -146,11 +146,29 @@ public static class LanScanner
             Task connect = client.ConnectAsync(address, port, token).AsTask();
             Task delay = Task.Delay(timeoutMs, token);
             Task done = await Task.WhenAny(connect, delay).ConfigureAwait(false);
-            return done == connect && client.Connected;
+            if (done != connect)
+            {
+                _ = ObserveConnectionFailureAsync(connect);
+                return false;
+            }
+
+            await connect.ConfigureAwait(false);
+            return client.Connected;
         }
         catch (Exception ex) when (ex is SocketException or OperationCanceledException)
         {
             return false;
+        }
+    }
+
+    private static async Task ObserveConnectionFailureAsync(Task connect)
+    {
+        try
+        {
+            await connect.ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 }

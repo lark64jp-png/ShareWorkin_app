@@ -56,6 +56,7 @@ public sealed class TrayApp : IDisposable
     public void Start()
     {
         LoadSettings();
+        SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         _notifyIcon.Visible = true;
         PipeServer.Start();
         RestoreOpenShopIfNeeded();
@@ -142,6 +143,16 @@ public sealed class TrayApp : IDisposable
 
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
+
+    private void HandleFriendShopClosingReceived(string machineName, string shareName)
+    {
+        _ = PipeServer.PushMessageAsync(JsonSerializer.Serialize(new
+        {
+            type = "FRIEND_SHOP_CLOSING",
+            machineName,
+            shareName
+        }));
+    }
 
     public void ShowBalloonTip(string title, string text, string? folder)
     {

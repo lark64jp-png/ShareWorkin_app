@@ -124,6 +124,8 @@ public partial class MainWindow : Window
         _pipeClient.InviteRequested += HandlePipeInviteRequestAsync;
         _pipeClient.TrayExiting += () => Dispatcher.Invoke(() => { _exitRequested = true; Close(); });
         _pipeClient.ShowRequested += () => Dispatcher.Invoke(ShowMainWindow);
+        _pipeClient.FriendShopClosingReceived += (machine, share) =>
+            Dispatcher.Invoke(() => HandleFriendShopClosingReceived(machine, share));
 
         _notificationTimer = new DispatcherTimer { Interval = NotificationQuietTime };
         _notificationTimer.Tick += NotificationTimer_Tick;
@@ -657,7 +659,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ExecuteOpenShop()
     {
-        SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         OpenShop();
     }
 

@@ -33,6 +33,7 @@ public sealed class UiPipeClient : IDisposable
     public event Func<string, string, string?, bool, Task<bool>>? InviteRequested;
     public event Action? TrayExiting;
     public event Action? ShowRequested;
+    public event Action<string, string>? FriendShopClosingReceived;
 
     public bool IsConnected => _pipe?.IsConnected == true;
 
@@ -193,6 +194,17 @@ public sealed class UiPipeClient : IDisposable
                     case "SHOW":
                         ShowRequested?.Invoke();
                         break;
+                    case "FRIEND_SHOP_CLOSING":
+                    {
+                        string machineName = doc.RootElement.TryGetProperty("machineName", out var mn)
+                            ? mn.GetString() ?? string.Empty
+                            : string.Empty;
+                        string shareName = doc.RootElement.TryGetProperty("shareName", out var sn)
+                            ? sn.GetString() ?? string.Empty
+                            : string.Empty;
+                        FriendShopClosingReceived?.Invoke(machineName, shareName);
+                        break;
+                    }
                     default:
                         await _responseChannel.Writer.WriteAsync(line, ct);
                         break;
