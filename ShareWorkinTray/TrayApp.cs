@@ -206,7 +206,7 @@ public sealed class TrayApp : IDisposable
     {
         if (EntryPasswordManager.IsConfigured)
         {
-            string? pw = TrayPasswordDialog.Show("アプリを終了するにはパスワードを入力してください。");
+            string? pw = TrayPasswordDialog.Show("終了するとお店も閉まります。\nパスワードを入力してください。");
             if (pw == null) return;
             if (!EntryPasswordManager.Verify(pw))
             {
@@ -214,10 +214,14 @@ public sealed class TrayApp : IDisposable
                     Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
                 return;
             }
+            ExitApp();
         }
-        var r = Forms.MessageBox.Show("ShareWorkin を終了しますか？\nお店は閉店します。",
-            "ShareWorkin", Forms.MessageBoxButtons.OKCancel, Forms.MessageBoxIcon.Question);
-        if (r == Forms.DialogResult.OK) ExitApp();
+        else
+        {
+            var r = Forms.MessageBox.Show("ShareWorkin を終了しますか？\nお店は閉まります。",
+                "ShareWorkin", Forms.MessageBoxButtons.OKCancel, Forms.MessageBoxIcon.Question);
+            if (r == Forms.DialogResult.OK) ExitApp();
+        }
     }
 
     private void PatchSettingsOpenState(bool isOpen, string? shopFolder)

@@ -189,11 +189,35 @@ public partial class MainWindow : Window
         }
         if (!_pipeClient.Connect())
         {
-            System.Windows.MessageBox.Show(
-                "ShareWorkinTray が起動していません。\nタスクトレイに ShareWorkin のアイコンがあることを確認してください。",
-                "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
-            System.Windows.Application.Current.Shutdown();
-            return;
+            string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
+            string trayExe = Path.Combine(exeDir ?? string.Empty, "ShareWorkinTray.exe");
+            bool launched = false;
+            if (File.Exists(trayExe))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(trayExe) { UseShellExecute = true });
+                    launched = true;
+                }
+                catch { }
+            }
+            bool connected = false;
+            if (launched)
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    Thread.Sleep(1000);
+                    if (_pipeClient.Connect()) { connected = true; break; }
+                }
+            }
+            if (!connected)
+            {
+                System.Windows.MessageBox.Show(
+                    "ShareWorkinTray を起動できませんでした。\nアプリを再インストールしてください。",
+                    "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
+                System.Windows.Application.Current.Shutdown();
+                return;
+            }
         }
         var status = _pipeClient.GetStatus();
         if (status != null)
