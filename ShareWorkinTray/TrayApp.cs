@@ -211,7 +211,10 @@ public sealed class TrayApp : IDisposable
 
     public void ExitApp(bool fromUiRequest = false)
     {
+        bool wasOpen = _isShopOpen;
         CloseShop();
+        if (wasOpen)
+            PatchSettingsOpenState(true, _shopFolder);
         if (!fromUiRequest)
             _ = PipeServer.PushMessageAsync("{\"type\":\"TRAY_EXITING\"}");
         System.Windows.Application.Current.Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
