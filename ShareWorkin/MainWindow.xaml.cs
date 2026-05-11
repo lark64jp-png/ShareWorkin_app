@@ -223,7 +223,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
         while (DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
@@ -233,7 +233,7 @@ public partial class MainWindow : Window
             }
         }
 
-        return _pipeClient.Connect(timeoutMs: 500);
+        return _pipeClient.Connect(timeoutMs: 1000);
     }
 
     private static bool StartTrayProcess()
