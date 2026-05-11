@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -30,6 +32,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
+    private const int FriendShopOfflineMissThreshold = 2;
 
     // 草案4 §A: アプリは自分のアプリホルダーの外に書き込まない。
     // すべてのデータ(settings / secure / hold / logs)はアプリホルダー直下に置く。
@@ -196,7 +199,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        _isShopOpen = _wasOpenAtLastShutdown;
+        TrayStatus? trayStatus = _pipeClient.GetStatus(timeoutMs: 500);
+        if (trayStatus != null)
+        {
+            _isShopOpen = trayStatus.IsShopOpen;
+            if (!string.IsNullOrWhiteSpace(trayStatus.ShopFolder))
+            {
+                _shopFolder = trayStatus.ShopFolder;
+                MyShopTextBox.Text = _shopFolder;
+            }
+            _wasOpenAtLastShutdown = _isShopOpen;
+        }
+        else
+        {
+            _isShopOpen = _wasOpenAtLastShutdown;
+        }
         ShowMainWindow();
         UpdateShopState(_isShopOpen);
         _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
@@ -2800,6 +2817,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private bool _friendShopPollRunning;
+    private int _friendShopLiveMissCount;
     private CancellationTokenSource? _friendShopNotifCts;
 
     private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
@@ -2807,14 +2825,36 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task RunFriendShopPollAsync()
     {
-        if (_currentMode != DisplayMode.FriendShop || string.IsNullOrEmpty(_currentFolder)) return;
+        if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null) return;
         if (_friendShopPollRunning) return;
         _friendShopPollRunning = true;
         try
         {
+            SwkNotificationListener.ShopInfo? liveShop = await ProbeActiveFriendShopAsync(_activeFriendShop);
+            if (liveShop is null)
+            {
+                _friendShopLiveMissCount++;
+                if (_friendShopLiveMissCount >= FriendShopOfflineMissThreshold)
+                {
+                    MarkActiveFriendShopOffline();
+                }
+                return;
+            }
+
+            _friendShopLiveMissCount = 0;
+            SwkNetworkCache.UpsertShop(liveShop);
+
+            bool needsReconnect = string.IsNullOrWhiteSpace(_currentFolder) ||
+                !string.Equals(_activeFriendShop.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
+            if (needsReconnect)
+            {
+                await NavigateToFriendShopAsync(_activeFriendShop, liveShop);
+                return;
+            }
+
             RefreshShopItems();
             // 非表示中の OFF フォルダも復帰検知のために検査リストへ追加する
-            string folder = _currentFolder;
+            string folder = _currentFolder!;
             List<ShopItem> hiddenOff = _friendShopReadOnlyState
                 .Where(kv => kv.Value.IsSharedOff)
                 .Select(kv => kv.Key)
@@ -2828,6 +2868,76 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             _friendShopPollRunning = false;
         }
+    }
+
+    private async Task<SwkNotificationListener.ShopInfo?> ProbeActiveFriendShopAsync(Friend friend)
+    {
+        List<LanCandidate> candidates = [];
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        void AddAddress(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!IPAddress.TryParse(value, out IPAddress? address)) return;
+            if (address.AddressFamily != AddressFamily.InterNetwork) return;
+            string key = address.ToString();
+            if (seen.Add(key))
+                candidates.Add(new LanCandidate(address, friend.HostMachineName));
+        }
+
+        SwkNotificationListener.ShopInfo? cached = FindLiveShopInfo(friend);
+        AddAddress(cached?.IpAddress);
+        AddAddress(friend.LastKnownAddress);
+
+        try
+        {
+            IPAddress[] addresses = await Dns.GetHostAddressesAsync(friend.HostMachineName);
+            foreach (IPAddress address in addresses)
+                AddAddress(address.ToString());
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException)
+        {
+            SwkLogger.Debug($"ProbeActiveFriendShopAsync DNS failed for {friend.HostMachineName}: {ex.Message}");
+        }
+
+        if (candidates.Count == 0) return null;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            IReadOnlyList<SwkNotificationListener.ShopInfo> found =
+                await SwkNotificationListener.ProbeHostsAsync(candidates, cts.Token);
+            return found.FirstOrDefault(s =>
+                string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"ProbeActiveFriendShopAsync failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private void MarkActiveFriendShopOffline()
+    {
+        if (_activeFriendShop is null) return;
+
+        string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
+            ? _activeFriendShop.HostMachineName
+            : _activeFriendShop.DisplayName;
+
+        SwkNetworkCache.RemoveShop(_activeFriendShop.HostMachineName, _activeFriendShop.ShareName);
+        DisposeContentsWatcher();
+        ShopItems.Clear();
+        _friendShopReadOnlyState.Clear();
+        _activeFriendShopRootPath = null;
+        _currentFolder = null;
+        _backStack.Clear();
+        _forwardStack.Clear();
+        UpdateBreadcrumb();
+        UpdateNavigationState();
+        PopulateExplorerDropdown();
+        SetTransientStatus($"{label} のお店が見つかりません。");
     }
 
     private void StartFriendShopPermissionListener(string friendMachineName)
@@ -3334,9 +3444,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopInfo(Friend friend)
-        => SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+    {
+        string normalizedHost = NormalizeHostName(friend.HostMachineName);
+        SwkNotificationListener.ShopInfo? exact = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) return exact;
+
+        SwkNotificationListener.ShopInfo? sameMachine = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase));
+        if (sameMachine is not null) return sameMachine;
+
+        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
+        {
+            return SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+                string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
+    }
+
+    private static string NormalizeHostName(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return string.Empty;
+        string trimmed = host.Trim();
+        int dot = trimmed.IndexOf('.');
+        return dot > 0 ? trimmed[..dot] : trimmed;
+    }
 
     private static async Task<SwkNotificationListener.ShopInfo?> ResolveLiveFriendShopAsync(Friend friend)
     {
@@ -3391,6 +3525,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _activeFriendShop = friend;
         _activeFriendShopRootPath = null;
+        _friendShopLiveMissCount = 0;
         _currentMode = DisplayMode.FriendShop;
         CancelFolderSizeCalculation();
         DisposeContentsWatcher();

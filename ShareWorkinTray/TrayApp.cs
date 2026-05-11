@@ -87,9 +87,11 @@ public sealed class TrayApp : IDisposable
                 _shopFolder = sf.GetString();
             else if (root.TryGetProperty("WatchFolder", out var wf) && wf.ValueKind != JsonValueKind.Null)
                 _shopFolder = wf.GetString();
-            if (root.TryGetProperty("IsOpenAtLastShutdown", out var open))
+            if (root.TryGetProperty("isOpenAtLastShutdown", out var open) ||
+                root.TryGetProperty("IsOpenAtLastShutdown", out open))
                 _wasOpenAtLastShutdown = open.GetBoolean();
-            if (root.TryGetProperty("AccessLevel", out var al))
+            if (root.TryGetProperty("accessLevel", out var al) ||
+                root.TryGetProperty("AccessLevel", out al))
                 _shareAccessRight = string.Equals(al.GetString(), "Read", StringComparison.OrdinalIgnoreCase)
                     ? ShareAccessRight.Read : ShareAccessRight.Full;
         }
@@ -249,7 +251,8 @@ public sealed class TrayApp : IDisposable
             if (!File.Exists(SettingsPath)) return;
             var node = JsonNode.Parse(File.ReadAllText(SettingsPath));
             if (node is not JsonObject obj) return;
-            obj["IsOpenAtLastShutdown"] = isOpen;
+            obj["isOpenAtLastShutdown"] = isOpen;
+            obj.Remove("IsOpenAtLastShutdown");
             if (shopFolder != null) obj["ShopFolder"] = shopFolder;
             File.WriteAllText(SettingsPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }

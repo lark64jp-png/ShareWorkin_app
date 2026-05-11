@@ -67,7 +67,8 @@ public partial class UserListWindow : Window
     {
         IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
-        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+        List<Friend> friends = FriendsRepository.LoadAll().ToList();
+        bool friendsChanged = false;
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache: friends={friends.Count} candidates={candidates.Count} shopInfos={shopInfos.Count}");
 
@@ -76,15 +77,16 @@ public partial class UserListWindow : Window
 
         foreach (Friend f in friends)
         {
-            LanCandidate? match = candidates.FirstOrDefault(c => SameHost(f.HostMachineName, c.HostName));
-            string normalizedHost = NormalizeHostName(f.HostMachineName);
-            SwkNotificationListener.ShopInfo? liveShop = shopInfos.FirstOrDefault(s =>
-                string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(s.ShareName, f.ShareName, StringComparison.OrdinalIgnoreCase));
+            LanCandidate? match = FindCandidateForFriend(f, candidates);
+            SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
+            if (liveShop is not null && UpdateFriendFromLiveShop(f, liveShop))
+            {
+                friendsChanged = true;
+            }
 
             if (match is not null)
             {
-                matchedHosts.Add(NormalizeHostName(match.HostName));
+                AddMatchedCandidateKeys(matchedHosts, match);
                 rows.Add(liveShop is not null
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForUnreachableFriend(f));
@@ -97,6 +99,11 @@ public partial class UserListWindow : Window
             }
         }
 
+        if (friendsChanged)
+        {
+            FriendsRepository.SaveAll(friends);
+        }
+
         string myHost = NormalizeHostName(Environment.MachineName);
 
         foreach (LanCandidate c in candidates)
@@ -104,6 +111,7 @@ public partial class UserListWindow : Window
             string host = NormalizeHostName(c.HostName);
             if (string.IsNullOrEmpty(host)) host = c.Address.ToString();
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
+            if (matchedHosts.Contains(c.Address.ToString())) continue;
             if (matchedHosts.Contains(host)) continue;
 
             SwkNotificationListener.ShopInfo? shopInfo = shopInfos
@@ -194,6 +202,73 @@ public partial class UserListWindow : Window
         string f1 = NormalizeHostName(found);
         return !string.IsNullOrWhiteSpace(e1) && !string.IsNullOrWhiteSpace(f1)
             && string.Equals(e1, f1, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static LanCandidate? FindCandidateForFriend(Friend friend, IReadOnlyList<LanCandidate> candidates)
+    {
+        return candidates.FirstOrDefault(c =>
+            SameHost(friend.HostMachineName, c.HostName) ||
+            (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+             string.Equals(c.Address.ToString(), friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindLiveShopForFriend(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
+        string normalizedHost = NormalizeHostName(friend.HostMachineName);
+
+        SwkNotificationListener.ShopInfo? exact = shopInfos.FirstOrDefault(s =>
+            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) return exact;
+
+        SwkNotificationListener.ShopInfo? sameMachine = shopInfos.FirstOrDefault(s =>
+            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase));
+        if (sameMachine is not null) return sameMachine;
+
+        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
+        {
+            return shopInfos.FirstOrDefault(s =>
+                string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
+    }
+
+    private static bool UpdateFriendFromLiveShop(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        bool changed = false;
+        string? previousLastSeen = friend.LastSeenAt;
+        string nowIso = DateTime.UtcNow.ToString("o");
+
+        if (!string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase))
+        {
+            friend.ShareName = liveShop.ShareName;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(liveShop.IpAddress) &&
+            !string.Equals(friend.LastKnownAddress, liveShop.IpAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            friend.LastKnownAddress = liveShop.IpAddress;
+            changed = true;
+        }
+
+        friend.LastFoundAt = nowIso;
+        friend.LastCheckedAt = nowIso;
+        friend.LastSeenAt = nowIso;
+        return changed || !string.Equals(previousLastSeen, nowIso, StringComparison.Ordinal);
+    }
+
+    private static void AddMatchedCandidateKeys(HashSet<string> matchedHosts, LanCandidate candidate)
+    {
+        string host = NormalizeHostName(candidate.HostName);
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            matchedHosts.Add(host);
+        }
+        matchedHosts.Add(candidate.Address.ToString());
     }
 
     private static string NormalizeHostName(string? host)

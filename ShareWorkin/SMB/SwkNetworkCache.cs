@@ -52,6 +52,20 @@ public static class SwkNetworkCache
         SwkLogger.Info($"SwkNetworkCache.RemoveShop: {machineName}/{shareName}");
     }
 
+    public static void UpsertShop(SwkNotificationListener.ShopInfo shop)
+    {
+        lock (_lock)
+        {
+            var updated = _shopInfos
+                .Where(s => !string.Equals(s.MachineName, shop.MachineName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            updated.Add(shop);
+            _shopInfos = updated;
+            _lastScanAt = DateTime.Now;
+        }
+        SwkLogger.Debug($"SwkNetworkCache.UpsertShop: {shop.MachineName}/{shop.ShareName}");
+    }
+
     public static async Task RefreshAsync(ScanMode mode, CancellationToken ct = default)
     {
         await _scanLock.WaitAsync(ct).ConfigureAwait(false);
