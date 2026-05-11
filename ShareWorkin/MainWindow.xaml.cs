@@ -196,16 +196,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var status = _pipeClient.GetStatus(timeoutMs: 1500);
-        if (status != null)
-        {
-            _isShopOpen = status.IsShopOpen;
-            if (status.IsShopOpen && !string.IsNullOrWhiteSpace(status.ShopFolder))
-            {
-                _shopFolder = status.ShopFolder;
-                MyShopTextBox.Text = _shopFolder;
-            }
-        }
+        _isShopOpen = _wasOpenAtLastShutdown;
         ShowMainWindow();
         UpdateShopState(_isShopOpen);
         _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
@@ -214,26 +205,20 @@ public partial class MainWindow : Window
     private async Task<bool> EnsureTrayConnectedAsync()
     {
         if (_pipeClient.Connect(timeoutMs: 150))
-        {
             return true;
-        }
 
-        if (!StartTrayProcess())
-        {
+        bool trayAlreadyRunning = Process.GetProcessesByName("ShareWorkinTray").Length > 0;
+        if (!trayAlreadyRunning && !StartTrayProcess())
             return false;
-        }
 
-        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline)
+        for (int i = 0; i < 5; i++)
         {
             await Task.Delay(100);
-            if (_pipeClient.Connect(timeoutMs: 120))
-            {
+            if (_pipeClient.Connect(timeoutMs: 100))
                 return true;
-            }
         }
 
-        return _pipeClient.Connect(timeoutMs: 1000);
+        return false;
     }
 
     private static bool StartTrayProcess()

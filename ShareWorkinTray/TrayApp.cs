@@ -58,8 +58,8 @@ public sealed class TrayApp : IDisposable
         LoadSettings();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         _notifyIcon.Visible = true;
-        RestoreOpenShopIfNeeded();
         PipeServer.Start();
+        RestoreOpenShopIfNeeded();
     }
 
     public void Dispose()
