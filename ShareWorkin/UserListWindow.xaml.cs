@@ -71,12 +71,6 @@ public partial class UserListWindow : Window
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache: friends={friends.Count} candidates={candidates.Count} shopInfos={shopInfos.Count}");
 
-        HashSet<string> shopOpen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (SwkNotificationListener.ShopInfo s in shopInfos)
-        {
-            shopOpen.Add(NormalizeHostName(s.MachineName));
-        }
-
         HashSet<string> matchedHosts = new(StringComparer.OrdinalIgnoreCase);
         List<UserListRow> rows = new();
 
@@ -84,18 +78,22 @@ public partial class UserListWindow : Window
         {
             LanCandidate? match = candidates.FirstOrDefault(c => SameHost(f.HostMachineName, c.HostName));
             string normalizedHost = NormalizeHostName(f.HostMachineName);
-            bool isOpen = shopOpen.Contains(normalizedHost);
+            SwkNotificationListener.ShopInfo? liveShop = shopInfos.FirstOrDefault(s =>
+                string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(s.ShareName, f.ShareName, StringComparison.OrdinalIgnoreCase));
 
             if (match is not null)
             {
                 matchedHosts.Add(NormalizeHostName(match.HostName));
-                rows.Add(isOpen
-                    ? UserListRow.ForConnectedFriend(f)
+                rows.Add(liveShop is not null
+                    ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForUnreachableFriend(f));
             }
             else
             {
-                rows.Add(UserListRow.ForUnreachableFriend(f));
+                rows.Add(liveShop is not null
+                    ? UserListRow.ForConnectedFriend(f, liveShop)
+                    : UserListRow.ForUnreachableFriend(f));
             }
         }
 
@@ -108,12 +106,12 @@ public partial class UserListWindow : Window
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
             if (matchedHosts.Contains(host)) continue;
 
-            bool isOpen = shopOpen.Contains(host);
+            SwkNotificationListener.ShopInfo? shopInfo = shopInfos
+                .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
+            bool isOpen = shopInfo is not null;
 
             if (isOpen)
             {
-                SwkNotificationListener.ShopInfo? shopInfo = shopInfos
-                    .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
                 rows.Add(UserListRow.ForNewShop(c, shopInfo));
             }
             else if (c.IsInstallCandidate)
@@ -255,12 +253,14 @@ public sealed class UserListRow
         }
     }
 
-    public static UserListRow ForConnectedFriend(Friend friend) => new()
+    public static UserListRow ForConnectedFriend(
+        Friend friend,
+        SwkNotificationListener.ShopInfo? liveShop = null) => new()
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
-        ShareFolderName = friend.ShareName,
+        ShareFolderName = liveShop?.ShareName ?? friend.ShareName,
         Memo = friend.Memo,
-        IpLabel = friend.LastKnownAddress ?? string.Empty,
+        IpLabel = liveShop?.IpAddress ?? friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.ConnectedFriend,
         IconBrush = Brushes.White,
         IconImage = LoadIconImage(friend.IconKey),

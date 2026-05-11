@@ -37,18 +37,18 @@ public sealed class UiPipeClient : IDisposable
 
     public bool IsConnected => _pipe?.IsConnected == true;
 
-    public bool Connect()
+    public bool Connect(int timeoutMs = 3000)
     {
         try
         {
             Disconnect();
             var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            pipe.Connect(3000);
+            pipe.Connect(Math.Max(1, timeoutMs));
             _pipe = pipe;
             _reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
             _writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
             _receiveCts = new CancellationTokenSource();
-            _ = ReceiveLoopAsync(_receiveCts.Token);
+            _ = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
             return true;
         }
         catch
@@ -68,9 +68,9 @@ public sealed class UiPipeClient : IDisposable
         _pipe = null;
     }
 
-    public TrayStatus? GetStatus()
+    public TrayStatus? GetStatus(int timeoutMs = 15000)
     {
-        var json = SendCommand("{\"cmd\":\"GET_STATUS\"}");
+        var json = SendCommand("{\"cmd\":\"GET_STATUS\"}", timeoutMs);
         if (json == null) return null;
         try
         {

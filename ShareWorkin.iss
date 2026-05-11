@@ -820,11 +820,12 @@ begin
 
     if (SelectedAction = 'both') or (SelectedAction = 'app') then
     begin
-      RegWriteStringValue(HKCU, STARTUP_REG_KEY, APP_NAME,
-        ExpandConstant('"' + '{app}\' + TRAY_EXE + '"'));
+      Exec(ExpandConstant('{sys}\schtasks.exe'),
+        '/Create /TN "ShareWorkin\ShareWorkinTray" /TR "\"' +
+        ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       MsgBox(APP_NAME + ' のインストールが完了しました。', mbInformation, MB_OK);
-      Exec(ExpandConstant('{app}\' + TRAY_EXE), '', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
-      Exec(ExpandConstant('{app}\' + APP_EXE), '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+      Exec(ExpandConstant('{app}\' + APP_EXE), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
     end;
   end;
 end;
@@ -879,7 +880,9 @@ begin
       WaitForProcessExit(APP_EXE);
     end;
 
-    RegDeleteValue(HKCU, STARTUP_REG_KEY, APP_NAME);
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+      '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     CleanupShareWorkinShares();
     CleanupShareWorkinAccount();
 

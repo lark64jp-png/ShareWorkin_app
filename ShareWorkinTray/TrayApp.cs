@@ -102,11 +102,26 @@ public sealed class TrayApp : IDisposable
     private void RestoreOpenShopIfNeeded()
     {
         if (!_wasOpenAtLastShutdown || string.IsNullOrWhiteSpace(_shopFolder)) return;
-        if (!Directory.Exists(_shopFolder)) return;
+
+        if (!Directory.Exists(_shopFolder))
+        {
+            PatchSettingsOpenState(false, _shopFolder);
+            ShowBalloonTip("お店を再開できませんでした",
+                "前回のお店のフォルダーが見つかりません。\n画面を開いて設定を確認してください。", null);
+            return;
+        }
+
         string shareName = DeriveShareName(_shopFolder);
         if (string.IsNullOrWhiteSpace(shareName)) return;
+
         var (ok, error, _, _, _) = OpenShop(_shopFolder, shareName, shareName, _shareAccessRight, false);
-        if (!ok) SwkLogger.Warn($"TrayApp.RestoreOpenShopIfNeeded failed: {error}");
+        if (!ok)
+        {
+            SwkLogger.Warn($"TrayApp.RestoreOpenShopIfNeeded failed: {error}");
+            PatchSettingsOpenState(false, _shopFolder);
+            ShowBalloonTip("お店を再開できませんでした",
+                "前回の状態と異なる可能性があります。\n画面を開いて確認してください。", _shopFolder);
+        }
     }
 
     public (bool Ok, string? Error, bool NeedsOwnership, OwnershipChangePrompt OwnershipPrompt, IReadOnlyList<string>? BlockedPaths)

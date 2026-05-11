@@ -140,8 +140,7 @@ public partial class MainWindow : Window
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
         // ExplorerTargetComboBox.SelectionChanged は XAML 側で登録済み (二重発火防止のため code-behind 登録は外す)
-        PopulateExplorerDropdown();
-        MigrateLegacyAppHomeHold();
+        InitializeExplorerDropdownForStartup();
         UpdateShopState(false);
         UpdateColumnHeaders();
         string? ver = (System.Reflection.CustomAttributeExtensions
@@ -177,49 +176,27 @@ public partial class MainWindow : Window
 
         _startupHandled = true;
         Hide();
-        Dispatcher.BeginInvoke(new Action(HandleStartup));
+        Dispatcher.BeginInvoke(new Action(() => _ = HandleStartupAsync()));
     }
 
-    private void HandleStartup()
+    private async Task HandleStartupAsync()
     {
         if (!EnsureUiUnlocked())
         {
             System.Windows.Application.Current.Shutdown();
             return;
         }
-        if (!_pipeClient.Connect())
+
+        if (!await EnsureTrayConnectedAsync())
         {
-            string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
-            string trayExe = Path.Combine(exeDir ?? string.Empty, "ShareWorkinTray.exe");
-            bool launched = false;
-            if (File.Exists(trayExe))
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo(trayExe) { UseShellExecute = true });
-                    launched = true;
-                }
-                catch { }
-            }
-            bool connected = false;
-            if (launched)
-            {
-                for (int i = 0; i < 5; i++)
-                {
-                    Thread.Sleep(1000);
-                    if (_pipeClient.Connect()) { connected = true; break; }
-                }
-            }
-            if (!connected)
-            {
-                System.Windows.MessageBox.Show(
-                    "ShareWorkinTray を起動できませんでした。\nアプリを再インストールしてください。",
-                    "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
-                System.Windows.Application.Current.Shutdown();
-                return;
-            }
+            System.Windows.MessageBox.Show(
+                "ShareWorkinTray を起動できませんでした。\nアプリを再インストールしてください。",
+                "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.Application.Current.Shutdown();
+            return;
         }
-        var status = _pipeClient.GetStatus();
+
+        var status = _pipeClient.GetStatus(timeoutMs: 1500);
         if (status != null)
         {
             _isShopOpen = status.IsShopOpen;
@@ -231,18 +208,131 @@ public partial class MainWindow : Window
         }
         ShowMainWindow();
         UpdateShopState(_isShopOpen);
-        _ = SwkNetworkCache.RefreshAsync(ScanMode.Quick);
+        _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
+    }
+
+    private async Task<bool> EnsureTrayConnectedAsync()
+    {
+        if (_pipeClient.Connect(timeoutMs: 150))
+        {
+            return true;
+        }
+
+        if (!StartTrayProcess())
+        {
+            return false;
+        }
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+            if (_pipeClient.Connect(timeoutMs: 120))
+            {
+                return true;
+            }
+        }
+
+        return _pipeClient.Connect(timeoutMs: 500);
+    }
+
+    private static bool StartTrayProcess()
+    {
+        string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
+        string trayExe = Path.Combine(exeDir ?? string.Empty, "ShareWorkinTray.exe");
+        if (!File.Exists(trayExe))
+        {
+            return false;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(trayExe) { UseShellExecute = true });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"StartTrayProcess failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void CompleteStartupAfterFirstPaint()
+    {
+        NavigateToStartupShopFolder();
+        _ = MigrateLegacyAppHomeHoldAsync();
+        _ = RefreshExternalFriendDataAfterStartupAsync();
+    }
+
+    private async Task RefreshExternalFriendDataAfterStartupAsync()
+    {
+        PopulateExplorerDropdown();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await SwkNetworkCache.RefreshAsync(ScanMode.Quick, cts.Token);
+            await Dispatcher.InvokeAsync(PopulateExplorerDropdown, DispatcherPriority.Background);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"RefreshExternalFriendDataAfterStartupAsync failed: {ex.Message}");
+        }
+    }
+
+    private void NavigateToStartupShopFolder()
+    {
+        if (!_isShopOpen || string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return;
+        }
+
+        _currentMode = DisplayMode.Shop;
+        _activeFriendShop = null;
+        _activeFriendShopRootPath = null;
+        NavigateToShopRoot(addHistory: false);
+    }
+
+    private void InitializeExplorerDropdownForStartup()
+    {
+        _suppressDropdownChange = true;
+        try
+        {
+            ExplorerTargetComboBox.Items.Clear();
+            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null, null));
+            ExplorerTargetComboBox.SelectedIndex = 0;
+        }
+        finally
+        {
+            _suppressDropdownChange = false;
+        }
     }
 
     // v1.04〜v1.08 では GetHoldFolderPath() が AppHomeDirectory\hold を返す実装だった。
     // v1.09 で _shopFolder\保留 に戻したため、AppHomeDirectory\hold にあるファイルを移動する。
-    private void MigrateLegacyAppHomeHold()
+    private async Task MigrateLegacyAppHomeHoldAsync()
     {
-        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
+        string? shopFolder = _shopFolder;
+        if (string.IsNullOrWhiteSpace(shopFolder))
+        {
             return;
+        }
+
+        int movedCount = await Task.Run(() => MigrateLegacyAppHomeHold(shopFolder));
+        if (movedCount > 0)
+        {
+            SwkLogger.Info($"Hold migration: moved {movedCount} entries from AppHome to shop hold folder");
+            SetTransientStatus("保留領域を移しました。");
+        }
+    }
+
+    private static int MigrateLegacyAppHomeHold(string shopFolder)
+    {
+        if (!Directory.Exists(shopFolder))
+            return 0;
 
         if (!Directory.Exists(DefaultHoldFolderPath))
-            return;
+            return 0;
 
         List<string> entries;
         try
@@ -252,22 +342,22 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             SwkLogger.Warn($"Hold migration: enumerate failed ({ex.Message})");
-            return;
+            return 0;
         }
 
         if (entries.Count == 0)
         {
             TryDeleteEmptyDirectory(DefaultHoldFolderPath);
-            return;
+            return 0;
         }
 
-        if (!TryEnsureHoldFolder())
+        string holdFolderPath = Path.Combine(shopFolder, HoldFolderName);
+        if (!TryEnsureHoldFolder(holdFolderPath))
         {
             SwkLogger.Warn("Hold migration: could not create hold folder, skipping");
-            return;
+            return 0;
         }
 
-        string holdFolderPath = GetHoldFolderPath();
         string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         int movedCount = 0;
         foreach (string entry in entries)
@@ -290,12 +380,7 @@ public partial class MainWindow : Window
         }
 
         TryDeleteEmptyDirectory(DefaultHoldFolderPath);
-
-        if (movedCount > 0)
-        {
-            SwkLogger.Info($"Hold migration: moved {movedCount} entries from AppHome to shop hold folder");
-            SetTransientStatus("保留領域を移しました。");
-        }
+        return movedCount;
     }
 
     private static string ResolveNonConflictingPath(string directory, string baseName, string timestamp)
@@ -340,10 +425,12 @@ public partial class MainWindow : Window
     }
 
     private bool TryEnsureHoldFolder()
+        => TryEnsureHoldFolder(GetHoldFolderPath());
+
+    private static bool TryEnsureHoldFolder(string holdFolderPath)
     {
         try
         {
-            string holdFolderPath = GetHoldFolderPath();
             Directory.CreateDirectory(holdFolderPath);
             ClearHiddenFolderAttribute(holdFolderPath);
             SetPrivateHoldFolderPermissions(holdFolderPath);
@@ -3197,7 +3284,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         try
         {
             ExplorerTargetComboBox.Items.Clear();
-            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null));
+            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null, null));
 
             IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
             foreach (Friend f in friends
@@ -3205,7 +3292,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                          StringComparer.CurrentCultureIgnoreCase))
             {
                 string label = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
-                ExplorerTargetComboBox.Items.Add(new ExplorerTarget(label, f));
+                ExplorerTargetComboBox.Items.Add(new ExplorerTarget(label, f, FindLiveShopInfo(f)));
             }
 
             SyncDropdownToCurrentMode();
@@ -3223,7 +3310,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         SwkLogger.Debug($"ExplorerTargetComboBox_SelectionChanged: {target.Label}");
 
-        if (target.Friend == null)
+        if (target.Friend is not Friend friend)
         {
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
@@ -3231,53 +3318,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        // 友達のお店切替 = 共有トップへ移動 + リロード処理を発動。
-        // _currentFolder を UNC ルートにセットしてから ExecuteRefreshAsync を呼ぶことで、
-        // ① の Directory.Exists が既存セッション上で成功し、再認証(EnsureConnection)を呼ばずに表示できる。
-        string uncTop = ResolveFriendUncTop(target.Friend);
-        if (string.IsNullOrWhiteSpace(uncTop))
-        {
-            SetTransientStatus("接続できません");
-            return;
-        }
-
-        _activeFriendShop = target.Friend;
-        _activeFriendShopRootPath = uncTop;
-        _currentMode = DisplayMode.FriendShop;
-        _currentFolder = uncTop;
-        _backStack.Clear();
-        _forwardStack.Clear();
-        UpdateBreadcrumb();
-        UpdateNavigationState();
-
-        await ExecuteRefreshAsync();
+        await NavigateToFriendShopAsync(friend, target.ShopInfo);
     }
 
-    private static string ResolveFriendUncTop(Friend friend)
-    {
-        return BuildFriendUncCandidates(friend).FirstOrDefault() ?? string.Empty;
-    }
-
-    private static List<string> BuildFriendUncCandidates(Friend friend)
+    private static List<string> BuildFriendUncCandidates(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
         List<string> candidates = [];
-        AddFriendUncCandidate(candidates, friend.HostMachineName, friend.ShareName);
-
-        var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-
-        if (!string.IsNullOrWhiteSpace(liveShop?.IpAddress))
+        if (!string.IsNullOrWhiteSpace(liveShop.IpAddress))
         {
-            AddFriendUncCandidate(candidates, liveShop.IpAddress, friend.ShareName);
+            AddFriendUncCandidate(candidates, liveShop.IpAddress, liveShop.ShareName);
         }
 
-        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
-        {
-            AddFriendUncCandidate(candidates, friend.LastKnownAddress, friend.ShareName);
-        }
-
-        AddFriendUncCandidate(candidates, friend.ConnectHost, friend.ShareName);
+        AddFriendUncCandidate(candidates, liveShop.MachineName, liveShop.ShareName);
+        AddFriendUncCandidate(candidates, friend.HostMachineName, liveShop.ShareName);
         return candidates;
     }
 
@@ -3295,7 +3348,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private async Task NavigateToFriendShopAsync(Friend friend)
+    private static SwkNotificationListener.ShopInfo? FindLiveShopInfo(Friend friend)
+        => SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+
+    private static async Task<SwkNotificationListener.ShopInfo?> ResolveLiveFriendShopAsync(Friend friend)
+    {
+        SwkNotificationListener.ShopInfo? hit = FindLiveShopInfo(friend);
+        if (hit is not null)
+        {
+            return hit;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await SwkNetworkCache.RefreshAsync(ScanMode.Quick, cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"ResolveLiveFriendShopAsync scan failed: {ex.Message}");
+        }
+
+        return FindLiveShopInfo(friend);
+    }
+
+    private static void UpdateFriendExternalState(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        string nowIso = DateTime.UtcNow.ToString("o");
+        friend.ShareName = liveShop.ShareName;
+        friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
+        friend.LastFoundAt = nowIso;
+        friend.LastCheckedAt = nowIso;
+        friend.LastSeenAt = nowIso;
+
+        var all = FriendsRepository.LoadAll().ToList();
+        Friend? stored = all.FirstOrDefault(f => f.Id == friend.Id);
+        if (stored is null)
+        {
+            return;
+        }
+
+        stored.ShareName = friend.ShareName;
+        stored.LastKnownAddress = friend.LastKnownAddress;
+        stored.LastFoundAt = friend.LastFoundAt;
+        stored.LastCheckedAt = friend.LastCheckedAt;
+        stored.LastSeenAt = friend.LastSeenAt;
+        FriendsRepository.SaveAll(all);
+    }
+
+    private async Task NavigateToFriendShopAsync(Friend friend, SwkNotificationListener.ShopInfo? knownLiveShop = null)
     {
         string label = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
         SwkLogger.Debug($"NavigateToFriendShopAsync: {label} ({friend.ConnectUncPath})");
@@ -3313,19 +3417,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         UpdateBreadcrumb();
         UpdateNavigationState();
 
-        List<string> uncCandidates = BuildFriendUncCandidates(friend);
-        if (uncCandidates.Count == 0)
+        SwkNotificationListener.ShopInfo? liveShop = knownLiveShop ?? await ResolveLiveFriendShopAsync(friend);
+        if (liveShop is null)
         {
             SetTransientStatus("接続できません");
             return;
         }
 
-        // キャッシュに生きた IP があれば優先使用（LastKnownAddress が空や古い場合も対応）
-        var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-            string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrEmpty(liveShop?.IpAddress))
-            AddFriendUncCandidate(uncCandidates, liveShop.IpAddress, friend.ShareName);
+        List<string> uncCandidates = BuildFriendUncCandidates(friend, liveShop);
+        if (uncCandidates.Count == 0)
+        {
+            SetTransientStatus("接続できません");
+            return;
+        }
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: candidates={string.Join(", ", uncCandidates)}");
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
@@ -3359,6 +3463,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
+        UpdateFriendExternalState(friend, liveShop);
         _activeFriendShopRootPath = accessiblePath;
         SuppressExternalChangeNotifications();
         NavigateTo(accessiblePath, addHistory: false, clearForward: true);
@@ -4289,4 +4394,7 @@ public sealed class AppSettings
     public JsonElement? ReservedForV22 { get; set; }
 }
 
-public sealed record ExplorerTarget(string Label, Friend? Friend);
+public sealed record ExplorerTarget(
+    string Label,
+    Friend? Friend,
+    SwkNotificationListener.ShopInfo? ShopInfo);
