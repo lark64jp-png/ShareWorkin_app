@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using ShareWorkin.SMB;
 using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
@@ -18,24 +19,34 @@ public partial class UserListWindow : Window
 {
     private readonly Window _ownerWindow;
     private readonly ObservableCollection<UserListRow> _rows = new();
+    private readonly DispatcherTimer _autoRefreshTimer;
+    private bool _isRefreshing;
 
     public UserListWindow(Window owner)
     {
         InitializeComponent();
         _ownerWindow = owner;
         UserListView.ItemsSource = _rows;
+        _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+        _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
         SwkLogger.Debug($"UserListWindow ctor: owner={owner?.GetType().Name ?? "null"}");
         Loaded += async (_, _) =>
         {
             SwkLogger.Debug("UserListWindow Loaded -> BuildFromCacheAsync");
             await BuildFromCacheAsync();
+            _autoRefreshTimer.Start();
+        };
+        Closed += (_, _) =>
+        {
+            _autoRefreshTimer.Stop();
+            _autoRefreshTimer.Tick -= AutoRefreshTimer_Tick;
         };
     }
 
     // 一覧を開くたびに必ず再スキャンする。キャッシュがあれば暫定表示してから更新。
     private async Task BuildFromCacheAsync()
     {
-        if (SwkNetworkCache.IsReady)
+        if (SwkNetworkCache.IsReady && SwkNetworkCache.ShopInfos.Count > 0)
             BuildUiFromCache();
         await RunScanAndBuildAsync();
     }
@@ -43,6 +54,8 @@ public partial class UserListWindow : Window
     // スキャンを実行してキャッシュを更新し UI を再構築する（再スキャンボタン用）。
     private async Task RunScanAndBuildAsync()
     {
+        if (_isRefreshing) return;
+
         ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
 
         ReloadButton.IsEnabled = false;
@@ -52,15 +65,22 @@ public partial class UserListWindow : Window
 
         try
         {
+            _isRefreshing = true;
             await SwkNetworkCache.RefreshAsync(mode);
         }
         finally
         {
+            _isRefreshing = false;
             LoadingBar.Visibility = Visibility.Collapsed;
             ReloadButton.IsEnabled = true;
         }
 
         BuildUiFromCache();
+    }
+
+    private async void AutoRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        await RunScanAndBuildAsync();
     }
 
     private void BuildUiFromCache()

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -77,11 +79,12 @@ public static class SwkNetworkCache
             try
             {
                 candidates = await LanScanner.ScanAsync(fullScan: mode == ScanMode.Full, ct).ConfigureAwait(false);
+                candidates = await MergeSavedFriendCandidatesAsync(candidates, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"SwkNetworkCache: LAN scan failed: {ex.Message}");
-                candidates = Array.Empty<LanCandidate>();
+                candidates = await MergeSavedFriendCandidatesAsync(Array.Empty<LanCandidate>(), ct).ConfigureAwait(false);
             }
 
             IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos;
@@ -100,6 +103,53 @@ public static class SwkNetworkCache
         finally
         {
             _scanLock.Release();
+        }
+    }
+
+    private static async Task<IReadOnlyList<LanCandidate>> MergeSavedFriendCandidatesAsync(
+        IReadOnlyList<LanCandidate> scanned,
+        CancellationToken ct)
+    {
+        Dictionary<string, LanCandidate> merged = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (LanCandidate c in scanned)
+        {
+            merged[c.Address.ToString()] = c;
+        }
+
+        foreach (Friend friend in FriendsRepository.LoadAll())
+        {
+            AddFriendAddress(friend.LastKnownAddress, friend.HostMachineName);
+
+            if (!string.IsNullOrWhiteSpace(friend.HostMachineName))
+            {
+                try
+                {
+                    IPAddress[] addresses = await Dns.GetHostAddressesAsync(friend.HostMachineName, ct).ConfigureAwait(false);
+                    foreach (IPAddress address in addresses)
+                    {
+                        AddFriendAddress(address.ToString(), friend.HostMachineName);
+                    }
+                }
+                catch (Exception ex) when (ex is SocketException or ArgumentException or OperationCanceledException)
+                {
+                    SwkLogger.Debug($"MergeSavedFriendCandidatesAsync DNS failed for {friend.HostMachineName}: {ex.Message}");
+                }
+            }
+        }
+
+        return merged.Values.ToArray();
+
+        void AddFriendAddress(string? value, string? hostName)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!IPAddress.TryParse(value, out IPAddress? address)) return;
+            if (address.AddressFamily != AddressFamily.InterNetwork) return;
+            string key = address.ToString();
+            if (!merged.ContainsKey(key))
+            {
+                merged[key] = new LanCandidate(address, hostName);
+            }
         }
     }
 }
