@@ -366,26 +366,11 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     }
 
     /// <summary>
-    /// 起動直後と 30 秒ごとに UDP ブロードキャストを送信する
+    /// 起動直後に UDP ブロードキャストを1回送信する
     /// </summary>
     private async Task BroadcastPeriodicNotificationsAsync(CancellationToken cancellationToken)
     {
         await SendUdpBroadcastAsync(cancellationToken);
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
-                await SendUdpBroadcastAsync(cancellationToken);
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex)
-            {
-                SwkLogger.Warn($"BroadcastPeriodicNotificationsAsync error: {ex.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
-            }
-        }
     }
 
     private async Task SendUdpBroadcastAsync(CancellationToken cancellationToken)

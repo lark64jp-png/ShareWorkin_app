@@ -21,13 +21,15 @@ public partial class UserListWindow : Window
     private readonly ObservableCollection<UserListRow> _rows = new();
     private readonly DispatcherTimer _autoRefreshTimer;
     private bool _isRefreshing;
+    private int _intervalStepIndex = 0;
+    private static readonly int[] IntervalSteps = { 8, 16, 30, 60 };
 
     public UserListWindow(Window owner)
     {
         InitializeComponent();
         _ownerWindow = owner;
         UserListView.ItemsSource = _rows;
-        _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+        _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(IntervalSteps[0]) };
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
         SwkLogger.Debug($"UserListWindow ctor: owner={owner?.GetType().Name ?? "null"}");
         Loaded += async (_, _) =>
@@ -80,7 +82,42 @@ public partial class UserListWindow : Window
 
     private async void AutoRefreshTimer_Tick(object? sender, EventArgs e)
     {
-        await RunScanAndBuildAsync();
+        await AutoRefreshSilentAsync();
+    }
+
+    // 定期チェック用：UI表示なしでスキャンし、変化があればインターバルをリセット。
+    private async Task AutoRefreshSilentAsync()
+    {
+        if (_isRefreshing) return;
+
+        var snapshot = _rows.Select(r => (r.Kind, r.NameLabel)).ToList();
+
+        ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
+        _isRefreshing = true;
+        try
+        {
+            await SwkNetworkCache.RefreshAsync(mode);
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
+
+        BuildUiFromCache();
+
+        bool changed = !snapshot.SequenceEqual(_rows.Select(r => (r.Kind, r.NameLabel)));
+        if (changed)
+        {
+            _intervalStepIndex = 0;
+            SwkLogger.Debug("UserListWindow.AutoRefreshSilentAsync: change detected -> interval reset to 8s");
+        }
+        else if (_intervalStepIndex < IntervalSteps.Length - 1)
+        {
+            _intervalStepIndex++;
+            SwkLogger.Debug($"UserListWindow.AutoRefreshSilentAsync: no change -> interval={IntervalSteps[_intervalStepIndex]}s");
+        }
+
+        _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[_intervalStepIndex]);
     }
 
     private void BuildUiFromCache()
@@ -183,6 +220,8 @@ public partial class UserListWindow : Window
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Debug("UserListWindow.ReloadButton_Click");
+        _intervalStepIndex = 0;
+        _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[0]);
         await RunScanAndBuildAsync();
     }
 
