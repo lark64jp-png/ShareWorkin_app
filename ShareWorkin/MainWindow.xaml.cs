@@ -193,7 +193,7 @@ public partial class MainWindow : Window
         if (!await EnsureTrayConnectedAsync())
         {
             System.Windows.MessageBox.Show(
-                "ShareWorkinTray を起動できませんでした。\nアプリを再インストールしてください。",
+                "ShareWorkinTray の起動が間に合いませんでした。\n少し待ってから、もう一度 ShareWorkin を起動してください。",
                 "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
             System.Windows.Application.Current.Shutdown();
             return;
@@ -228,7 +228,9 @@ public partial class MainWindow : Window
         if (!trayAlreadyRunning && !StartTrayProcess())
             return false;
 
-        for (int i = 0; i < 5; i++)
+        // Tray のコールドスタート(JIT・Defender スキャン・WPF 初期化)で
+        // パイプ受け入れまで数秒かかる場合がある。100ms 間隔で最大 ~5秒待つ。
+        for (int i = 0; i < 25; i++)
         {
             await Task.Delay(100);
             if (_pipeClient.Connect(timeoutMs: 100))

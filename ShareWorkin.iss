@@ -280,15 +280,16 @@ var
   I: Integer;
 begin
   Result := False;
-  for I := 1 to 5 do
+  for I := 1 to 50 do
   begin
-    Sleep(1000);
+    Sleep(100);
     if not IsProcessRunning(FileName) then
     begin
       Result := True;
       Exit;
     end;
-    Exec('taskkill', '/IM ' + FileName + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    if (I mod 10) = 0 then
+      Exec('taskkill', '/IM ' + FileName + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 
   MsgBox(APP_NAME + ' を終了できませんでした。' + #13#10 +
@@ -310,6 +311,11 @@ begin
       Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       if not WaitForProcessExit(APP_EXE) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if not WaitForProcessExit(TRAY_EXE) then
       begin
         Result := False;
         Exit;
@@ -397,6 +403,14 @@ begin
   begin
     Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if not WaitForProcessExit(APP_EXE) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+  if IsProcessRunning(TRAY_EXE) then
+  begin
+    if not WaitForProcessExit(TRAY_EXE) then
     begin
       Result := False;
       Exit;
