@@ -241,17 +241,35 @@ public partial class UserListWindow : Window
 
         SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: row={row.Kind}/{row.NameLabel}");
 
-        IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
-        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
-
-        FriendsWindow pickup = (row.Kind == UserListRowKind.NewShop && row.ShopInfo != null)
-            ? new FriendsWindow(this, row.ShopInfo, candidates, shopInfos)
-            : new FriendsWindow(this, row.Friend, row.Candidate, candidates, shopInfos);
-        bool? result = pickup.ShowDialog();
-        SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: pickup result={result}");
-        if (result == true)
+        // ダイアログ表示中は自動リフレッシュを止める。確定で戻った時に必ず可視スキャンを
+        // 走らせて緑色のバーで進行中を伝えるため、在進行のスキャンが残っていれば終わるまで待つ。
+        _autoRefreshTimer.Stop();
+        try
         {
-            await RunScanAndBuildAsync();
+            IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
+            IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
+
+            FriendsWindow pickup = (row.Kind == UserListRowKind.NewShop && row.ShopInfo != null)
+                ? new FriendsWindow(this, row.ShopInfo, candidates, shopInfos)
+                : new FriendsWindow(this, row.Friend, row.Candidate, candidates, shopInfos);
+            bool? result = pickup.ShowDialog();
+            SwkLogger.Debug($"UserListWindow.UserListView_MouseDoubleClick: pickup result={result}");
+
+            while (_isRefreshing)
+            {
+                await Task.Delay(50);
+            }
+
+            if (result == true)
+            {
+                _intervalStepIndex = 0;
+                _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[0]);
+                await RunScanAndBuildAsync();
+            }
+        }
+        finally
+        {
+            _autoRefreshTimer.Start();
         }
     }
 
