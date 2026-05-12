@@ -3609,7 +3609,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
         UpdateFriendExternalState(friend, liveShop);
         _activeFriendShopRootPath = accessiblePath;
+        bool hadMissingStatus = _missingFriendShopStatus != null;
         _missingFriendShopStatus = null;
+        if (hadMissingStatus)
+        {
+            UpdateShopState(_isShopOpen);
+        }
         SuppressExternalChangeNotifications();
         NavigateTo(accessiblePath, addHistory: false, clearForward: true);
         await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
