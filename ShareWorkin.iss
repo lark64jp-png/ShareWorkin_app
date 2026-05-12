@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.15"
+#define MyAppVersion "1.16"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.15_install
+OutputBaseFilename=ShareWorkin_v1.16_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -62,7 +62,7 @@ Type: filesandordirs; Name: "{app}"
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.15';
+  APP_VERSION = '1.16';
   APP_EXE = 'ShareWorkin.exe';
   TRAY_EXE = 'ShareWorkinTray.exe';
   STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';

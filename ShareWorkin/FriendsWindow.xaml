@@ -46,7 +46,7 @@
                         IsEnabled="False"
                         Click="DeleteButton_Click" />
                 <Button x:Name="OkButton"
-                        Content="確定"
+                        Content="更新"
                         Height="32"
                         MinWidth="80"
                         IsEnabled="False"

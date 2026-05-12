@@ -19,6 +19,13 @@ namespace ShareWorkin;
 
 public partial class FriendsWindow : Window
 {
+    private enum CommitAction
+    {
+        Update,
+        Switch,
+        Register,
+    }
+
     private readonly Window _ownerWindow;
     private IReadOnlyList<LanCandidate> _candidates;
     private IReadOnlyList<SwkNotificationListener.ShopInfo> _shopInfos;
@@ -51,11 +58,12 @@ public partial class FriendsWindow : Window
         _activeNewCandidate = null;
         _activeShopInfo = null;
 
-        if (existing == null && initialCandidate != null)
+        if (initialCandidate != null)
         {
             string host = NormalizeHost(initialCandidate.HostName);
             _activeShopInfo = _shopInfos.FirstOrDefault(s =>
-                string.Equals(NormalizeHost(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
+                string.Equals(NormalizeHost(s.MachineName), host, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.IpAddress, initialCandidate.Address.ToString(), StringComparison.OrdinalIgnoreCase));
             if (_activeShopInfo == null)
                 _activeNewCandidate = initialCandidate;
         }
@@ -70,6 +78,7 @@ public partial class FriendsWindow : Window
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
+            SelectCurrentCandidateRow();
             _initialApplied = true;
         };
     }
@@ -95,6 +104,7 @@ public partial class FriendsWindow : Window
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             ApplyActiveTarget();
             RefreshCandidateRows();
+            SelectCurrentCandidateRow();
             _initialApplied = true;
         };
     }
@@ -116,6 +126,7 @@ public partial class FriendsWindow : Window
     private void ApplyActiveTargetInternal()
     {
         DeleteButton.IsEnabled = false;
+        CommitAction action = ResolveCommitAction();
 
         if (_activeFriend != null)
         {
@@ -125,28 +136,28 @@ public partial class FriendsWindow : Window
             {
                 string targetHost = NormalizeHost(_activeNewCandidate.HostName);
                 if (string.IsNullOrEmpty(targetHost)) targetHost = _activeNewCandidate.Address.ToString();
-                TitleTextBlock.Text = "接続先を変更";
+                TitleTextBlock.Text = "接続先を切替";
                 SubtitleTextBlock.Text =
-                    $"「{friendName}」の接続先を「{targetHost}」に変更します。お友達名を確認してください。";
+                    $"「{friendName}」の接続先を「{targetHost}」へ切り替えます。下の接続未確定リストで候補を選んだ状態です。";
             }
             else if (_activeShopInfo != null)
             {
-                // 接続先変更モード: 招待コード交換で接続先を更新
+                // 接続先切替モード: 招待コード交換で接続先を更新
                 string shopHost = NormalizeHost(_activeShopInfo.MachineName);
                 string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
-                TitleTextBlock.Text = "接続先を変更";
+                TitleTextBlock.Text = "接続先を切替";
                 SubtitleTextBlock.Text =
-                    $"「{friendName}」の接続先を「{shopHost}」{shopIp}に変更します。招待コードを取得して更新します。";
+                    $"「{friendName}」の接続先を「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
             }
             else if (_activeFriend.IsCurrentlyFound)
             {
-                TitleTextBlock.Text = "接続を更新";
-                SubtitleTextBlock.Text = $"「{friendName}」の編集ができます。";
+                TitleTextBlock.Text = "ユーザー情報を更新";
+                SubtitleTextBlock.Text = $"「{friendName}」の名前・メモ・アイコンを更新できます。";
             }
             else
             {
-                TitleTextBlock.Text = "接続を更新";
-                SubtitleTextBlock.Text = $"「{friendName}」は現在未接続です。接続未確定リストから別の接続先を指定するか、削除してください。";
+                TitleTextBlock.Text = "ユーザー情報を更新";
+                SubtitleTextBlock.Text = $"「{friendName}」は現在未接続です。情報を更新するか、下の接続未確定リストから候補を選んで接続先を切り替えてください。";
             }
 
             NameTextBox.Text = _activeFriend.DisplayName;
@@ -162,16 +173,16 @@ public partial class FriendsWindow : Window
             {
                 ShareFolderTextBlock.Text = "(招待コードから取得します)";
                 AccessTextBlock.Text = "(招待コードから取得します)";
-                PresenceTextBlock.Text = "更新予定";
+                PresenceTextBlock.Text = "切替予定";
             }
         }
         else if (_activeShopInfo != null)
         {
             // New モード: ShopInfo 自動登録
-            TitleTextBlock.Text = "新規接続";
+            TitleTextBlock.Text = "新規登録";
             string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
             SubtitleTextBlock.Text =
-                $"「{_activeShopInfo.MachineName}」{shopIp}を新しくお友達として登録します。お友達名を入力してください。";
+                $"「{_activeShopInfo.MachineName}」{shopIp}を新しく登録します。お友達名を入力してください。";
             NameTextBox.Text = string.Empty;
             MemoTextBox.Text = string.Empty;
             ShareFolderTextBlock.Text = "(招待コードから取得します)";
@@ -183,7 +194,7 @@ public partial class FriendsWindow : Window
             // 候補あり・ShopInfo なし: ShareWorkin 未起動
             string host = NormalizeHost(_activeNewCandidate.HostName);
             if (string.IsNullOrEmpty(host)) host = _activeNewCandidate.Address.ToString();
-            TitleTextBlock.Text = "新規接続";
+            TitleTextBlock.Text = "新規登録";
             SubtitleTextBlock.Text =
                 $"「{host}」では ShareWorkin が起動していないため登録できません。相手側でアプリを起動してから再読み込みしてください。";
             NameTextBox.Text = string.Empty;
@@ -195,14 +206,21 @@ public partial class FriendsWindow : Window
         else
         {
             // 未選択
-            TitleTextBlock.Text = "新規接続";
-            SubtitleTextBlock.Text = "接続未確定リストから相手を選んでください。";
+            TitleTextBlock.Text = "新規登録";
+            SubtitleTextBlock.Text = "下の接続未確定リストから相手を選んでください。";
             NameTextBox.Text = string.Empty;
             MemoTextBox.Text = string.Empty;
             ShareFolderTextBlock.Text = "-";
             AccessTextBlock.Text = "-";
             PresenceTextBlock.Text = "-";
         }
+
+        OkButton.Content = action switch
+        {
+            CommitAction.Switch => "切替",
+            CommitAction.Register => "登録",
+            _ => "更新",
+        };
 
         _initialName = NameTextBox.Text;
         _initialMemo = MemoTextBox.Text;
@@ -297,6 +315,42 @@ public partial class FriendsWindow : Window
         }
     }
 
+    private void SelectCurrentCandidateRow()
+    {
+        CandidateRow? selected = null;
+
+        if (_activeShopInfo != null)
+        {
+            selected = _candidateRows.FirstOrDefault(r =>
+                r.Source != null &&
+                string.Equals(r.Source.Address.ToString(), _activeShopInfo.IpAddress, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (selected == null && _activeNewCandidate != null)
+        {
+            selected = _candidateRows.FirstOrDefault(r =>
+                r.Source != null &&
+                string.Equals(r.Source.Address.ToString(), _activeNewCandidate.Address.ToString(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (selected == null && _activeFriend != null && !_activeFriend.IsCurrentlyFound)
+        {
+            selected = _candidateRows.FirstOrDefault(r =>
+                r.ExistingFriend != null &&
+                string.Equals(r.ExistingFriend.Id, _activeFriend.Id, StringComparison.Ordinal));
+        }
+
+        _suppressSelectionChanged = true;
+        try
+        {
+            CandidateListView.SelectedItem = selected;
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+    }
+
     // ── フォーム変更・バリデーション ─────────────────────────────────
 
     private void OnFormChanged(object sender, TextChangedEventArgs e)
@@ -342,7 +396,7 @@ public partial class FriendsWindow : Window
                 if (string.IsNullOrEmpty(dlgHost)) dlgHost = selected.Source.Address.ToString();
                 MessageBoxResult confirm = System.Windows.MessageBox.Show(
                     this,
-                    $"「{_activeFriend.DisplayName}」の接続先を「{dlgHost}」に変更しますか？",
+                    $"「{_activeFriend.DisplayName}」の接続先を「{dlgHost}」へ切り替えますか？",
                     "ShareWorkin",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question,
@@ -376,6 +430,20 @@ public partial class FriendsWindow : Window
     {
         OkButton.IsEnabled = ValidateForOk(out string? error);
         StatusTextBlock.Text = error ?? string.Empty;
+    }
+
+    private CommitAction ResolveCommitAction()
+    {
+        if (_activeFriend != null)
+        {
+            return (_activeShopInfo != null || _activeNewCandidate != null)
+                ? CommitAction.Switch
+                : CommitAction.Update;
+        }
+
+        return _activeShopInfo != null
+            ? CommitAction.Register
+            : CommitAction.Update;
     }
 
     private bool ValidateForOk(out string? error)
@@ -450,6 +518,7 @@ public partial class FriendsWindow : Window
 
         RefreshCandidateRows();
         ApplyActiveTarget();
+        SelectCurrentCandidateRow();
     }
 
     private void OpenIconPicker()
@@ -489,7 +558,7 @@ public partial class FriendsWindow : Window
             if (_activeShopInfo != null)
             {
                 OkButton.IsEnabled = false;
-                StatusTextBlock.Text = "接続先を変更中…";
+                StatusTextBlock.Text = "接続先を切替中…";
                 _ = ChangeConnectionAsync(name, memo);
                 return;
             }

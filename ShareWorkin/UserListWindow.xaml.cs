@@ -177,7 +177,10 @@ public partial class UserListWindow : Window
 
             if (isOpen)
             {
-                rows.Add(UserListRow.ForNewShop(c, shopInfo));
+                Friend? switchTarget = FindSwitchTargetForCandidate(c, shopInfo!, friends);
+                rows.Add(switchTarget is not null
+                    ? UserListRow.ForSwitchCandidate(switchTarget, c, shopInfo!)
+                    : UserListRow.ForNewShop(c, shopInfo));
             }
             else if (c.IsInstallCandidate)
             {
@@ -203,6 +206,7 @@ public partial class UserListWindow : Window
         }
 
         int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
+        int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
         int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
         int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
         int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
@@ -212,9 +216,9 @@ public partial class UserListWindow : Window
         ScanStateTextBlock.Text = modeLabel;
         StatusTextBlock.Text = _rows.Count == 0
             ? "周りには誰もいません。"
-            : $"登録済接続中 {connected}　登録済不在 {unreach}　登録可能 {newShop}　登録不可 {windowsPcOnly}　全PC分 {installCandidate}";
+            : $"登録済接続中 {connected}　切替候補 {switchable}　登録済不在 {unreach}　登録可能 {newShop}　登録不可 {windowsPcOnly}　全PC分 {installCandidate}";
 
-        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
     }
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
@@ -279,6 +283,33 @@ public partial class UserListWindow : Window
         string f1 = NormalizeHostName(found);
         return !string.IsNullOrWhiteSpace(e1) && !string.IsNullOrWhiteSpace(f1)
             && string.Equals(e1, f1, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Friend? FindSwitchTargetForCandidate(
+        LanCandidate candidate,
+        SwkNotificationListener.ShopInfo shopInfo,
+        IReadOnlyList<Friend> friends)
+    {
+        List<Friend> matches = friends
+            .Where(f => !f.IsCurrentlyFound)
+            .Where(f => IsLikelySwitchMatch(f, candidate, shopInfo))
+            .ToList();
+
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static bool IsLikelySwitchMatch(
+        Friend friend,
+        LanCandidate candidate,
+        SwkNotificationListener.ShopInfo shopInfo)
+    {
+        bool sameShare = !string.IsNullOrWhiteSpace(friend.ShareName) &&
+            string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
+
+        bool sameLastIp = !string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+            string.Equals(friend.LastKnownAddress, candidate.Address.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        return sameShare || sameLastIp;
     }
 
     private static LanCandidate? FindCandidateForFriend(Friend friend, IReadOnlyList<LanCandidate> candidates)
@@ -361,10 +392,11 @@ public enum UserListRowKind
 {
     // 値の小さい順に表示される(0 が先頭)。
     ConnectedFriend = 0,        // Friend登録済み + 開店中
-    NewShop = 1,                // Friend未登録 + 開店中
-    UnreachableFriend = 2,      // Friend登録済み + オフライン
-    WindowsPcOnly = 3,          // Friend未登録 + ShareWorkinなし（445+135応答）
-    InstallCandidate = 4,       // Friend未登録 + ポート21/22応答（インストール候補）
+    SwitchCandidate = 1,        // Friend登録済み + 接続先切替候補
+    NewShop = 2,                // Friend未登録 + 開店中
+    UnreachableFriend = 3,      // Friend登録済み + オフライン
+    WindowsPcOnly = 4,          // Friend未登録 + ShareWorkinなし（445+135応答）
+    InstallCandidate = 5,       // Friend未登録 + ポート21/22応答（インストール候補）
 }
 
 public sealed class UserListRow
@@ -450,6 +482,31 @@ public sealed class UserListRow
             RowBackground = new SolidColorBrush(Color.FromRgb(255, 248, 225)),
             NameForeground = new SolidColorBrush(Color.FromRgb(255, 152, 0)),
             NameWeight = FontWeights.Normal,
+            Candidate = candidate,
+            ShopInfo = shopInfo,
+        };
+    }
+
+    public static UserListRow ForSwitchCandidate(
+        Friend friend,
+        LanCandidate candidate,
+        SwkNotificationListener.ShopInfo shopInfo)
+    {
+        string host = string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName!;
+        string friendName = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+        return new UserListRow
+        {
+            NameLabel = friendName,
+            ShareFolderName = shopInfo.ShareName,
+            Memo = $"切替候補: {host}",
+            IpLabel = candidate.Address.ToString(),
+            Kind = UserListRowKind.SwitchCandidate,
+            IconBrush = Brushes.White,
+            IconImage = LoadIconImage(friend.IconKey),
+            RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
+            NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
+            NameWeight = FontWeights.SemiBold,
+            Friend = friend,
             Candidate = candidate,
             ShopInfo = shopInfo,
         };
