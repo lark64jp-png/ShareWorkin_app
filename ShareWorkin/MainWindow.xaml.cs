@@ -292,6 +292,7 @@ public partial class MainWindow : Window
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
+        _missingFriendShopStatus = null;
         NavigateToShopRoot(addHistory: false);
     }
 
@@ -1820,6 +1821,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _currentMode = DisplayMode.Hold;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
+        _missingFriendShopStatus = null;
         NavigateTo(GetHoldFolderPath(), addHistory: addHistory, clearForward: true);
     }
 
@@ -1834,6 +1836,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
+        _missingFriendShopStatus = null;
 
         if (_isShopOpen && !string.IsNullOrWhiteSpace(_shopFolder) && Directory.Exists(_shopFolder))
         {
@@ -2189,19 +2192,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void DisposeContentsWatcher()
     {
-        if (_contentsSensor is null)
+        FileSystemWatcher? watcher = _contentsSensor;
+        if (watcher is null)
         {
             return;
         }
-
-        _contentsSensor.EnableRaisingEvents = false;
-        _contentsSensor.Created -= ContentsSensor_Changed;
-        _contentsSensor.Deleted -= ContentsSensor_Changed;
-        _contentsSensor.Changed -= ContentsSensor_Changed;
-        _contentsSensor.Renamed -= ContentsSensor_Renamed;
-        _contentsSensor.Error -= ContentsSensor_Error;
-        _contentsSensor.Dispose();
         _contentsSensor = null;
+
+        watcher.Created -= ContentsSensor_Changed;
+        watcher.Deleted -= ContentsSensor_Changed;
+        watcher.Changed -= ContentsSensor_Changed;
+        watcher.Renamed -= ContentsSensor_Renamed;
+        watcher.Error -= ContentsSensor_Error;
+
+        // 死んだ UNC では EnableRaisingEvents=false / Dispose() が SMB タイムアウト待ちで
+        // 数秒〜十数秒 UI スレッドをブロックする。後始末だけ別スレッドに逃がす。
+        Task.Run(() =>
+        {
+            try
+            {
+                watcher.EnableRaisingEvents = false;
+                watcher.Dispose();
+            }
+            catch (Exception ex)
+            {
+                SwkLogger.Debug($"DisposeContentsWatcher background: {ex.Message}");
+            }
+        });
     }
 
     private void BeginPolling()
@@ -2593,12 +2610,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _currentMode = DisplayMode.Hold;
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
+            _missingFriendShopStatus = null;
         }
         else
         {
             _currentMode = DisplayMode.Shop;
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
+            _missingFriendShopStatus = null;
         }
     }
 
@@ -2819,6 +2838,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private bool _friendShopPollRunning;
     private int _friendShopLiveMissCount;
     private CancellationTokenSource? _friendShopNotifCts;
+    private string? _missingFriendShopStatus;
 
     private async void FriendShopPollTimer_Tick(object? sender, EventArgs e)
         => await RunFriendShopPollAsync();
@@ -2937,7 +2957,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         UpdateBreadcrumb();
         UpdateNavigationState();
         PopulateExplorerDropdown();
-        SetTransientStatus($"{label} のお店が見つかりません。");
+        string offlineMessage = $"{label} のお店が見つかりません。";
+        _missingFriendShopStatus = offlineMessage;
+        SetTransientStatus(offlineMessage);
     }
 
     private void StartFriendShopPermissionListener(string friendMachineName)
@@ -3409,6 +3431,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
+            _missingFriendShopStatus = null;
             EnterShopMode();
             return;
         }
@@ -3526,6 +3549,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _activeFriendShop = friend;
         _activeFriendShopRootPath = null;
         _friendShopLiveMissCount = 0;
+        _missingFriendShopStatus = null;
         _currentMode = DisplayMode.FriendShop;
         CancelFolderSizeCalculation();
         DisposeContentsWatcher();
@@ -3585,6 +3609,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
         UpdateFriendExternalState(friend, liveShop);
         _activeFriendShopRootPath = accessiblePath;
+        _missingFriendShopStatus = null;
         SuppressExternalChangeNotifications();
         NavigateTo(accessiblePath, addHistory: false, clearForward: true);
         await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
@@ -4251,6 +4276,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             closedText = statusMessage;
             openText = statusMessage;
             openTooltip = statusMessage;
+        }
+        else if (!string.IsNullOrWhiteSpace(_missingFriendShopStatus))
+        {
+            closedText = _missingFriendShopStatus;
+            openText = _missingFriendShopStatus;
+            openTooltip = _missingFriendShopStatus;
         }
         else if (isOpen)
         {
