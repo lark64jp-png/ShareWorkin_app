@@ -213,6 +213,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         ShopInfo shop,
         string? inviteId,
         string? expectedThumbprint,
+        bool isReconnectRequest,
         CancellationToken cancellationToken)
     {
         string? capturedThumbprint = null;
@@ -301,6 +302,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 ShareName = shop.ShareName,
                 ClientMachineName = Environment.MachineName,
                 InviteId = inviteId,
+                RequestKind = isReconnectRequest ? "ReconnectKnownFriend" : null,
             };
             await WriteJsonAsync(sslStream, request, cancellationToken);
 

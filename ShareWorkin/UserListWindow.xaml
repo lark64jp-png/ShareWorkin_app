@@ -54,9 +54,11 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="36" />
                                 <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="160" />
+                                <ColumnDefinition Width="150" />
                                 <ColumnDefinition Width="8" />
-                                <ColumnDefinition Width="140" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="120" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
@@ -82,20 +84,27 @@
                                        TextTrimming="CharacterEllipsis" />
 
                             <TextBlock Grid.Column="4"
-                                       Text="{Binding ShareFolderName}"
+                                       Text="{Binding StatusLabel}"
                                        VerticalAlignment="Center"
                                        FontSize="12"
                                        Foreground="#3F3A32"
                                        TextTrimming="CharacterEllipsis" />
 
                             <TextBlock Grid.Column="6"
+                                       Text="{Binding ShareFolderName}"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       Foreground="#3F3A32"
+                                       TextTrimming="CharacterEllipsis" />
+
+                            <TextBlock Grid.Column="8"
                                        Text="{Binding Memo}"
                                        VerticalAlignment="Center"
                                        FontSize="12"
                                        Foreground="#6B6358"
                                        TextTrimming="CharacterEllipsis" />
 
-                            <TextBlock Grid.Column="8"
+                            <TextBlock Grid.Column="10"
                                        Text="{Binding IpLabel}"
                                        VerticalAlignment="Center"
                                        FontSize="12"

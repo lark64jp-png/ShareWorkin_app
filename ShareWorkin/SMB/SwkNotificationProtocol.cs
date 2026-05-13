@@ -51,6 +51,10 @@ public static class SwkNotificationProtocol
         [JsonPropertyName("inviteId")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? InviteId { get; set; }
+
+        [JsonPropertyName("requestKind")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? RequestKind { get; set; }
     }
 
     /// <summary>

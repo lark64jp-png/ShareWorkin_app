@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan FriendReconnectRetryCooldown = TimeSpan.FromSeconds(20);
     private const int FriendShopOfflineMissThreshold = 2;
 
     // 草案4 §A: アプリは自分のアプリホルダーの外に書き込まない。
@@ -67,6 +68,8 @@ public partial class MainWindow : Window
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _friendRefreshInFlight = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _friendRefreshCooldownUntil = new(StringComparer.Ordinal);
     // セッション中のアイテム別許可設定。AllowedUsers は ShopItem ごとに in-memory のため
     // ナビゲーションで再生成されるたびに消えるのを防ぐ。キー = FullPath。
     private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> _permissionMap
@@ -3690,11 +3693,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Debug($"NavigateToFriendShopAsync: candidates={string.Join(", ", uncCandidates)}");
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
         string? accessiblePath = await TryFindAccessibleFriendPathAsync(uncCandidates, friend, liveShop, password);
+        string? refreshBlockedMessage = null;
         if (string.IsNullOrWhiteSpace(accessiblePath) &&
-            await TryRefreshFriendPasswordAsync(friend, liveShop))
+            TryBeginFriendReconnectRefresh(friend, out refreshBlockedMessage))
         {
-            password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
-            accessiblePath = await TryFindAccessibleFriendPathAsync(uncCandidates, friend, liveShop, password);
+            bool refreshed = false;
+            try
+            {
+                refreshed = await TryRefreshFriendPasswordAsync(friend, liveShop);
+            }
+            finally
+            {
+                CompleteFriendReconnectRefresh(friend, refreshed);
+            }
+
+            if (refreshed)
+            {
+                password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+                accessiblePath = await TryFindAccessibleFriendPathAsync(uncCandidates, friend, liveShop, password);
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(accessiblePath) && !string.IsNullOrWhiteSpace(refreshBlockedMessage))
+        {
+            SetTransientStatus(refreshBlockedMessage);
         }
 
         if (string.IsNullOrWhiteSpace(accessiblePath))
@@ -3765,6 +3786,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 liveShop,
                 inviteId: null,
                 expectedThumbprint: friend.OwnerCertThumbprint,
+                isReconnectRequest: true,
                 cts.Token);
 
             if (!result.Success || string.IsNullOrEmpty(result.Password))
@@ -3797,6 +3819,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {ex.Message}");
             return false;
         }
+    }
+
+    private bool TryBeginFriendReconnectRefresh(Friend friend, out string? blockedMessage)
+    {
+        blockedMessage = null;
+
+        if (_friendRefreshInFlight.Contains(friend.Id))
+        {
+            blockedMessage = "接続情報を確認中です。少し待ってからもう一度確認します。";
+            return false;
+        }
+
+        if (_friendRefreshCooldownUntil.TryGetValue(friend.Id, out DateTime cooldownUntilUtc))
+        {
+            DateTime nowUtc = DateTime.UtcNow;
+            if (cooldownUntilUtc > nowUtc)
+            {
+                blockedMessage = "接続を確認中です。しばらく待ってから再試行します。";
+                return false;
+            }
+
+            _friendRefreshCooldownUntil.Remove(friend.Id);
+        }
+
+        _friendRefreshInFlight.Add(friend.Id);
+        return true;
+    }
+
+    private void CompleteFriendReconnectRefresh(Friend friend, bool success)
+    {
+        _friendRefreshInFlight.Remove(friend.Id);
+        if (success)
+        {
+            _friendRefreshCooldownUntil.Remove(friend.Id);
+            return;
+        }
+
+        _friendRefreshCooldownUntil[friend.Id] = DateTime.UtcNow + FriendReconnectRetryCooldown;
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)

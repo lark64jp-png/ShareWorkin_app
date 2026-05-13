@@ -77,6 +77,7 @@ public partial class ImportInviteDialog : Window
             shop,
             inviteId: payload.InviteId,
             expectedThumbprint: null,
+            isReconnectRequest: false,
             cts.Token);
 
         if (!result.Success)

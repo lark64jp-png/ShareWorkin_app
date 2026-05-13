@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace ShareWorkin.SMB;
 
@@ -188,6 +189,11 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             {
                 inviteId = idElem.GetString();
             }
+            string? requestKind = null;
+            if (requestDoc.RootElement.TryGetProperty("requestKind", out var kindElem))
+            {
+                requestKind = kindElem.GetString();
+            }
 
             string clientLabel = string.IsNullOrWhiteSpace(clientMachine) ? "不明な端末" : clientMachine!;
 
@@ -222,8 +228,18 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             }
 
             // 店主に承認を求める(コールバック未設定なら自動拒否)。
+            bool isReconnectKnownFriend = string.Equals(
+                requestKind,
+                "ReconnectKnownFriend",
+                StringComparison.OrdinalIgnoreCase);
+
             bool approved = false;
-            if (OnInviteRequested != null)
+            if (isReconnectKnownFriend && IsKnownFriendRequest(clientMachine, requestedShare))
+            {
+                SwkLogger.Info($"Invite request auto-approved for known friend '{clientLabel}' share '{requestedShare}'");
+                approved = true;
+            }
+            else if (OnInviteRequested != null)
             {
                 var approvalRequest = new InviteApprovalRequest
                 {
@@ -296,6 +312,20 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         {
             SwkLogger.Warn($"HandleInviteCodeRequestAsync error: {ex.Message}");
         }
+    }
+
+    private static bool IsKnownFriendRequest(string? clientMachineName, string? requestedShare)
+    {
+        if (string.IsNullOrWhiteSpace(clientMachineName) || string.IsNullOrWhiteSpace(requestedShare))
+        {
+            return false;
+        }
+
+        string normalizedClient = clientMachineName.Trim();
+        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+        return friends.Any(friend =>
+            string.Equals(friend.ShareName, requestedShare, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(friend.HostMachineName, normalizedClient, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

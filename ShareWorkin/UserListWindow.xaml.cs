@@ -134,30 +134,25 @@ public partial class UserListWindow : Window
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache: friends={friends.Count} candidates={candidates.Count} shopInfos={shopInfos.Count}");
 
-        HashSet<string> matchedHosts = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> representedCandidateKeys = new(StringComparer.OrdinalIgnoreCase);
         List<UserListRow> rows = new();
 
         foreach (Friend f in friends)
         {
-            LanCandidate? match = FindCandidateForFriend(f, candidates);
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
             if (liveShop is not null && UpdateFriendFromLiveShop(f, liveShop))
             {
                 friendsChanged = true;
             }
 
-            if (match is not null)
+            rows.Add(liveShop is not null && !f.HasCertificateMismatch
+                ? UserListRow.ForConnectedFriend(f, liveShop)
+                : UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), liveShop));
+
+            if (TryFindRecoveryCandidateForFriend(f, candidates, shopInfos, out LanCandidate? recoveryCandidate, out SwkNotificationListener.ShopInfo? recoveryShop))
             {
-                AddMatchedCandidateKeys(matchedHosts, match);
-                rows.Add(liveShop is not null && !f.HasCertificateMismatch
-                    ? UserListRow.ForConnectedFriend(f, liveShop)
-                    : UserListRow.ForUnreachableFriend(f));
-            }
-            else
-            {
-                rows.Add(liveShop is not null && !f.HasCertificateMismatch
-                    ? UserListRow.ForConnectedFriend(f, liveShop)
-                    : UserListRow.ForUnreachableFriend(f));
+                rows.Add(UserListRow.ForSwitchCandidate(f, recoveryCandidate!, recoveryShop!));
+                AddCandidateKeys(representedCandidateKeys, recoveryCandidate!);
             }
         }
 
@@ -173,19 +168,20 @@ public partial class UserListWindow : Window
             string host = NormalizeHostName(c.HostName);
             if (string.IsNullOrEmpty(host)) host = c.Address.ToString();
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
-            if (matchedHosts.Contains(c.Address.ToString())) continue;
-            if (matchedHosts.Contains(host)) continue;
+            if (representedCandidateKeys.Contains(c.Address.ToString())) continue;
+            if (representedCandidateKeys.Contains(host)) continue;
 
             SwkNotificationListener.ShopInfo? shopInfo = shopInfos
                 .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
+            if (IsCandidateCoveredByRegisteredFriend(c, shopInfo, friends))
+            {
+                continue;
+            }
             bool isOpen = shopInfo is not null;
 
             if (isOpen)
             {
-                Friend? switchTarget = FindSwitchTargetForCandidate(c, shopInfo!, friends);
-                rows.Add(switchTarget is not null
-                    ? UserListRow.ForSwitchCandidate(switchTarget, c, shopInfo!)
-                    : UserListRow.ForNewShop(c, shopInfo));
+                rows.Add(UserListRow.ForNewShop(c, shopInfo));
             }
             else if (c.IsInstallCandidate)
             {
@@ -242,6 +238,48 @@ public partial class UserListWindow : Window
         {
             await RefreshRegisteredFriendsFromBkAsync();
         }
+    }
+
+    private static bool TryFindRecoveryCandidateForFriend(
+        Friend friend,
+        IReadOnlyList<LanCandidate> candidates,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos,
+        out LanCandidate? candidate,
+        out SwkNotificationListener.ShopInfo? shopInfo)
+    {
+        candidate = FindCandidateForFriend(friend, candidates);
+        shopInfo = null;
+        if (candidate is null)
+        {
+            return false;
+        }
+
+        string candidateHost = NormalizeHostName(candidate.HostName);
+        if (string.IsNullOrEmpty(candidateHost))
+        {
+            candidateHost = candidate.Address.ToString();
+        }
+        string candidateIp = candidate.Address.ToString();
+
+        shopInfo = shopInfos.FirstOrDefault(s =>
+            string.Equals(NormalizeHostName(s.MachineName), candidateHost, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s.IpAddress, candidateIp, StringComparison.OrdinalIgnoreCase));
+        if (shopInfo is null)
+        {
+            return false;
+        }
+
+        bool sameShare = string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
+        bool sameHost = SameHost(friend.HostMachineName, candidate.HostName) ||
+            (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+             string.Equals(friend.LastKnownAddress, candidateIp, StringComparison.OrdinalIgnoreCase));
+
+        if (sameHost && sameShare && !friend.HasCertificateMismatch)
+        {
+            return false;
+        }
+
+        return friend.HasCertificateMismatch || IsLikelySwitchMatch(friend, candidate, shopInfo);
     }
 
     private async void RefreshCertButton_Click(object sender, RoutedEventArgs e)
@@ -515,6 +553,7 @@ public partial class UserListWindow : Window
             liveShop,
             inviteId: null,
             expectedThumbprint: null,
+            isReconnectRequest: true,
             cts.Token);
 
         if (!result.Success || string.IsNullOrEmpty(result.Password))
@@ -568,7 +607,36 @@ public partial class UserListWindow : Window
         return changed || !string.Equals(previousLastSeen, nowIso, StringComparison.Ordinal);
     }
 
-    private static void AddMatchedCandidateKeys(HashSet<string> matchedHosts, LanCandidate candidate)
+    private static bool IsCandidateCoveredByRegisteredFriend(
+        LanCandidate candidate,
+        SwkNotificationListener.ShopInfo? shopInfo,
+        IReadOnlyList<Friend> friends)
+    {
+        foreach (Friend friend in friends)
+        {
+            bool sameHost = SameHost(friend.HostMachineName, candidate.HostName) ||
+                (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+                 string.Equals(friend.LastKnownAddress, candidate.Address.ToString(), StringComparison.OrdinalIgnoreCase));
+            if (!sameHost)
+            {
+                continue;
+            }
+
+            if (shopInfo is null)
+            {
+                return true;
+            }
+
+            if (string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddCandidateKeys(HashSet<string> matchedHosts, LanCandidate candidate)
     {
         string host = NormalizeHostName(candidate.HostName);
         if (!string.IsNullOrWhiteSpace(host))
@@ -601,6 +669,7 @@ public enum UserListRowKind
 public sealed class UserListRow
 {
     public string NameLabel { get; init; } = string.Empty;
+    public string StatusLabel { get; init; } = string.Empty;
     public string ShareFolderName { get; init; } = string.Empty;
     public string Memo { get; init; } = string.Empty;
     public string IpLabel { get; init; } = string.Empty;
@@ -641,6 +710,7 @@ public sealed class UserListRow
         SwkNotificationListener.ShopInfo? liveShop = null) => new()
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "登録済み / 接続中",
         ShareFolderName = liveShop?.ShareName ?? friend.ShareName,
         Memo = friend.Memo,
         IpLabel = liveShop?.IpAddress ?? friend.LastKnownAddress ?? string.Empty,
@@ -653,13 +723,23 @@ public sealed class UserListRow
         Friend = friend,
     };
 
-    public static UserListRow ForUnreachableFriend(Friend friend) => new()
+    public static UserListRow ForUnreachableFriend(
+        Friend friend,
+        LanCandidate? candidate = null,
+        SwkNotificationListener.ShopInfo? liveShop = null) => new()
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
         ShareFolderName = friend.ShareName,
+        StatusLabel = liveShop is not null
+            ? "登録済み / 要再確認"
+            : candidate is not null
+                ? "登録済み / 候補あり"
+                : "登録済み / 候補不明",
         Memo = friend.HasCertificateMismatch
             ? "証明書が登録時と違うため接続を停止中"
-            : friend.Memo,
+            : string.IsNullOrWhiteSpace(friend.Memo)
+                ? candidate is not null ? "接続先の見直し候補があります。" : "接続先を確認できていません。"
+                : friend.Memo,
         IpLabel = friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.UnreachableFriend,
         IconBrush = Brushes.White,
@@ -676,6 +756,7 @@ public sealed class UserListRow
         return new UserListRow
         {
             NameLabel = host,
+            StatusLabel = "未登録 / 開店中",
             ShareFolderName = shopInfo?.ShareName ?? string.Empty,
             IpLabel = candidate.Address.ToString(),
             Kind = UserListRowKind.NewShop,
@@ -698,6 +779,7 @@ public sealed class UserListRow
         return new UserListRow
         {
             NameLabel = friendName,
+            StatusLabel = "登録済み / 切替候補",
             ShareFolderName = shopInfo.ShareName,
             Memo = $"切替候補: {host}",
             IpLabel = candidate.Address.ToString(),
@@ -719,6 +801,7 @@ public sealed class UserListRow
         return new UserListRow
         {
             NameLabel = host,
+            StatusLabel = "未登録 / 共有のみ",
             IpLabel = candidate.Address.ToString(),
             Kind = UserListRowKind.WindowsPcOnly,
             IconBrush = Brushes.White,
@@ -735,6 +818,7 @@ public sealed class UserListRow
         return new UserListRow
         {
             NameLabel = host,
+            StatusLabel = "未登録 / 要導入",
             IpLabel = candidate.Address.ToString(),
             Kind = UserListRowKind.InstallCandidate,
             IconBrush = Brushes.White,
