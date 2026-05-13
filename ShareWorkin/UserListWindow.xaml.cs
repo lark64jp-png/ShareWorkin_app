@@ -21,6 +21,7 @@ public partial class UserListWindow : Window
     private readonly ObservableCollection<UserListRow> _rows = new();
     private readonly DispatcherTimer _autoRefreshTimer;
     private bool _isRefreshing;
+    private bool _hasFriendUpdates;
     private int _intervalStepIndex = 0;
     private static readonly int[] IntervalSteps = { 8, 16, 30, 60 };
 
@@ -156,9 +157,9 @@ public partial class UserListWindow : Window
             }
         }
 
-        if (friendsChanged)
+        if (friendsChanged && FriendsRepository.SaveAll(friends))
         {
-            FriendsRepository.SaveAll(friends);
+            _hasFriendUpdates = true;
         }
 
         string myHost = NormalizeHostName(Environment.MachineName);
@@ -232,7 +233,12 @@ public partial class UserListWindow : Window
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Debug("UserListWindow.CloseButton_Click");
-        DialogResult = true;
+        if (_hasFriendUpdates)
+        {
+            DialogResult = true;
+            return;
+        }
+
         Close();
     }
 
@@ -341,6 +347,18 @@ public partial class UserListWindow : Window
                 string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
         }
 
+        if (!string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
+                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (sameShare.Count == 1)
+            {
+                SwkLogger.Debug($"FindLiveShopForFriend: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
+                return sameShare[0];
+            }
+        }
+
         return null;
     }
 
@@ -349,6 +367,12 @@ public partial class UserListWindow : Window
         bool changed = false;
         string? previousLastSeen = friend.LastSeenAt;
         string nowIso = DateTime.UtcNow.ToString("o");
+
+        if (!string.Equals(friend.HostMachineName, liveShop.MachineName, StringComparison.OrdinalIgnoreCase))
+        {
+            friend.HostMachineName = liveShop.MachineName;
+            changed = true;
+        }
 
         if (!string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase))
         {

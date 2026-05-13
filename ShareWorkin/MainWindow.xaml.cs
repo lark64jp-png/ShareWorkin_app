@@ -814,8 +814,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        // FriendShop mode ① 単純再取得
+        // FriendShop mode ① 相手側の最新ショップ情報を優先して取り直す
         await Task.Delay(80);
+        SwkNotificationListener.ShopInfo? probedLiveShop = await ProbeActiveFriendShopAsync(_activeFriendShop);
+        if (probedLiveShop is not null)
+        {
+            SwkNetworkCache.UpsertShop(probedLiveShop);
+
+            bool externalChanged =
+                !string.Equals(_activeFriendShop.HostMachineName, probedLiveShop.MachineName, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_activeFriendShop.ShareName, probedLiveShop.ShareName, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_activeFriendShop.LastKnownAddress, probedLiveShop.IpAddress ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            if (externalChanged)
+            {
+                UpdateFriendExternalState(_activeFriendShop, probedLiveShop);
+                PopulateExplorerDropdown();
+            }
+
+            bool canStayOnCurrentFolder = !string.IsNullOrWhiteSpace(_currentFolder) &&
+                await Task.Run(() => { try { return Directory.Exists(_currentFolder); } catch { return false; } });
+            if (externalChanged || !canStayOnCurrentFolder)
+            {
+                await NavigateToFriendShopAsync(_activeFriendShop, probedLiveShop);
+                return;
+            }
+        }
+
+        // ② 単純再取得
         bool accessible = !string.IsNullOrWhiteSpace(_currentFolder) &&
             await Task.Run(() => { try { return Directory.Exists(_currentFolder); } catch { return false; } });
 
@@ -826,7 +851,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        // ② MachineName のみで UDP キャッシュを探索して再接続
+        // ③ MachineName のみで UDP キャッシュを探索して再接続
         var liveShop = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
             string.Equals(s.MachineName, _activeFriendShop.HostMachineName, StringComparison.OrdinalIgnoreCase));
 
@@ -859,15 +884,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        // ③ 見つからない → ユーザー一覧を促す
+        // ④ 最後にクイックスキャンで自動復帰を試す。ここで見つかるなら
+        // ユーザー判断は不要なので、登録情報を更新してそのまま開く。
+        SwkNotificationListener.ShopInfo? scannedLiveShop = await ResolveLiveFriendShopAsync(_activeFriendShop);
+        if (scannedLiveShop is not null)
+        {
+            UpdateFriendExternalState(_activeFriendShop, scannedLiveShop);
+            PopulateExplorerDropdown();
+            await NavigateToFriendShopAsync(_activeFriendShop, scannedLiveShop);
+            return;
+        }
+
+        // ⑤ 見つからない → ユーザー一覧を促す
         string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
             ? _activeFriendShop.HostMachineName
             : _activeFriendShop.DisplayName;
         SetTransientStatus($"{label} が見つかりません。ユーザー一覧で確認してください。");
         UserListWindow window = new(this) { Owner = this };
-        window.ShowDialog();
+        bool? result = window.ShowDialog();
         PopulateExplorerDropdown();
-        await ExecuteRefreshAsync();
+        if (result == true)
+        {
+            await ExecuteRefreshAsync();
+        }
     }
 
     private void SectionTitleButton_Click(object sender, RoutedEventArgs e)
@@ -901,9 +940,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private async void UserListButton_Click(object sender, RoutedEventArgs e)
     {
         UserListWindow window = new(this) { Owner = this };
-        window.ShowDialog();
+        bool? result = window.ShowDialog();
         PopulateExplorerDropdown();
-        await ExecuteRefreshAsync();
+        if (result == true)
+        {
+            await ExecuteRefreshAsync();
+        }
     }
 
     private async void ShareStatusButton_Click(object sender, RoutedEventArgs e)
@@ -2867,9 +2909,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkNetworkCache.UpsertShop(liveShop);
 
             bool needsReconnect = string.IsNullOrWhiteSpace(_currentFolder) ||
+                !string.Equals(_activeFriendShop.HostMachineName, liveShop.MachineName, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(_activeFriendShop.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
             if (needsReconnect)
             {
+                UpdateFriendExternalState(_activeFriendShop, liveShop);
+                PopulateExplorerDropdown();
                 await NavigateToFriendShopAsync(_activeFriendShop, liveShop);
                 return;
             }
@@ -2929,8 +2974,34 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             IReadOnlyList<SwkNotificationListener.ShopInfo> found =
                 await SwkNotificationListener.ProbeHostsAsync(candidates, cts.Token);
-            return found.FirstOrDefault(s =>
-                string.Equals(s.MachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase));
+            SwkNotificationListener.ShopInfo? exact = found.FirstOrDefault(s =>
+                string.Equals(NormalizeHostName(s.MachineName), NormalizeHostName(friend.HostMachineName), StringComparison.OrdinalIgnoreCase));
+            if (exact is not null) return exact;
+
+            if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
+            {
+                SwkNotificationListener.ShopInfo? sameAddress = found.FirstOrDefault(s =>
+                    string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
+                if (sameAddress is not null)
+                {
+                    SwkLogger.Debug($"ProbeActiveFriendShopAsync: recovered by IP {friend.HostMachineName}/{friend.ShareName} -> {sameAddress.MachineName}/{sameAddress.ShareName}");
+                    return sameAddress;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(friend.ShareName))
+            {
+                List<SwkNotificationListener.ShopInfo> sameShare = found
+                    .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (sameShare.Count == 1)
+                {
+                    SwkLogger.Debug($"ProbeActiveFriendShopAsync: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
+                    return sameShare[0];
+                }
+            }
+
+            return null;
         }
         catch (OperationCanceledException) { return null; }
         catch (Exception ex)
@@ -3486,6 +3557,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
         }
 
+        if (!string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            List<SwkNotificationListener.ShopInfo> sameShare = SwkNetworkCache.ShopInfos
+                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (sameShare.Count == 1)
+            {
+                SwkLogger.Debug($"FindLiveShopInfo: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
+                return sameShare[0];
+            }
+        }
+
         return null;
     }
 
@@ -3522,6 +3605,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private static void UpdateFriendExternalState(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
         string nowIso = DateTime.UtcNow.ToString("o");
+        friend.HostMachineName = liveShop.MachineName;
         friend.ShareName = liveShop.ShareName;
         friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
         friend.LastFoundAt = nowIso;
@@ -3535,7 +3619,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        stored.HostMachineName = friend.HostMachineName;
         stored.ShareName = friend.ShareName;
+        stored.PasswordProtected = friend.PasswordProtected;
+        stored.OwnerCertThumbprint = friend.OwnerCertThumbprint;
         stored.LastKnownAddress = friend.LastKnownAddress;
         stored.LastFoundAt = friend.LastFoundAt;
         stored.LastCheckedAt = friend.LastCheckedAt;
@@ -3579,27 +3666,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: candidates={string.Join(", ", uncCandidates)}");
         string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
-        string? accessiblePath = await Task.Run(() =>
+        string? accessiblePath = await TryFindAccessibleFriendPathAsync(uncCandidates, friend, liveShop, password);
+        if (string.IsNullOrWhiteSpace(accessiblePath) &&
+            await TryRefreshFriendPasswordAsync(friend, liveShop))
         {
-            foreach (string candidate in uncCandidates)
-            {
-                SwkLogger.Debug($"NavigateToFriendShopAsync: trying={candidate}");
-                if (!string.IsNullOrEmpty(password))
-                    SmbConnectionHelper.EnsureConnection(candidate, friend.UserName, password, friend.HostMachineName);
-                try
-                {
-                    if (Directory.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-                catch
-                {
-                }
-            }
-
-            return null;
-        });
+            password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+            accessiblePath = await TryFindAccessibleFriendPathAsync(uncCandidates, friend, liveShop, password);
+        }
 
         if (string.IsNullOrWhiteSpace(accessiblePath))
         {
@@ -3620,6 +3693,82 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SuppressExternalChangeNotifications();
         NavigateTo(accessiblePath, addHistory: false, clearForward: true);
         await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
+    }
+
+    private static Task<string?> TryFindAccessibleFriendPathAsync(
+        IReadOnlyList<string> uncCandidates,
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop,
+        string password)
+    {
+        return Task.Run(() =>
+        {
+            foreach (string candidate in uncCandidates)
+            {
+                SwkLogger.Debug($"NavigateToFriendShopAsync: trying={candidate}");
+                if (!string.IsNullOrEmpty(password))
+                    SmbConnectionHelper.EnsureConnection(candidate, friend.UserName, password, liveShop.MachineName);
+                try
+                {
+                    if (Directory.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        });
+    }
+
+    private static async Task<bool> TryRefreshFriendPasswordAsync(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop)
+    {
+        if (string.IsNullOrWhiteSpace(friend.OwnerCertThumbprint))
+        {
+            SwkLogger.Warn($"TryRefreshFriendPasswordAsync skipped: no pinned certificate for friend id={friend.Id}");
+            return false;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var listener = new SwkNotificationListener();
+            SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
+                liveShop,
+                inviteId: null,
+                expectedThumbprint: friend.OwnerCertThumbprint,
+                cts.Token);
+
+            if (!result.Success || string.IsNullOrEmpty(result.Password))
+            {
+                SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {result.ErrorMessage ?? "empty password"}");
+                return false;
+            }
+
+            friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
+            if (!string.IsNullOrWhiteSpace(result.CertThumbprint))
+            {
+                friend.OwnerCertThumbprint = result.CertThumbprint;
+            }
+            UpdateFriendExternalState(friend, liveShop);
+            SwkLogger.Info($"TryRefreshFriendPasswordAsync: refreshed stored SMB password for friend id={friend.Id}");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            SwkLogger.Warn("TryRefreshFriendPasswordAsync timed out");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {ex.Message}");
+            return false;
+        }
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)
