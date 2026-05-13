@@ -786,6 +786,7 @@ public partial class FriendsWindow : Window
     private static string ResolvePresence(Friend f)
     {
         if (string.IsNullOrWhiteSpace(f.LastCheckedAt)) return "未確認";
+        if (f.HasCertificateMismatch) return "証明書不一致";
         return f.IsCurrentlyFound ? "来店可能" : "不在";
     }
 

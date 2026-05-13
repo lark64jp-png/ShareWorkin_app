@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -24,6 +25,8 @@ public partial class UserListWindow : Window
     private bool _hasFriendUpdates;
     private int _intervalStepIndex = 0;
     private static readonly int[] IntervalSteps = { 8, 16, 30, 60 };
+    private static readonly TimeSpan TrustedRefreshReloadWindow = TimeSpan.FromSeconds(8);
+    private DateTime _lastManualReloadAtUtc = DateTime.MinValue;
 
     public UserListWindow(Window owner)
     {
@@ -145,13 +148,13 @@ public partial class UserListWindow : Window
             if (match is not null)
             {
                 AddMatchedCandidateKeys(matchedHosts, match);
-                rows.Add(liveShop is not null
+                rows.Add(liveShop is not null && !f.HasCertificateMismatch
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForUnreachableFriend(f));
             }
             else
             {
-                rows.Add(liveShop is not null
+                rows.Add(liveShop is not null && !f.HasCertificateMismatch
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForUnreachableFriend(f));
             }
@@ -224,10 +227,18 @@ public partial class UserListWindow : Window
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
-        SwkLogger.Debug("UserListWindow.ReloadButton_Click");
+        DateTime nowUtc = DateTime.UtcNow;
+        bool trustedRefreshRequested = nowUtc - _lastManualReloadAtUtc <= TrustedRefreshReloadWindow;
+        _lastManualReloadAtUtc = nowUtc;
+        SwkLogger.Debug($"UserListWindow.ReloadButton_Click: trustedRefresh={trustedRefreshRequested}");
         _intervalStepIndex = 0;
         _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[0]);
         await RunScanAndBuildAsync();
+
+        if (trustedRefreshRequested)
+        {
+            await RefreshRegisteredFriendsFromBkAsync();
+        }
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
@@ -362,6 +373,77 @@ public partial class UserListWindow : Window
         return null;
     }
 
+    private async Task RefreshRegisteredFriendsFromBkAsync()
+    {
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
+        List<Friend> friends = FriendsRepository.LoadAll().ToList();
+        List<(Friend Friend, SwkNotificationListener.ShopInfo LiveShop)> targets = friends
+            .Select(friend => (Friend: friend, LiveShop: FindLiveShopForFriend(friend, shopInfos)))
+            .Where(x => x.LiveShop is not null && x.Friend.HasCertificateMismatch)
+            .Select(x => (x.Friend, x.LiveShop!))
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            SwkLogger.Debug("UserListWindow.RefreshRegisteredFriendsFromBkAsync: no cert mismatch targets");
+            BuildUiFromCache();
+            return;
+        }
+
+        ReloadButton.IsEnabled = false;
+        LoadingBar.Visibility = Visibility.Visible;
+        StatusTextBlock.Text = "BKへ再確認中…";
+
+        int refreshed = 0;
+        try
+        {
+            foreach ((Friend friend, SwkNotificationListener.ShopInfo liveShop) in targets)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                var listener = new SwkNotificationListener();
+                SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
+                    liveShop,
+                    inviteId: null,
+                    expectedThumbprint: null,
+                    cts.Token);
+
+                if (!result.Success || string.IsNullOrEmpty(result.Password))
+                {
+                    SwkLogger.Warn(
+                        $"UserListWindow.RefreshRegisteredFriendsFromBkAsync failed: id={friend.Id} {result.ErrorMessage ?? "empty password"}");
+                    continue;
+                }
+
+                string nowIso = DateTime.UtcNow.ToString("o");
+                friend.HostMachineName = liveShop.MachineName;
+                friend.ShareName = liveShop.ShareName;
+                friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
+                friend.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+                friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
+                friend.LastFoundAt = nowIso;
+                friend.LastCheckedAt = nowIso;
+                friend.LastSeenAt = nowIso;
+                friend.LastAccessIssue = null;
+                refreshed++;
+            }
+
+            if (refreshed > 0 && FriendsRepository.SaveAll(friends))
+            {
+                _hasFriendUpdates = true;
+            }
+
+            BuildUiFromCache();
+            StatusTextBlock.Text = refreshed > 0
+                ? $"BK再確認で {refreshed} 件更新しました。"
+                : "BK再確認では更新できませんでした。";
+        }
+        finally
+        {
+            LoadingBar.Visibility = Visibility.Collapsed;
+            ReloadButton.IsEnabled = true;
+        }
+    }
+
     private static bool UpdateFriendFromLiveShop(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
         bool changed = false;
@@ -482,7 +564,9 @@ public sealed class UserListRow
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
         ShareFolderName = friend.ShareName,
-        Memo = friend.Memo,
+        Memo = friend.HasCertificateMismatch
+            ? "証明書が登録時と違うため接続を停止中"
+            : friend.Memo,
         IpLabel = friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.UnreachableFriend,
         IconBrush = Brushes.White,

@@ -25,6 +25,8 @@ namespace ShareWorkin;
 
 public partial class MainWindow : Window
 {
+    private const string OwnerCertificateMismatchMessage = "店主の証明書が以前と違います。乗っ取りの可能性があるため接続を中止しました。";
+
     private const int MaxArrivedItemCount = 100;
     private const string HoldFolderName = "保留";
     private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
@@ -3611,6 +3613,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         friend.LastFoundAt = nowIso;
         friend.LastCheckedAt = nowIso;
         friend.LastSeenAt = nowIso;
+        friend.LastAccessIssue = null;
 
         var all = FriendsRepository.LoadAll().ToList();
         Friend? stored = all.FirstOrDefault(f => f.Id == friend.Id);
@@ -3627,6 +3630,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         stored.LastFoundAt = friend.LastFoundAt;
         stored.LastCheckedAt = friend.LastCheckedAt;
         stored.LastSeenAt = friend.LastSeenAt;
+        stored.LastAccessIssue = friend.LastAccessIssue;
+        FriendsRepository.SaveAll(all);
+    }
+
+    private static void PersistFriendAccessIssue(Friend friend, string? issue)
+    {
+        if (string.Equals(friend.LastAccessIssue, issue, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        friend.LastAccessIssue = issue;
+        var all = FriendsRepository.LoadAll().ToList();
+        Friend? stored = all.FirstOrDefault(f => f.Id == friend.Id);
+        if (stored is null)
+        {
+            return;
+        }
+
+        stored.LastAccessIssue = issue;
         FriendsRepository.SaveAll(all);
     }
 
@@ -3746,6 +3769,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             if (!result.Success || string.IsNullOrEmpty(result.Password))
             {
+                if (string.Equals(result.ErrorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal))
+                {
+                    PersistFriendAccessIssue(friend, Friend.AccessIssueCertMismatch);
+                }
                 SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {result.ErrorMessage ?? "empty password"}");
                 return false;
             }
@@ -3755,6 +3782,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 friend.OwnerCertThumbprint = result.CertThumbprint;
             }
+            friend.LastAccessIssue = null;
             UpdateFriendExternalState(friend, liveShop);
             SwkLogger.Info($"TryRefreshFriendPasswordAsync: refreshed stored SMB password for friend id={friend.Id}");
             return true;

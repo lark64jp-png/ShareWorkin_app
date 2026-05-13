@@ -5,6 +5,8 @@ namespace ShareWorkin.SMB;
 
 public sealed class Friend
 {
+    public const string AccessIssueCertMismatch = "cert-mismatch";
+
     [JsonPropertyName("id")]
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
@@ -64,6 +66,10 @@ public sealed class Friend
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LastCheckedAt { get; set; }
 
+    [JsonPropertyName("lastAccessIssue")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastAccessIssue { get; set; }
+
     // Host/share are connection facts behind an invited shop. They are not the
     // primary meaning of the friend list, which is "shops I was invited to".
     [JsonIgnore]
@@ -85,4 +91,8 @@ public sealed class Friend
     public string ConnectUncPath => string.IsNullOrWhiteSpace(ConnectHost) || string.IsNullOrWhiteSpace(ShareName)
         ? string.Empty
         : $@"\\{ConnectHost}\{ShareName}";
+
+    [JsonIgnore]
+    public bool HasCertificateMismatch =>
+        string.Equals(LastAccessIssue, AccessIssueCertMismatch, StringComparison.OrdinalIgnoreCase);
 }
