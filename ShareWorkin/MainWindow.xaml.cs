@@ -1948,8 +1948,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return Dispatcher.InvokeAsync(() =>
         {
             string body = isManual
-                ? $"「{machineName}」が招待コードを使ってお店に入ろうとしています。\n招待を受け付けますか?"
-                : $"「{machineName}」がお店に入ろうとしています。\n招待コードなしの飛び込みです。承認しますか?";
+                ? $"「{machineName}」が招待コードを使って接続設定を申請しています。\nこの相手に接続情報を渡しますか?"
+                : $"「{machineName}」がLAN経由で接続設定を申請しています。\n招待コードなしで接続情報を渡しますか?";
             MessageBoxResult res = System.Windows.MessageBox.Show(
                 this, body, "接続の申請",
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
