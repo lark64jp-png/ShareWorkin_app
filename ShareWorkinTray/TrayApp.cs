@@ -161,6 +161,27 @@ public sealed class TrayApp : IDisposable
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
 
+    public Task<bool> RequestInviteApprovalAsync(
+        string machineName,
+        string? label,
+        bool isManual)
+    {
+        return System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            string body = isManual
+                ? $"「{machineName}」が招待コードを使って接続設定を申請しています。\nこの相手に接続情報を渡しますか?"
+                : $"「{machineName}」がLAN経由で接続設定を申請しています。\n招待コードなしで接続情報を渡しますか?";
+
+            Forms.DialogResult result = Forms.MessageBox.Show(
+                body,
+                "接続の申請",
+                Forms.MessageBoxButtons.YesNo,
+                Forms.MessageBoxIcon.Question,
+                Forms.MessageBoxDefaultButton.Button2);
+            return result == Forms.DialogResult.Yes;
+        }).Task;
+    }
+
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
     {
         _ = PipeServer.PushMessageAsync(JsonSerializer.Serialize(new

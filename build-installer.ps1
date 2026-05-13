@@ -14,11 +14,11 @@ $readmeName = -join ([char[]](0x3054, 0x5229, 0x7528, 0x306b, 0x3042, 0x305f, 0x
 $readme = Join-Path $root $readmeName
 $runtimeInstallerName = "windowsdesktop-runtime-8.0.24-win-x64.exe"
 $runtimeInstaller = Join-Path $root $runtimeInstallerName
-$hashFile = Join-Path $root "ShareWorkin_v1.16_SHA256.txt"
-$zipFile = Join-Path $root "ShareWorkin_v1.16_Setup.zip"
-$installer = Join-Path $root "ShareWorkin_v1.16_install.exe"
+$hashFile = Join-Path $root "ShareWorkin_v1.17_SHA256.txt"
+$zipFile = Join-Path $root "ShareWorkin_v1.17_Setup.zip"
+$installer = Join-Path $root "ShareWorkin_v1.17_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-$appVersion = "1.16"
+$appVersion = "1.17"
 $informationalVersion = $appVersion
 
 try {
@@ -132,7 +132,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
 
 $items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), (Join-Path $publishDir "ShareWorkinTray.exe"), $readme, $runtimeInstaller)
 $lines = @(
-    "ShareWorkin 1.16 SHA-256",
+    "ShareWorkin 1.17 SHA-256",
     "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
     ""
 )

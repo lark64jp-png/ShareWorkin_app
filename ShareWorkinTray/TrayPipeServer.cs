@@ -73,9 +73,10 @@ public sealed class TrayPipeServer
 
     public Task<bool> RequestInviteApprovalAsync(SwkNotificationBroadcaster.InviteApprovalRequest request)
     {
-        var session = _activeSession;
-        if (session?.IsConnected != true) return Task.FromResult(false);
-        return session.RequestInviteApprovalAsync(request.ClientMachineName, request.InviteLabel, request.IsManualInvite);
+        return _tray.RequestInviteApprovalAsync(
+            request.ClientMachineName,
+            request.InviteLabel,
+            request.IsManualInvite);
     }
 }
 
