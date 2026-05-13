@@ -120,8 +120,8 @@
         <StackPanel Grid.Row="8">
             <DockPanel LastChildFill="True">
                 <UniformGrid DockPanel.Dock="Right"
-                             Rows="1" Columns="3"
-                             Width="300">
+                             Rows="1" Columns="4"
+                             Width="430">
                     <ComboBox x:Name="ScanModeComboBox"
                               Height="32"
                               Margin="4,0,0,0"
@@ -130,6 +130,12 @@
                         <ComboBoxItem Content="接続可能スキャン" />
                         <ComboBoxItem Content="全PCスキャン" />
                     </ComboBox>
+                    <Button x:Name="RefreshCertButton"
+                            Content="証明書再確認"
+                            Height="32"
+                            Margin="4,0,0,0"
+                            IsEnabled="False"
+                            Click="RefreshCertButton_Click" />
                     <Button x:Name="ReloadButton"
                             Content="再スキャン"
                             Height="32"

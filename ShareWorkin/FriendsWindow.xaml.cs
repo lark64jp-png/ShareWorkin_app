@@ -76,6 +76,7 @@ public partial class FriendsWindow : Window
         {
             SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
+            PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
             RefreshCandidateRows();
             SelectCurrentCandidateRow();
@@ -102,6 +103,7 @@ public partial class FriendsWindow : Window
         {
             SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
+            PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
             RefreshCandidateRows();
             SelectCurrentCandidateRow();
@@ -145,9 +147,18 @@ public partial class FriendsWindow : Window
                 // 接続先切替モード: 招待コード交換で接続先を更新
                 string shopHost = NormalizeHost(_activeShopInfo.MachineName);
                 string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
-                TitleTextBlock.Text = "接続先を切替";
-                SubtitleTextBlock.Text =
-                    $"「{friendName}」の接続先を「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
+                if (_activeFriend.HasCertificateMismatch)
+                {
+                    TitleTextBlock.Text = "証明書を再確認";
+                    SubtitleTextBlock.Text =
+                        $"「{friendName}」の証明書が変わっています。検出中の「{shopHost}」{shopIp}へ再接続して登録情報を更新します。";
+                }
+                else
+                {
+                    TitleTextBlock.Text = "接続先を切替";
+                    SubtitleTextBlock.Text =
+                        $"「{friendName}」の接続先を「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
+                }
             }
             else if (_activeFriend.IsCurrentlyFound)
             {
@@ -369,8 +380,8 @@ public partial class FriendsWindow : Window
         {
             // 登録済み・オフライン友達行
             _activeFriend = selected.ExistingFriend;
-            _activeShopInfo = null;
-            _activeNewCandidate = selected.Source;
+            _activeShopInfo = selected.ShopInfo;
+            _activeNewCandidate = selected.ShopInfo == null ? selected.Source : null;
         }
         else if (selected.Source != null)
         {
@@ -386,8 +397,8 @@ public partial class FriendsWindow : Window
             {
                 // LAN に見えるが未確立の登録済み友達 → Update モード
                 _activeFriend = matchedFriend;
-                _activeShopInfo = null;
-                _activeNewCandidate = selected.Source;
+                _activeShopInfo = selected.ShopInfo;
+                _activeNewCandidate = selected.ShopInfo == null ? selected.Source : null;
             }
             else if (_activeFriend != null && !_activeFriend.IsCurrentlyFound && selected.ShopInfo != null)
             {
@@ -464,6 +475,11 @@ public partial class FriendsWindow : Window
             bool candidateChanged = _activeNewCandidate != null || _activeShopInfo != null;
             if (!nameChanged && !memoChanged && !iconChanged && !candidateChanged)
             {
+                if (CanRefreshExistingFriend())
+                {
+                    return true;
+                }
+
                 error = "変更がありません。";
                 return false;
             }
@@ -516,6 +532,7 @@ public partial class FriendsWindow : Window
             if (fresh != null) _activeFriend = fresh;
         }
 
+        PromoteCertificateMismatchToLiveShop();
         RefreshCandidateRows();
         ApplyActiveTarget();
         SelectCurrentCandidateRow();
@@ -562,6 +579,16 @@ public partial class FriendsWindow : Window
                 _ = ChangeConnectionAsync(name, memo);
                 return;
             }
+
+            SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(_activeFriend, _shopInfos);
+            if (liveShop is not null)
+            {
+                OkButton.IsEnabled = false;
+                StatusTextBlock.Text = "接続情報を更新中…";
+                _ = RefreshExistingFriendAsync(name, memo, liveShop);
+                return;
+            }
+
             UpdateExistingFriend(name, memo);
             return;
         }
@@ -611,6 +638,8 @@ public partial class FriendsWindow : Window
             target.LastKnownAddress = _activeShopInfo.IpAddress ?? string.Empty;
             target.LastFoundAt = nowIso;
             target.LastCheckedAt = nowIso;
+            target.LastSeenAt = nowIso;
+            target.LastAccessIssue = null;
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -636,6 +665,78 @@ public partial class FriendsWindow : Window
         catch (Exception ex)
         {
             SwkLogger.Warn($"FriendsWindow.ChangeConnectionAsync failed: {ex.Message}");
+            StatusTextBlock.Text = $"エラー: {ex.Message}";
+            OkButton.IsEnabled = true;
+        }
+        finally
+        {
+            _cancellationTokenSource?.Dispose();
+        }
+    }
+
+    private async Task RefreshExistingFriendAsync(
+        string name,
+        string memo,
+        SwkNotificationListener.ShopInfo liveShop)
+    {
+        try
+        {
+            _cancellationTokenSource = new CancellationTokenSource();
+            _cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
+
+            var listener = new SwkNotificationListener();
+            var result = await listener.RequestInviteCodeAsync(
+                liveShop,
+                inviteId: null,
+                expectedThumbprint: null,
+                _cancellationTokenSource.Token);
+
+            if (!result.Success)
+            {
+                StatusTextBlock.Text = $"接続情報の更新に失敗しました: {result.ErrorMessage ?? "招待コードを取得できませんでした。"}";
+                OkButton.IsEnabled = true;
+                return;
+            }
+
+            string nowIso = DateTime.UtcNow.ToString("o");
+            Friend target = _activeFriend!;
+            target.DisplayName = name;
+            target.Memo = memo;
+            target.IconKey = _pendingIconKey;
+            target.HostMachineName = liveShop.MachineName;
+            target.ShareName = liveShop.ShareName;
+            target.PasswordProtected = FriendsRepository.ProtectPassword(result.Password!);
+            target.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+            target.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
+            target.LastFoundAt = nowIso;
+            target.LastCheckedAt = nowIso;
+            target.LastSeenAt = nowIso;
+            target.LastAccessIssue = null;
+
+            List<Friend> all = FriendsRepository.LoadAll().ToList();
+            int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
+            if (idx >= 0) all[idx] = target; else all.Add(target);
+
+            if (!FriendsRepository.SaveAll(all))
+            {
+                StatusTextBlock.Text = "保存できませんでした。";
+                OkButton.IsEnabled = true;
+                return;
+            }
+
+            SwkLogger.Debug(
+                $"FriendsWindow.RefreshExistingFriendAsync: id={target.Id} host={target.HostMachineName}");
+            DialogResult = true;
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusTextBlock.Text = "接続タイムアウト";
+            OkButton.IsEnabled = true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"FriendsWindow.RefreshExistingFriendAsync failed: {ex.Message}");
             StatusTextBlock.Text = $"エラー: {ex.Message}";
             OkButton.IsEnabled = true;
         }
@@ -788,6 +889,56 @@ public partial class FriendsWindow : Window
         if (string.IsNullOrWhiteSpace(f.LastCheckedAt)) return "未確認";
         if (f.HasCertificateMismatch) return "証明書不一致";
         return f.IsCurrentlyFound ? "来店可能" : "不在";
+    }
+
+    private bool CanRefreshExistingFriend()
+    {
+        return _activeFriend is not null &&
+               _activeShopInfo is null &&
+               FindLiveShopForFriend(_activeFriend, _shopInfos) is not null;
+    }
+
+    private void PromoteCertificateMismatchToLiveShop()
+    {
+        if (_activeFriend?.HasCertificateMismatch != true) return;
+        if (_activeShopInfo != null) return;
+
+        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(_activeFriend, _shopInfos);
+        if (liveShop is null) return;
+
+        _activeShopInfo = liveShop;
+        _activeNewCandidate = null;
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindLiveShopForFriend(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
+        string friendHost = NormalizeHost(friend.HostMachineName);
+        if (!string.IsNullOrWhiteSpace(friendHost))
+        {
+            SwkNotificationListener.ShopInfo? byHost = shopInfos.FirstOrDefault(s =>
+                string.Equals(NormalizeHost(s.MachineName), friendHost, StringComparison.OrdinalIgnoreCase));
+            if (byHost is not null) return byHost;
+        }
+
+        string friendIp = friend.LastKnownAddress ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(friendIp))
+        {
+            SwkNotificationListener.ShopInfo? byIp = shopInfos.FirstOrDefault(s =>
+                string.Equals(s.IpAddress, friendIp, StringComparison.OrdinalIgnoreCase));
+            if (byIp is not null) return byIp;
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
+                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (sameShare.Count == 1) return sameShare[0];
+        }
+
+        return null;
     }
 
     public static bool OpenFriendFolder(Friend friend)

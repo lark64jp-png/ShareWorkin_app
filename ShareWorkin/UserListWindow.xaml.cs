@@ -35,6 +35,7 @@ public partial class UserListWindow : Window
         UserListView.ItemsSource = _rows;
         _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(IntervalSteps[0]) };
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
+        UserListView.SelectionChanged += UserListView_SelectionChanged;
         SwkLogger.Debug($"UserListWindow ctor: owner={owner?.GetType().Name ?? "null"}");
         Loaded += async (_, _) =>
         {
@@ -209,6 +210,8 @@ public partial class UserListWindow : Window
             _rows.Add(r);
         }
 
+        UpdateRefreshCertButtonState();
+
         int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
         int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
         int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
@@ -238,6 +241,65 @@ public partial class UserListWindow : Window
         if (trustedRefreshRequested)
         {
             await RefreshRegisteredFriendsFromBkAsync();
+        }
+    }
+
+    private async void RefreshCertButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (UserListView.SelectedItem is not UserListRow row || row.Friend is null || !row.Friend.HasCertificateMismatch)
+        {
+            UpdateRefreshCertButtonState();
+            return;
+        }
+
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
+        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(row.Friend, shopInfos);
+        if (liveShop is null)
+        {
+            StatusTextBlock.Text = "再確認できる接続先が見つかりません。先に再スキャンしてください。";
+            UpdateRefreshCertButtonState();
+            return;
+        }
+
+        List<Friend> friends = FriendsRepository.LoadAll().ToList();
+        Friend? target = friends.FirstOrDefault(f => string.Equals(f.Id, row.Friend.Id, StringComparison.Ordinal));
+        if (target is null)
+        {
+            StatusTextBlock.Text = "対象ユーザーを読み直してください。";
+            UpdateRefreshCertButtonState();
+            return;
+        }
+
+        ReloadButton.IsEnabled = false;
+        RefreshCertButton.IsEnabled = false;
+        LoadingBar.Visibility = Visibility.Visible;
+        StatusTextBlock.Text = "証明書を再確認中…";
+        try
+        {
+            bool refreshed = await TryRefreshFriendFromBkAsync(target, liveShop);
+            if (!refreshed)
+            {
+                BuildUiFromCache();
+                StatusTextBlock.Text = "証明書を更新できませんでした。";
+                return;
+            }
+
+            if (!FriendsRepository.SaveAll(friends))
+            {
+                BuildUiFromCache();
+                StatusTextBlock.Text = "保存できませんでした。";
+                return;
+            }
+
+            _hasFriendUpdates = true;
+            BuildUiFromCache();
+            StatusTextBlock.Text = "証明書を更新しました。";
+        }
+        finally
+        {
+            LoadingBar.Visibility = Visibility.Collapsed;
+            ReloadButton.IsEnabled = true;
+            UpdateRefreshCertButtonState();
         }
     }
 
@@ -292,6 +354,11 @@ public partial class UserListWindow : Window
         {
             _autoRefreshTimer.Start();
         }
+    }
+
+    private void UserListView_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        UpdateRefreshCertButtonState();
     }
 
     private static bool SameHost(string expected, string? found)
@@ -399,32 +466,10 @@ public partial class UserListWindow : Window
         {
             foreach ((Friend friend, SwkNotificationListener.ShopInfo liveShop) in targets)
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-                var listener = new SwkNotificationListener();
-                SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
-                    liveShop,
-                    inviteId: null,
-                    expectedThumbprint: null,
-                    cts.Token);
-
-                if (!result.Success || string.IsNullOrEmpty(result.Password))
+                if (await TryRefreshFriendFromBkAsync(friend, liveShop))
                 {
-                    SwkLogger.Warn(
-                        $"UserListWindow.RefreshRegisteredFriendsFromBkAsync failed: id={friend.Id} {result.ErrorMessage ?? "empty password"}");
-                    continue;
+                    refreshed++;
                 }
-
-                string nowIso = DateTime.UtcNow.ToString("o");
-                friend.HostMachineName = liveShop.MachineName;
-                friend.ShareName = liveShop.ShareName;
-                friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
-                friend.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
-                friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
-                friend.LastFoundAt = nowIso;
-                friend.LastCheckedAt = nowIso;
-                friend.LastSeenAt = nowIso;
-                friend.LastAccessIssue = null;
-                refreshed++;
             }
 
             if (refreshed > 0 && FriendsRepository.SaveAll(friends))
@@ -442,6 +487,54 @@ public partial class UserListWindow : Window
             LoadingBar.Visibility = Visibility.Collapsed;
             ReloadButton.IsEnabled = true;
         }
+    }
+
+    private void UpdateRefreshCertButtonState()
+    {
+        if (RefreshCertButton == null)
+        {
+            return;
+        }
+
+        bool canRefresh = false;
+        if (UserListView.SelectedItem is UserListRow row && row.Friend?.HasCertificateMismatch == true)
+        {
+            canRefresh = FindLiveShopForFriend(row.Friend, SwkNetworkCache.ShopInfos) is not null;
+        }
+
+        RefreshCertButton.IsEnabled = canRefresh && !_isRefreshing;
+    }
+
+    private static async Task<bool> TryRefreshFriendFromBkAsync(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var listener = new SwkNotificationListener();
+        SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
+            liveShop,
+            inviteId: null,
+            expectedThumbprint: null,
+            cts.Token);
+
+        if (!result.Success || string.IsNullOrEmpty(result.Password))
+        {
+            SwkLogger.Warn(
+                $"UserListWindow.TryRefreshFriendFromBkAsync failed: id={friend.Id} {result.ErrorMessage ?? "empty password"}");
+            return false;
+        }
+
+        string nowIso = DateTime.UtcNow.ToString("o");
+        friend.HostMachineName = liveShop.MachineName;
+        friend.ShareName = liveShop.ShareName;
+        friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
+        friend.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+        friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
+        friend.LastFoundAt = nowIso;
+        friend.LastCheckedAt = nowIso;
+        friend.LastSeenAt = nowIso;
+        friend.LastAccessIssue = null;
+        return true;
     }
 
     private static bool UpdateFriendFromLiveShop(Friend friend, SwkNotificationListener.ShopInfo liveShop)
