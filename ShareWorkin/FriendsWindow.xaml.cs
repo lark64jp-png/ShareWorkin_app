@@ -641,6 +641,7 @@ public partial class FriendsWindow : Window
             target.LastCheckedAt = nowIso;
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
+            FriendShareAccessTracker.ClearVerified(target);
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -714,6 +715,7 @@ public partial class FriendsWindow : Window
             target.LastCheckedAt = nowIso;
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
+            FriendShareAccessTracker.ClearVerified(target);
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -788,6 +790,7 @@ public partial class FriendsWindow : Window
                 LastFoundAt = nowIso,
                 LastCheckedAt = nowIso,
             };
+            FriendShareAccessTracker.ClearVerified(friend);
             friend.IconKey = PromoteIconKeyToFriendId(_pendingIconKey, friend.Id);
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
@@ -841,6 +844,7 @@ public partial class FriendsWindow : Window
             target.LastKnownAddress = _activeNewCandidate.Address.ToString();
             target.LastFoundAt = nowIso;
             target.LastCheckedAt = nowIso;
+            FriendShareAccessTracker.ClearVerified(target);
         }
 
         List<Friend> allUpd = FriendsRepository.LoadAll().ToList();
@@ -1004,6 +1008,17 @@ public partial class FriendsWindow : Window
                 return false;
             }
             bool ok = SmbConnectionHelper.ConnectAndOpen(friend.ConnectUncPath, friend.UserName, password, friend.HostMachineName);
+            if (ok)
+            {
+                FriendShareAccessTracker.MarkVerified(friend);
+                List<Friend> all = FriendsRepository.LoadAll().ToList();
+                int idx = all.FindIndex(f => string.Equals(f.Id, friend.Id, StringComparison.Ordinal));
+                if (idx >= 0)
+                {
+                    all[idx] = friend;
+                    FriendsRepository.SaveAll(all);
+                }
+            }
             SwkLogger.Info($"OpenFriendFolder: {friend.DisplayName} - {(ok ? "success" : "failed")}");
             return ok;
         }

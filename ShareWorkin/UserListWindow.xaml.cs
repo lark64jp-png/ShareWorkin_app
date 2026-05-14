@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -57,7 +58,13 @@ public partial class UserListWindow : Window
     private async Task BuildFromCacheAsync()
     {
         if (SwkNetworkCache.IsReady && SwkNetworkCache.ShopInfos.Count > 0)
+        {
             BuildUiFromCache();
+        }
+        else
+        {
+            TryLoadUserListState();
+        }
         await RunScanAndBuildAsync();
     }
 
@@ -131,19 +138,8 @@ public partial class UserListWindow : Window
         IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
         List<Friend> friends = FriendsRepository.LoadAll().ToList();
-        bool friendsChanged = false;
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache: friends={friends.Count} candidates={candidates.Count} shopInfos={shopInfos.Count}");
-
-        foreach (Friend f in friends)
-        {
-            SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
-            if (liveShop is not null && UpdateFriendFromLiveShop(f, liveShop))
-                friendsChanged = true;
-        }
-
-        if (friendsChanged && FriendsRepository.SaveAll(friends))
-            _hasFriendUpdates = true;
 
         List<UserListRow> rows = BuildRowsFromCache(candidates, shopInfos, friends);
 
@@ -188,7 +184,7 @@ public partial class UserListWindow : Window
 
             if (liveShop is not null && !f.HasCertificateMismatch)
             {
-                rows.Add(CanOpenFriendShare(f, liveShop)
+                rows.Add(IsConnectedFriend(f, liveShop)
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForResumeRequiredFriend(f, liveShop));
             }
@@ -245,17 +241,64 @@ public partial class UserListWindow : Window
             IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
             IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
             List<Friend> friends = FriendsRepository.LoadAll().ToList();
-            foreach (Friend f in friends)
-            {
-                SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
-                if (liveShop is not null)
-                    UpdateFriendFromLiveShop(f, liveShop);
-            }
             SaveUserListState(BuildRowsFromCache(candidates, shopInfos, friends));
         }
         catch (Exception ex)
         {
             SwkLogger.Warn($"UserListWindow.TrySaveSnapshot failed: {ex.Message}");
+        }
+    }
+
+    private bool TryLoadUserListState()
+    {
+        try
+        {
+            if (!File.Exists(UserListStatePath))
+            {
+                return false;
+            }
+
+            UserListSnapshotState? state = JsonSerializer.Deserialize<UserListSnapshotState>(
+                File.ReadAllText(UserListStatePath, Encoding.UTF8),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (state?.Rows is not { Count: > 0 })
+            {
+                return false;
+            }
+
+            _rows.Clear();
+            foreach (UserListSnapshotRow row in state.Rows)
+            {
+                if (!Enum.TryParse(row.Kind, out UserListRowKind kind))
+                {
+                    continue;
+                }
+
+                _rows.Add(new UserListRow
+                {
+                    Kind = kind,
+                    StatusLabel = row.StatusLabel ?? string.Empty,
+                    NameLabel = row.NameLabel ?? string.Empty,
+                    IpLabel = row.IpLabel ?? string.Empty,
+                    ShareFolderName = row.ShareFolderName ?? string.Empty,
+                    ResumeButtonVisibility = Visibility.Collapsed,
+                });
+            }
+
+            if (_rows.Count == 0)
+            {
+                return false;
+            }
+
+            ScanStateTextBlock.Text = "保存状態";
+            StatusTextBlock.Text = "前回の一覧を表示中…";
+            SwkLogger.Debug($"UserListWindow.TryLoadUserListState ok: rows={_rows.Count}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow.TryLoadUserListState failed: {ex.Message}");
+            return false;
         }
     }
 
@@ -384,6 +427,16 @@ public partial class UserListWindow : Window
                 return;
             }
 
+            bool verified = await Task.Run(() => TryVerifyFriendShareOnDemand(target, liveShop, allowReconnect: true));
+            if (verified)
+            {
+                FriendShareAccessTracker.MarkVerified(target, liveShop);
+            }
+            else
+            {
+                FriendShareAccessTracker.ClearVerified(target);
+            }
+
             if (!FriendsRepository.SaveAll(friends))
             {
                 BuildUiFromCache();
@@ -393,7 +446,9 @@ public partial class UserListWindow : Window
 
             _hasFriendUpdates = true;
             BuildUiFromCache();
-            StatusTextBlock.Text = "接続情報を再取得しました。";
+            StatusTextBlock.Text = verified
+                ? "接続情報を再取得し、共有接続も確認しました。"
+                : "接続情報を再取得しました。共有接続は未確認です。";
         }
         finally
         {
@@ -555,32 +610,8 @@ public partial class UserListWindow : Window
         friend.LastCheckedAt = nowIso;
         friend.LastSeenAt = nowIso;
         friend.LastAccessIssue = null;
+        FriendShareAccessTracker.ClearVerified(friend);
         return true;
-    }
-
-    private static bool UpdateFriendFromLiveShop(Friend friend, SwkNotificationListener.ShopInfo liveShop)
-    {
-        bool changed = false;
-        string? previousLastSeen = friend.LastSeenAt;
-        string nowIso = DateTime.UtcNow.ToString("o");
-
-        if (!string.IsNullOrWhiteSpace(liveShop.IpAddress) &&
-            !string.Equals(friend.LastKnownAddress, liveShop.IpAddress, StringComparison.OrdinalIgnoreCase))
-        {
-            friend.LastKnownAddress = liveShop.IpAddress;
-            changed = true;
-        }
-
-        friend.LastFoundAt = nowIso;
-        friend.LastCheckedAt = nowIso;
-        friend.LastSeenAt = nowIso;
-        if (!string.IsNullOrWhiteSpace(liveShop.SwkInstanceId) &&
-            !string.Equals(friend.RemoteSwkInstanceId, liveShop.SwkInstanceId, StringComparison.OrdinalIgnoreCase))
-        {
-            friend.RemoteSwkInstanceId = liveShop.SwkInstanceId;
-            changed = true;
-        }
-        return changed || !string.Equals(previousLastSeen, nowIso, StringComparison.Ordinal);
     }
 
     private static bool IsCandidateCoveredByRegisteredFriend(
@@ -639,53 +670,47 @@ public partial class UserListWindow : Window
         return dot > 0 ? trimmed[..dot] : trimmed;
     }
 
-    private static bool CanOpenFriendShare(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    private static bool IsConnectedFriend(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
-        // 相手PCの終了直後は SMB/UNC の確認が OS 側で長く待つことがある。
-        // ユーザー一覧の再描画で UI を止めないよう、共有確認は短時間で打ち切る。
-        const int timeoutMs = 1500;
-        try
-        {
-            Task<bool> probeTask = Task.Run(() => ProbeFriendShare(friend, liveShop));
-            if (probeTask.Wait(timeoutMs))
-            {
-                return probeTask.Result;
-            }
-
-            SwkLogger.Warn($"UserListWindow.CanOpenFriendShare timed out after {timeoutMs}ms: friend={friend.Id}");
-            return false;
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Warn($"UserListWindow.CanOpenFriendShare failed: friend={friend.Id} {ex.Message}");
-            return false;
-        }
+        return FriendShareAccessTracker.IsVerifiedFor(friend, liveShop);
     }
 
-    private static bool ProbeFriendShare(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    // 共有確認は明示操作からのみ呼ぶ。ユーザー一覧の観測経路から呼んではいけない。
+    private static bool TryVerifyFriendShareOnDemand(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop,
+        bool allowReconnect)
     {
-        List<string> candidates = BuildFriendUncCandidates(friend, liveShop);
-        string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
-
-        foreach (string path in candidates)
+        try
         {
-            if (CanEnumerateShare(path))
-            {
-                return true;
-            }
+            List<string> candidates = BuildFriendUncCandidates(friend, liveShop);
+            string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
 
-            if (!string.IsNullOrEmpty(password))
+            foreach (string path in candidates)
             {
-                SmbConnectionHelper.EnsureConnection(path, friend.UserName, password, liveShop.MachineName);
                 if (CanEnumerateShare(path))
                 {
                     return true;
                 }
-            }
-        }
 
-        SwkLogger.Debug($"UserListWindow.ProbeFriendShare failed: friend={friend.Id} candidates={string.Join(", ", candidates)}");
-        return false;
+                if (allowReconnect && !string.IsNullOrEmpty(password))
+                {
+                    SmbConnectionHelper.EnsureConnection(path, friend.UserName, password, liveShop.MachineName);
+                    if (CanEnumerateShare(path))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            SwkLogger.Debug($"UserListWindow.TryVerifyFriendShareOnDemand failed: friend={friend.Id} candidates={string.Join(", ", candidates)}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow.TryVerifyFriendShareOnDemand failed: friend={friend.Id} {ex.Message}");
+            return false;
+        }
     }
 
     private static bool HasBothInstanceIds(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
@@ -772,6 +797,9 @@ public partial class UserListWindow : Window
                     shopIpAddress = r.ShopInfo?.IpAddress,
                     shopShareName = r.ShopInfo?.ShareName,
                     shopPort = r.ShopInfo?.Port,
+                    friendLastShareAccessVerifiedAt = r.Friend?.LastShareAccessVerifiedAt,
+                    friendLastShareAccessHost = r.Friend?.LastShareAccessHost,
+                    friendLastShareAccessSwkInstanceId = r.Friend?.LastShareAccessSwkInstanceId,
                     candidateHostName = r.Candidate?.HostName,
                     candidateAddress = r.Candidate?.Address.ToString(),
                 }).ToList()
@@ -786,11 +814,38 @@ public partial class UserListWindow : Window
     }
 }
 
+file sealed class UserListSnapshotState
+{
+    [JsonPropertyName("savedAt")]
+    public string? SavedAt { get; set; }
+
+    [JsonPropertyName("rows")]
+    public List<UserListSnapshotRow> Rows { get; set; } = [];
+}
+
+file sealed class UserListSnapshotRow
+{
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("statusLabel")]
+    public string? StatusLabel { get; set; }
+
+    [JsonPropertyName("nameLabel")]
+    public string? NameLabel { get; set; }
+
+    [JsonPropertyName("ipLabel")]
+    public string? IpLabel { get; set; }
+
+    [JsonPropertyName("shareFolderName")]
+    public string? ShareFolderName { get; set; }
+}
+
 public enum UserListRowKind
 {
     // 値の小さい順に表示される(0 が先頭)。
-    ConnectedFriend = 0,        // Friend登録済み + 開店中
-    ResumeRequiredFriend = 1,   // Friend登録済み + 開店中 + SMB共有列挙NG
+    ConnectedFriend = 0,        // Friend登録済み + 開店中 + 明示接続成功確認あり
+    ResumeRequiredFriend = 1,   // Friend登録済み + 開店中 + 接続成功確認待ち
     SwitchCandidate = 2,        // Friend登録済み + 接続先切替候補
     NewShop = 3,                // Friend未登録 + 開店中
     UnreachableFriend = 4,      // Friend登録済み + オフライン
@@ -864,7 +919,7 @@ public sealed class UserListRow
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
         StatusLabel = "登録済み / 再開待ち",
         ShareFolderName = liveShop.ShareName,
-        Memo = "共有フォルダを表示できません。再開を試してください。",
+        Memo = "接続先は見えています。再開して共有接続を確認してください。",
         IpLabel = liveShop.IpAddress ?? friend.LastKnownAddress ?? string.Empty,
         Kind = UserListRowKind.ResumeRequiredFriend,
         IconBrush = Brushes.White,

@@ -74,6 +74,18 @@ public sealed class Friend
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LastAccessIssue { get; set; }
 
+    [JsonPropertyName("lastShareAccessVerifiedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastShareAccessVerifiedAt { get; set; }
+
+    [JsonPropertyName("lastShareAccessHost")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastShareAccessHost { get; set; }
+
+    [JsonPropertyName("lastShareAccessSwkInstanceId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastShareAccessSwkInstanceId { get; set; }
+
     // Host/share are connection facts behind an invited shop. They are not the
     // primary meaning of the friend list, which is "shops I was invited to".
     [JsonIgnore]

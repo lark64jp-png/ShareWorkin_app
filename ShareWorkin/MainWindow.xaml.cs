@@ -143,8 +143,6 @@ public partial class MainWindow : Window
         _transientStatusTimer = new DispatcherTimer { Interval = TransientStatusDuration };
         _transientStatusTimer.Tick += TransientStatusTimer_Tick;
 
-        SwkNetworkCache.Updated += UserListWindow.TrySaveSnapshot;
-
         LoadSettings();
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
@@ -3590,7 +3588,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         friend.LastFoundAt = nowIso;
         friend.LastCheckedAt = nowIso;
         friend.LastSeenAt = nowIso;
-        friend.LastAccessIssue = null;
         if (!string.IsNullOrWhiteSpace(liveShop.SwkInstanceId))
         {
             friend.RemoteSwkInstanceId = liveShop.SwkInstanceId;
@@ -3611,6 +3608,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         stored.LastCheckedAt = friend.LastCheckedAt;
         stored.LastSeenAt = friend.LastSeenAt;
         stored.LastAccessIssue = friend.LastAccessIssue;
+        stored.LastShareAccessVerifiedAt = friend.LastShareAccessVerifiedAt;
+        stored.LastShareAccessHost = friend.LastShareAccessHost;
+        stored.LastShareAccessSwkInstanceId = friend.LastShareAccessSwkInstanceId;
         FriendsRepository.SaveAll(all);
     }
 
@@ -3698,11 +3698,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(accessiblePath))
         {
             SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {string.Join(", ", uncCandidates)}");
+            FriendShareAccessTracker.ClearVerified(friend);
+            UpdateFriendExternalState(friend, liveShop);
             SetTransientStatus("接続できません");
             return;
         }
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
+        FriendShareAccessTracker.MarkVerified(friend, liveShop);
         UpdateFriendExternalState(friend, liveShop);
         _activeFriendShopRootPath = accessiblePath;
         bool hadMissingStatus = _missingFriendShopStatus != null;
@@ -3771,6 +3774,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 {
                     PersistFriendAccessIssue(friend, Friend.AccessIssueCertMismatch);
                 }
+                FriendShareAccessTracker.ClearVerified(friend);
                 SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {result.ErrorMessage ?? "empty password"}");
                 return false;
             }
@@ -3785,17 +3789,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 friend.RemoteSwkInstanceId = result.SwkInstanceId;
             }
             friend.LastAccessIssue = null;
+            FriendShareAccessTracker.ClearVerified(friend);
             UpdateFriendExternalState(friend, liveShop);
             SwkLogger.Info($"TryRefreshFriendPasswordAsync: refreshed stored SMB password for friend id={friend.Id}");
             return true;
         }
         catch (OperationCanceledException)
         {
+            FriendShareAccessTracker.ClearVerified(friend);
             SwkLogger.Warn("TryRefreshFriendPasswordAsync timed out");
             return false;
         }
         catch (Exception ex)
         {
+            FriendShareAccessTracker.ClearVerified(friend);
             SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {ex.Message}");
             return false;
         }
