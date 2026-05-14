@@ -31,6 +31,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         public required DateTime IssuedAt { get; set; }
         public DateTime LastCheckedAt { get; set; }
         public string? IpAddress { get; set; }
+        public string? SwkInstanceId { get; set; }
     }
 
     public async Task StartAsync()
@@ -163,6 +164,9 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                     string? shareName = doc.RootElement.GetProperty("shareName").GetString();
                     int tcpPort = doc.RootElement.GetProperty("listeningPort").GetInt32();
                     string? issuedAtStr = doc.RootElement.GetProperty("issuedAt").GetString();
+                    string? swkInstanceId = doc.RootElement.TryGetProperty("swkInstanceId", out JsonElement instanceElement)
+                        ? instanceElement.GetString()
+                        : null;
 
                     if (string.IsNullOrEmpty(machineName) || string.IsNullOrEmpty(shareName) || tcpPort <= 0) continue;
 
@@ -174,7 +178,8 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                         Port = tcpPort,
                         IssuedAt = DateTime.Parse(issuedAtStr ?? DateTime.UtcNow.ToString("o")),
                         LastCheckedAt = DateTime.UtcNow,
-                        IpAddress = senderIp
+                        IpAddress = senderIp,
+                        SwkInstanceId = swkInstanceId
                     });
 
                     SwkLogger.Debug($"ProbeHostsAsync: discovered {machineName}/{shareName} tcpPort={tcpPort}");
@@ -200,6 +205,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
     {
         public string? Password { get; init; }
         public string? CertThumbprint { get; init; }
+        public string? SwkInstanceId { get; init; }
         public string? ErrorMessage { get; init; }
         public bool Success => string.IsNullOrEmpty(ErrorMessage) && !string.IsNullOrEmpty(Password);
     }
@@ -294,6 +300,20 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             if (string.IsNullOrEmpty(notificationJson))
                 return new InviteCodeResult { CertThumbprint = capturedThumbprint, ErrorMessage = "応答なし" };
 
+            string? swkInstanceId = shop.SwkInstanceId;
+            try
+            {
+                using JsonDocument notificationDoc = JsonDocument.Parse(notificationJson);
+                if (notificationDoc.RootElement.TryGetProperty("swkInstanceId", out JsonElement instanceElement))
+                {
+                    swkInstanceId = instanceElement.GetString();
+                }
+            }
+            catch (JsonException ex)
+            {
+                SwkLogger.Debug($"RequestInviteCodeAsync: ShopNotification parse warning: {ex.Message}");
+            }
+
             SwkLogger.Debug($"RequestInviteCodeAsync: received ShopNotification from {shop.MachineName}/{shop.ShareName}");
 
             // InviteCodeRequest を送信
@@ -321,6 +341,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 return new InviteCodeResult
                 {
                     CertThumbprint = capturedThumbprint,
+                    SwkInstanceId = swkInstanceId,
                     ErrorMessage = errorMsg ?? result
                 };
             }
@@ -332,6 +353,7 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             {
                 Password = password,
                 CertThumbprint = capturedThumbprint,
+                SwkInstanceId = swkInstanceId,
             };
         }
         catch (Exception ex)

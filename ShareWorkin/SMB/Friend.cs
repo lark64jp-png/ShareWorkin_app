@@ -50,6 +50,10 @@ public sealed class Friend
     [JsonPropertyName("ownerCertThumbprint")]
     public string OwnerCertThumbprint { get; set; } = string.Empty;
 
+    [JsonPropertyName("remoteSwkInstanceId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RemoteSwkInstanceId { get; set; }
+
     [JsonPropertyName("lastSeenAt")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LastSeenAt { get; set; }

@@ -127,13 +127,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 await sslStream.AuthenticateAsServerAsync(sslOptions, cancellationToken);
 
                 // 接続直後に ShopNotification を送信（相手が「開店中」であることを確認できる）
-                var notification = new SwkNotificationProtocol.ShopNotification
-                {
-                    ShopMachineName = Environment.MachineName,
-                    ShareName = _shareName,
-                    ListeningPort = _listeningPort,
-                    IssuedAt = DateTime.UtcNow.ToString("o")
-                };
+                var notification = CreateShopNotification();
                 await WriteJsonAsync(sslStream, notification, cancellationToken);
 
                 // InviteCodeRequest を待つ（タイムアウト 10 秒）
@@ -279,13 +273,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 
                     if (msg.Contains("\"ShopProbe\""))
                     {
-                        var response = new SwkNotificationProtocol.ShopNotification
-                        {
-                            ShopMachineName = Environment.MachineName,
-                            ShareName = _shareName,
-                            ListeningPort = _listeningPort,
-                            IssuedAt = DateTime.UtcNow.ToString("o")
-                        };
+                        var response = CreateShopNotification();
                         string responseJson = JsonSerializer.Serialize(response);
                         byte[] responseBytes = Encoding.UTF8.GetBytes(responseJson);
                         await udp.SendAsync(responseBytes, result.RemoteEndPoint, cancellationToken);
@@ -338,13 +326,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         {
             using var udp = new UdpClient();
             udp.EnableBroadcast = true;
-            var notification = new SwkNotificationProtocol.ShopNotification
-            {
-                ShopMachineName = Environment.MachineName,
-                ShareName = _shareName,
-                ListeningPort = _listeningPort,
-                IssuedAt = DateTime.UtcNow.ToString("o")
-            };
+            var notification = CreateShopNotification();
             string json = JsonSerializer.Serialize(notification);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
             await udp.SendAsync(bytes, new IPEndPoint(IPAddress.Broadcast, UdpDiscoveryPort), cancellationToken);
@@ -355,6 +337,15 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             SwkLogger.Debug($"SendUdpBroadcastAsync error: {ex.Message}");
         }
     }
+
+    private SwkNotificationProtocol.ShopNotification CreateShopNotification() => new()
+    {
+        ShopMachineName = Environment.MachineName,
+        ShareName = _shareName,
+        ListeningPort = _listeningPort,
+        SwkInstanceId = SwkInstanceIdentity.GetOrCreateId(),
+        IssuedAt = DateTime.UtcNow.ToString("o")
+    };
 
     /// <summary>
     /// お店を閉じる直前に LAN 全体へ通知する。

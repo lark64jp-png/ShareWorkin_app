@@ -462,6 +462,11 @@ public partial class UserListWindow : Window
         LanCandidate candidate,
         SwkNotificationListener.ShopInfo shopInfo)
     {
+        if (HasBothInstanceIds(friend, shopInfo))
+        {
+            return SameSwkInstance(friend, shopInfo);
+        }
+
         bool sameShare = !string.IsNullOrWhiteSpace(friend.ShareName) &&
             string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
 
@@ -478,14 +483,28 @@ public partial class UserListWindow : Window
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
     {
-        string normalizedHost = NormalizeHostName(friend.HostMachineName);
+        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
+        {
+            SwkNotificationListener.ShopInfo? byId = shopInfos.FirstOrDefault(s =>
+                SameSwkInstance(friend, s) &&
+                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null) return byId;
 
-        SwkNotificationListener.ShopInfo? exact = shopInfos.FirstOrDefault(s =>
+            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, shopInfos);
+            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
+        }
+
+        return FindLiveShopByHostAndShare(friend, shopInfos);
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
+        string normalizedHost = NormalizeHostName(friend.HostMachineName);
+        return shopInfos.FirstOrDefault(s =>
             string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-        if (exact is not null) return exact;
-
-        return null;
     }
 
     private static async Task<bool> TryRefreshFriendFromBkAsync(
@@ -512,6 +531,7 @@ public partial class UserListWindow : Window
         friend.ShareName = liveShop.ShareName;
         friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
         friend.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+        friend.RemoteSwkInstanceId = result.SwkInstanceId ?? liveShop.SwkInstanceId;
         friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
         friend.LastFoundAt = nowIso;
         friend.LastCheckedAt = nowIso;
@@ -536,6 +556,12 @@ public partial class UserListWindow : Window
         friend.LastFoundAt = nowIso;
         friend.LastCheckedAt = nowIso;
         friend.LastSeenAt = nowIso;
+        if (!string.IsNullOrWhiteSpace(liveShop.SwkInstanceId) &&
+            !string.Equals(friend.RemoteSwkInstanceId, liveShop.SwkInstanceId, StringComparison.OrdinalIgnoreCase))
+        {
+            friend.RemoteSwkInstanceId = liveShop.SwkInstanceId;
+            changed = true;
+        }
         return changed || !string.Equals(previousLastSeen, nowIso, StringComparison.Ordinal);
     }
 
@@ -546,6 +572,17 @@ public partial class UserListWindow : Window
     {
         foreach (Friend friend in friends)
         {
+            if (shopInfo is not null && HasBothInstanceIds(friend, shopInfo))
+            {
+                if (SameSwkInstance(friend, shopInfo) &&
+                    string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
             bool sameHost = SameHost(friend.HostMachineName, candidate.HostName);
             if (!sameHost)
             {
@@ -632,6 +669,14 @@ public partial class UserListWindow : Window
         SwkLogger.Debug($"UserListWindow.ProbeFriendShare failed: friend={friend.Id} candidates={string.Join(", ", candidates)}");
         return false;
     }
+
+    private static bool HasBothInstanceIds(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
+        !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+        !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId);
+
+    private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
+        HasBothInstanceIds(friend, shopInfo) &&
+        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
 
     private static bool CanEnumerateShare(string path)
     {

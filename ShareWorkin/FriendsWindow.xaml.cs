@@ -390,7 +390,7 @@ public partial class FriendsWindow : Window
 
             IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
             Friend? matchedFriend = allFriends.FirstOrDefault(f =>
-                string.Equals(NormalizeHost(f.HostMachineName), host, StringComparison.OrdinalIgnoreCase) &&
+                MatchesCandidateFriend(f, selected.ShopInfo, host) &&
                 !f.IsCurrentlyFound);
 
             if (matchedFriend != null)
@@ -635,6 +635,7 @@ public partial class FriendsWindow : Window
             target.ShareName = _activeShopInfo.ShareName;
             target.PasswordProtected = FriendsRepository.ProtectPassword(result.Password!);
             target.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+            target.RemoteSwkInstanceId = result.SwkInstanceId ?? _activeShopInfo.SwkInstanceId;
             target.LastKnownAddress = _activeShopInfo.IpAddress ?? string.Empty;
             target.LastFoundAt = nowIso;
             target.LastCheckedAt = nowIso;
@@ -707,6 +708,7 @@ public partial class FriendsWindow : Window
             target.ShareName = liveShop.ShareName;
             target.PasswordProtected = FriendsRepository.ProtectPassword(result.Password!);
             target.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
+            target.RemoteSwkInstanceId = result.SwkInstanceId ?? liveShop.SwkInstanceId;
             target.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
             target.LastFoundAt = nowIso;
             target.LastCheckedAt = nowIso;
@@ -778,6 +780,7 @@ public partial class FriendsWindow : Window
                 UserName = "swkguest",
                 PasswordProtected = FriendsRepository.ProtectPassword(result.Password!),
                 OwnerCertThumbprint = result.CertThumbprint ?? string.Empty,
+                RemoteSwkInstanceId = result.SwkInstanceId ?? _activeShopInfo.SwkInstanceId,
                 AccessLevel = "Full",
                 ProfileLabel = string.Empty,
                 AddedAt = nowIso,
@@ -788,9 +791,7 @@ public partial class FriendsWindow : Window
             friend.IconKey = PromoteIconKeyToFriendId(_pendingIconKey, friend.Id);
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
-            all.RemoveAll(f =>
-                string.Equals(f.HostMachineName, friend.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(f.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            all.RemoveAll(f => ShouldReplaceExistingRegistration(f, friend));
             all.Add(friend);
 
             if (!FriendsRepository.SaveAll(all))
@@ -856,6 +857,18 @@ public partial class FriendsWindow : Window
         Close();
     }
 
+    private static bool ShouldReplaceExistingRegistration(Friend existing, Friend incoming)
+    {
+        if (!string.IsNullOrWhiteSpace(incoming.RemoteSwkInstanceId))
+        {
+            return string.Equals(existing.RemoteSwkInstanceId, incoming.RemoteSwkInstanceId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(existing.HostMachineName, incoming.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
+    }
+
     // 新規モードで仮ID保存されたオリジナル画像を、確定後の friend.Id へ改名する。
     private static string PromoteIconKeyToFriendId(string pendingKey, string friendId)
     {
@@ -914,6 +927,24 @@ public partial class FriendsWindow : Window
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
     {
+        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
+        {
+            SwkNotificationListener.ShopInfo? byId = shopInfos.FirstOrDefault(s =>
+                SameSwkInstance(friend, s) &&
+                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null) return byId;
+
+            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, shopInfos);
+            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
+        }
+
+        return FindLiveShopByHostAndShare(friend, shopInfos);
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
         string friendHost = NormalizeHost(friend.HostMachineName);
         if (!string.IsNullOrWhiteSpace(friendHost))
         {
@@ -940,6 +971,26 @@ public partial class FriendsWindow : Window
 
         return null;
     }
+
+    private static bool MatchesCandidateFriend(
+        Friend friend,
+        SwkNotificationListener.ShopInfo? shopInfo,
+        string candidateHost)
+    {
+        if (shopInfo is not null &&
+            !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+            !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId))
+        {
+            return SameSwkInstance(friend, shopInfo);
+        }
+
+        return string.Equals(NormalizeHost(friend.HostMachineName), candidateHost, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
+        !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+        !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId) &&
+        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
 
     public static bool OpenFriendFolder(Friend friend)
     {

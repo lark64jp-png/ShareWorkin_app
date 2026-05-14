@@ -28,6 +28,10 @@ public static class SwkNotificationProtocol
         [JsonPropertyName("listeningPort")]
         public required int ListeningPort { get; set; }
 
+        [JsonPropertyName("swkInstanceId")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SwkInstanceId { get; set; }
+
         [JsonPropertyName("issuedAt")]
         public required string IssuedAt { get; set; } // UTC ISO 8601
     }

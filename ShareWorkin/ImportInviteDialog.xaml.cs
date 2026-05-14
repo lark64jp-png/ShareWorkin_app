@@ -99,6 +99,7 @@ public partial class ImportInviteDialog : Window
             UserName = string.IsNullOrWhiteSpace(payload.UserName) ? "swkguest" : payload.UserName,
             PasswordProtected = FriendsRepository.ProtectPassword(result.Password!),
             OwnerCertThumbprint = result.CertThumbprint ?? string.Empty,
+            RemoteSwkInstanceId = result.SwkInstanceId ?? shop.SwkInstanceId,
             AccessLevel = string.IsNullOrWhiteSpace(payload.AccessLevel) ? "Full" : payload.AccessLevel,
             ProfileLabel = payload.ProfileLabel ?? string.Empty,
             AddedAt = nowIso,
@@ -108,9 +109,7 @@ public partial class ImportInviteDialog : Window
         };
 
         var existing = FriendsRepository.LoadAll().ToList();
-        existing.RemoveAll(f =>
-            string.Equals(f.HostMachineName, payload.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(f.ShareName, payload.ShareName, StringComparison.OrdinalIgnoreCase));
+        existing.RemoveAll(f => ShouldReplaceExistingRegistration(f, friend));
         existing.Add(friend);
 
         if (!FriendsRepository.SaveAll(existing))
@@ -120,6 +119,18 @@ public partial class ImportInviteDialog : Window
         }
 
         return friend;
+    }
+
+    private static bool ShouldReplaceExistingRegistration(Friend existing, Friend incoming)
+    {
+        if (!string.IsNullOrWhiteSpace(incoming.RemoteSwkInstanceId))
+        {
+            return string.Equals(existing.RemoteSwkInstanceId, incoming.RemoteSwkInstanceId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(existing.HostMachineName, incoming.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<SwkNotificationListener.ShopInfo?> ResolveShopAsync(string hostMachineName, string shareName)

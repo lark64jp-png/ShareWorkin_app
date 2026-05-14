@@ -2964,9 +2964,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             IReadOnlyList<SwkNotificationListener.ShopInfo> found =
                 await SwkNotificationListener.ProbeHostsAsync(candidates, cts.Token);
+            SwkNotificationListener.ShopInfo? byId = found.FirstOrDefault(s =>
+                SameSwkInstance(friend, s) &&
+                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null) return byId;
+
             SwkNotificationListener.ShopInfo? exact = found.FirstOrDefault(s =>
                 string.Equals(NormalizeHostName(s.MachineName), NormalizeHostName(friend.HostMachineName), StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+                !string.IsNullOrWhiteSpace(exact?.SwkInstanceId))
+            {
+                return null;
+            }
             if (exact is not null) return exact;
 
             return null;
@@ -3509,8 +3519,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopInfo(Friend friend)
     {
+        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
+        {
+            SwkNotificationListener.ShopInfo? byId = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+                SameSwkInstance(friend, s) &&
+                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null) return byId;
+
+            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, SwkNetworkCache.ShopInfos);
+            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
+        }
+
+        return FindLiveShopByHostAndShare(friend, SwkNetworkCache.ShopInfos);
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
         string normalizedHost = NormalizeHostName(friend.HostMachineName);
-        SwkNotificationListener.ShopInfo? exact = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
+        SwkNotificationListener.ShopInfo? exact = shopInfos.FirstOrDefault(s =>
             string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
         if (exact is not null) return exact;
@@ -3525,6 +3553,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         int dot = trimmed.IndexOf('.');
         return dot > 0 ? trimmed[..dot] : trimmed;
     }
+
+    private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
+        !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+        !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId) &&
+        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
 
     private static async Task<SwkNotificationListener.ShopInfo?> ResolveLiveFriendShopAsync(Friend friend)
     {
@@ -3556,6 +3589,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         friend.LastCheckedAt = nowIso;
         friend.LastSeenAt = nowIso;
         friend.LastAccessIssue = null;
+        if (!string.IsNullOrWhiteSpace(liveShop.SwkInstanceId))
+        {
+            friend.RemoteSwkInstanceId = liveShop.SwkInstanceId;
+        }
 
         var all = FriendsRepository.LoadAll().ToList();
         Friend? stored = all.FirstOrDefault(f => f.Id == friend.Id);
@@ -3566,6 +3603,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         stored.PasswordProtected = friend.PasswordProtected;
         stored.OwnerCertThumbprint = friend.OwnerCertThumbprint;
+        stored.RemoteSwkInstanceId = friend.RemoteSwkInstanceId;
         stored.LastKnownAddress = friend.LastKnownAddress;
         stored.LastFoundAt = friend.LastFoundAt;
         stored.LastCheckedAt = friend.LastCheckedAt;
@@ -3739,6 +3777,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!string.IsNullOrWhiteSpace(result.CertThumbprint))
             {
                 friend.OwnerCertThumbprint = result.CertThumbprint;
+            }
+            if (!string.IsNullOrWhiteSpace(result.SwkInstanceId))
+            {
+                friend.RemoteSwkInstanceId = result.SwkInstanceId;
             }
             friend.LastAccessIssue = null;
             UpdateFriendExternalState(friend, liveShop);
