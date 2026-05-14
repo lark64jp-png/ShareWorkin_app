@@ -114,6 +114,7 @@ dotnet publish $project `
     /p:DebugSymbols=false `
     /p:InformationalVersion=$informationalVersion `
     --output $publishDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish ShareWorkin failed (exit $LASTEXITCODE)" }
 
 dotnet publish $trayProject `
     --configuration $Configuration `
@@ -123,8 +124,10 @@ dotnet publish $trayProject `
     /p:DebugSymbols=false `
     /p:InformationalVersion=$informationalVersion `
     --output $publishDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish ShareWorkinTray failed (exit $LASTEXITCODE)" }
 
 & $iscc $innoScript
+if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
 
 if (-not (Test-Path -LiteralPath $installer)) {
     throw "Installer was not created: $installer"
