@@ -7,6 +7,7 @@
 
 ## Feedback
 - [対話優先](feedback_dialogue_first.md) — **最上位**。動く前に提案形で確認。指示待ちも独走もNG
+- [アンインストーラーは作らない](feedback_no_uninstaller.md) — **絶対原則**。`Uninstallable=no` 固定。§D の「hidden配置」記述と矛盾あり（§D 側が要修正）
 - [バージョン番号は指示があるまで触るな](feedback_version_bump.md) — インストーラー生成≠バージョンアップ。番号変更は西村さんの明示指示のみ
 - [ログを軽視するな](feedback_log_first.md) — テスト→修正サイクルの基盤。全失敗パスにログ必須。画面のエラーは事実として受け取る
 - [お店比喩は導入のみ](feedback_metaphor_only_for_intro.md) — UI表現はWindows標準語彙。「お店/開店/閉店」はトップレベル導線のみ
@@ -18,3 +19,4 @@
 ## Project
 - [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
 - [アイコン機能 v1.08](project_icon_feature_v108.md) — ユーザー情報の構造変更とアイコン実装。残宿題3点（一覧反映・削除掃除・微調整）
+- [v1.17 cert診断・userlist-state追加](project_v1.17_cert_diagnosis.md) — cert persistence全台失敗判明・診断用state snapshot実装(2026-05-14)
