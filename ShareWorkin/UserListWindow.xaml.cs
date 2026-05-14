@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -26,6 +28,9 @@ public partial class UserListWindow : Window
     private bool _isRefreshing;
     private bool _hasFriendUpdates;
     private static readonly TimeSpan AutoRefreshInterval = TimeSpan.FromSeconds(8);
+    private static readonly string UserListStatePath = Path.Combine(
+        AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        "userlist-state.json");
 
     public UserListWindow(Window owner)
     {
@@ -208,6 +213,8 @@ public partial class UserListWindow : Window
         {
             _rows.Add(r);
         }
+
+        SaveUserListState(rows);
 
         SwkLogger.Debug("UserListWindow.BuildUiFromCache rows: " +
             string.Join(" | ", rows.Select(r => $"{r.Kind}:{r.StatusLabel}:{r.NameLabel}:{r.IpLabel}")));
@@ -722,6 +729,48 @@ public partial class UserListWindow : Window
         if (!candidates.Contains(uncPath, StringComparer.OrdinalIgnoreCase))
         {
             candidates.Add(uncPath);
+        }
+    }
+
+    private static void SaveUserListState(IReadOnlyList<UserListRow> rows)
+    {
+        try
+        {
+            var state = new
+            {
+                savedAt = DateTime.UtcNow.ToString("o"),
+                rows = rows.Select(r => new
+                {
+                    kind = r.Kind.ToString(),
+                    statusLabel = r.StatusLabel,
+                    nameLabel = r.NameLabel,
+                    ipLabel = r.IpLabel,
+                    shareFolderName = r.ShareFolderName,
+                    friendId = r.Friend?.Id,
+                    friendDisplayName = r.Friend?.DisplayName,
+                    friendHostMachineName = r.Friend?.HostMachineName,
+                    friendShareName = r.Friend?.ShareName,
+                    friendRemoteSwkInstanceId = r.Friend?.RemoteSwkInstanceId,
+                    friendLastAccessIssue = r.Friend?.LastAccessIssue,
+                    friendOwnerCertThumbprint = r.Friend?.OwnerCertThumbprint,
+                    friendLastKnownAddress = r.Friend?.LastKnownAddress,
+                    friendLastFoundAt = r.Friend?.LastFoundAt,
+                    friendLastSeenAt = r.Friend?.LastSeenAt,
+                    shopSwkInstanceId = r.ShopInfo?.SwkInstanceId,
+                    shopMachineName = r.ShopInfo?.MachineName,
+                    shopIpAddress = r.ShopInfo?.IpAddress,
+                    shopShareName = r.ShopInfo?.ShareName,
+                    shopPort = r.ShopInfo?.Port,
+                    candidateHostName = r.Candidate?.HostName,
+                    candidateAddress = r.Candidate?.Address.ToString(),
+                }).ToList()
+            };
+            string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(UserListStatePath, json, Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow.SaveUserListState failed: {ex.Message}");
         }
     }
 }
