@@ -29,7 +29,7 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\{#MyAppExeName}
+Uninstallable=no
 SetupIconFile=ShareWorkin\app.ico
 AppReadmeFile={app}\ご利用にあたって.txt
 VersionInfoCompany={#MyAppPublisher}
@@ -55,9 +55,6 @@ Name: "desktopicon"; Description: "デスクトップにショートカットを
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "ShareWorkin.MediaHouse"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "ShareWorkin.MediaHouse"
-
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}"
 
 [Code]
 const
@@ -727,6 +724,8 @@ begin
 end;
 
 function RunUninstall(): Boolean;
+var
+  ResultCode: Integer;
 begin
   Result := False;
 
@@ -736,6 +735,10 @@ begin
 
   if not CleanExistingInstall(False, False) then
     Exit;
+
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   Result := True;
   MsgBox('アンインストールが完了しました。', mbInformation, MB_OK);
@@ -811,8 +814,6 @@ end;
 
 procedure HideInstallerArtifacts();
 begin
-  HideFile('unins000.exe');
-  HideFile('unins000.dat');
   HideFile('app.ico');
   HideFile('ShareWorkin.dll');
   HideFile('ShareWorkin.deps.json');
@@ -880,28 +881,3 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  ResultCode: Integer;
-begin
-  if CurUninstallStep = usUninstall then
-  begin
-    if IsProcessRunning(TRAY_EXE) then
-      Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    if IsProcessRunning(APP_EXE) then
-    begin
-      Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      WaitForProcessExit(APP_EXE);
-    end;
-
-    Exec(ExpandConstant('{sys}\schtasks.exe'),
-      '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
-      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    CleanupShareWorkinShares();
-    CleanupShareWorkinAccount();
-
-    DeleteDirIfExists(INSTALL_DIR);
-    DeleteDirIfExists(OldInstallDir());
-    DeleteDirIfExists(OldDataDir());
-  end;
-end;
