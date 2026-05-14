@@ -642,6 +642,7 @@ public partial class FriendsWindow : Window
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
             FriendShareAccessTracker.ClearVerified(target);
+            await Task.Run(() => TryVerifyRegisteredShare(target, _activeShopInfo!));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -716,6 +717,7 @@ public partial class FriendsWindow : Window
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
             FriendShareAccessTracker.ClearVerified(target);
+            await Task.Run(() => TryVerifyRegisteredShare(target, liveShop));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             int idx = all.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -792,6 +794,7 @@ public partial class FriendsWindow : Window
             };
             FriendShareAccessTracker.ClearVerified(friend);
             friend.IconKey = PromoteIconKeyToFriendId(_pendingIconKey, friend.Id);
+            await Task.Run(() => TryVerifyRegisteredShare(friend, _activeShopInfo!));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
             all.RemoveAll(f => ShouldReplaceExistingRegistration(f, friend));
@@ -1025,6 +1028,90 @@ public partial class FriendsWindow : Window
         catch (Exception ex)
         {
             SwkLogger.Warn($"OpenFriendFolder failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool TryVerifyRegisteredShare(Friend friend, SwkNotificationListener.ShopInfo shopInfo)
+    {
+        try
+        {
+            string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+            if (string.IsNullOrEmpty(password))
+            {
+                return false;
+            }
+
+            foreach (string path in BuildFriendUncCandidates(friend, shopInfo))
+            {
+                if (CanEnumerateShare(path))
+                {
+                    FriendShareAccessTracker.MarkVerified(friend, shopInfo);
+                    SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare ok (existing session): {path}");
+                    return true;
+                }
+
+                SmbConnectionHelper.EnsureConnection(path, friend.UserName, password, shopInfo.MachineName);
+                if (CanEnumerateShare(path))
+                {
+                    FriendShareAccessTracker.MarkVerified(friend, shopInfo);
+                    SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare ok: {path}");
+                    return true;
+                }
+            }
+
+            SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare failed: friend={friend.Id}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"FriendsWindow.TryVerifyRegisteredShare failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static List<string> BuildFriendUncCandidates(Friend friend, SwkNotificationListener.ShopInfo shopInfo)
+    {
+        List<string> candidates = [];
+        if (!string.IsNullOrWhiteSpace(shopInfo.IpAddress))
+        {
+            AddFriendUncCandidate(candidates, shopInfo.IpAddress, shopInfo.ShareName);
+        }
+
+        AddFriendUncCandidate(candidates, shopInfo.MachineName, shopInfo.ShareName);
+        AddFriendUncCandidate(candidates, friend.HostMachineName, shopInfo.ShareName);
+        return candidates;
+    }
+
+    private static void AddFriendUncCandidate(List<string> candidates, string? host, string shareName)
+    {
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(shareName))
+        {
+            return;
+        }
+
+        string uncPath = $@"\\{host.TrimStart('\\')}\{shareName}";
+        if (!candidates.Contains(uncPath, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(uncPath);
+        }
+    }
+
+    private static bool CanEnumerateShare(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                return false;
+            }
+
+            using IEnumerator<string> enumerator = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+            _ = enumerator.MoveNext();
+            return true;
+        }
+        catch
+        {
             return false;
         }
     }
