@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -22,6 +23,9 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     public const int UdpDiscoveryPort = 7831;
 
     private readonly string _shareName;
+    private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
+        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    private static readonly string CertificatePath = Path.Combine(AppHomeDirectory, "notifycert.dat");
     private TcpListener? _listener;
     private int _listeningPort;
     private CancellationTokenSource? _cancellationSource;
@@ -31,25 +35,10 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     public int ListeningPort => _listeningPort;
 
     /// <summary>
-    /// 招待コード要求を受け取ったとき、店主に承認を求めるコールバック。
-    /// 戻り値: true=承認, false=拒否。null の場合は自動拒否(コールバック未設定)。
-    /// </summary>
-    public Func<InviteApprovalRequest, Task<bool>>? OnInviteRequested { get; set; }
-
-    /// <summary>
     /// 他店から ShopClosing を受信したときのコールバック。
     /// 引数: machineName, shareName
     /// </summary>
     public Action<string, string>? OnShopClosingReceived { get; set; }
-
-    public sealed class InviteApprovalRequest
-    {
-        public required string ClientMachineName { get; init; }
-        // 手動招待コード経由なら InviteRegistry の Label、LAN 発見経由なら null。
-        public string? InviteLabel { get; init; }
-        // true=店主が事前に発行した手動コード経由、false=LAN 発見経由(飛び込み)。
-        public bool IsManualInvite { get; init; }
-    }
 
     public SwkNotificationBroadcaster(string shareName)
     {
@@ -60,7 +49,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     {
         try
         {
-            _tlsCertificate = CreateSelfSignedCertificate();
+            _tlsCertificate = LoadOrCreateCertificate();
 
             _listener = new TcpListener(IPAddress.Any, 0);
             _listener.Start();
@@ -189,12 +178,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             {
                 inviteId = idElem.GetString();
             }
-            string? requestKind = null;
-            if (requestDoc.RootElement.TryGetProperty("requestKind", out var kindElem))
-            {
-                requestKind = kindElem.GetString();
-            }
-
             string clientLabel = string.IsNullOrWhiteSpace(clientMachine) ? "不明な端末" : clientMachine!;
 
             if (requestedShare != _shareName)
@@ -227,48 +210,8 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 }
             }
 
-            // 店主に承認を求める(コールバック未設定なら自動拒否)。
-            bool isReconnectKnownFriend = string.Equals(
-                requestKind,
-                "ReconnectKnownFriend",
-                StringComparison.OrdinalIgnoreCase);
-
-            bool approved = false;
-            if (isReconnectKnownFriend && IsKnownFriendRequest(clientMachine, requestedShare))
-            {
-                SwkLogger.Info($"Invite request auto-approved for known friend '{clientLabel}' share '{requestedShare}'");
-                approved = true;
-            }
-            else if (OnInviteRequested != null)
-            {
-                var approvalRequest = new InviteApprovalRequest
-                {
-                    ClientMachineName = clientLabel,
-                    InviteLabel = matchedInvite?.Label,
-                    IsManualInvite = isManual,
-                };
-                try
-                {
-                    approved = await OnInviteRequested(approvalRequest);
-                }
-                catch (Exception ex)
-                {
-                    SwkLogger.Warn($"OnInviteRequested callback threw: {ex.Message}");
-                    approved = false;
-                }
-            }
-
-            if (!approved)
-            {
-                var deniedResponse = new SwkNotificationProtocol.InviteCodeResponse
-                {
-                    Result = "Denied",
-                    ErrorMessage = "店主が承認しませんでした。"
-                };
-                await WriteJsonAsync(stream, deniedResponse, cancellationToken);
-                SwkLogger.Info($"Invite request from {clientLabel} was denied by owner");
-                return;
-            }
+            // UI ダイアログを挟まず、BK 側ポリシーだけで自動応答する。
+            SwkLogger.Info($"Invite request auto-approved for '{clientLabel}' share '{requestedShare}' (manual={isManual})");
 
             string? password = SecureStorage.Get(SecureStorage.KeySwkGuestPassword);
             if (string.IsNullOrEmpty(password))
@@ -312,20 +255,6 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         {
             SwkLogger.Warn($"HandleInviteCodeRequestAsync error: {ex.Message}");
         }
-    }
-
-    private static bool IsKnownFriendRequest(string? clientMachineName, string? requestedShare)
-    {
-        if (string.IsNullOrWhiteSpace(clientMachineName) || string.IsNullOrWhiteSpace(requestedShare))
-        {
-            return false;
-        }
-
-        string normalizedClient = clientMachineName.Trim();
-        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
-        return friends.Any(friend =>
-            string.Equals(friend.ShareName, requestedShare, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(friend.HostMachineName, normalizedClient, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -476,6 +405,68 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         }
     }
 
+    private static X509Certificate2 LoadOrCreateCertificate()
+    {
+        try
+        {
+            if (File.Exists(CertificatePath))
+            {
+                byte[] protectedBytes = File.ReadAllBytes(CertificatePath);
+                byte[] pfxBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.LocalMachine);
+                var loaded = new X509Certificate2(pfxBytes);
+                if (IsUsableCertificate(loaded))
+                {
+                    SwkLogger.Info("SwkNotificationBroadcaster loaded persisted TLS certificate");
+                    return loaded;
+                }
+
+                loaded.Dispose();
+                SwkLogger.Warn("Persisted TLS certificate was unusable; regenerating");
+            }
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Failed to load persisted TLS certificate: {ex.Message}");
+        }
+
+        X509Certificate2 created = CreateSelfSignedCertificate();
+        TryPersistCertificate(created);
+        return created;
+    }
+
+    private static bool IsUsableCertificate(X509Certificate2 certificate)
+    {
+        if (!certificate.HasPrivateKey)
+        {
+            return false;
+        }
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (now < certificate.NotBefore.ToUniversalTime() || now >= certificate.NotAfter.ToUniversalTime())
+        {
+            return false;
+        }
+
+        string expectedSubject = $"CN={Environment.MachineName}";
+        return string.Equals(certificate.Subject, expectedSubject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TryPersistCertificate(X509Certificate2 certificate)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppHomeDirectory);
+            byte[] pfxBytes = certificate.Export(X509ContentType.Pfx);
+            byte[] protectedBytes = ProtectedData.Protect(pfxBytes, null, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(CertificatePath, protectedBytes);
+            SwkLogger.Info("SwkNotificationBroadcaster persisted TLS certificate");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Failed to persist TLS certificate: {ex.Message}");
+        }
+    }
+
     private static X509Certificate2 CreateSelfSignedCertificate()
     {
         using var rsa = RSA.Create(2048);
@@ -490,7 +481,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 
         var sanBuilder = new SubjectAlternativeNameBuilder();
         sanBuilder.AddDnsName(Environment.MachineName);
-        sanBuilder.AddDnsName("127.0.0.1");
+        sanBuilder.AddIpAddress(IPAddress.Loopback);
         request.CertificateExtensions.Add(sanBuilder.Build());
 
         using var cert = request.CreateSelfSigned(

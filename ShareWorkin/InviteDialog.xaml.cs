@@ -37,7 +37,7 @@ public partial class InviteDialog : Window
         string accessLevel = _accessRight == ShareAccessRight.Read ? "Read" : "Full";
 
         // InviteRegistry に未使用として記録し、招待 ID を払い出す。
-        // この ID を相手が使うときに店主の承認ダイアログが立ち上がる仕組み。
+        // この ID を相手が使うとき、BK が自動的に接続情報を返す。
         string inviteId = InviteRegistry.Issue(_shareName, _shareName, accessLevel);
 
         InviteTokenPayload payload = new()
@@ -68,7 +68,7 @@ public partial class InviteDialog : Window
         HintTextBlock.Text =
             $"お店『{_shareName}』への招待コードです。\n" +
             "「コピー」でクリップボードに貼り付け、メールやチャットでお友達に送ってください。\n" +
-            "お友達が取り込もうとしたとき、こちらに承認の確認が出ます。\n" +
+            "お友達が取り込むと、接続情報はバックグラウンドで自動連携されます。\n" +
             "「シートで保存」を押すと、テキストファイルとして書き出せます。";
         TokenTextBox.Text = _tokenString;
     }

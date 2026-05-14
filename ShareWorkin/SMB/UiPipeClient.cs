@@ -30,7 +30,6 @@ public sealed class UiPipeClient : IDisposable
     private readonly Channel<string> _responseChannel = Channel.CreateBounded<string>(16);
     private CancellationTokenSource? _receiveCts;
 
-    public event Func<string, string, string?, bool, Task<bool>>? InviteRequested;
     public event Action? TrayExiting;
     public event Action? ShowRequested;
     public event Action<string, string>? FriendShopClosingReceived;
@@ -185,9 +184,6 @@ public sealed class UiPipeClient : IDisposable
 
                 switch (type)
                 {
-                    case "INVITE_REQUEST":
-                        _ = HandleInviteRequestAsync(doc.RootElement.Clone(), ct);
-                        break;
                     case "TRAY_EXITING":
                         TrayExiting?.Invoke();
                         break;
@@ -215,20 +211,4 @@ public sealed class UiPipeClient : IDisposable
         catch (Exception ex) { SwkLogger.Debug($"UiPipeClient.ReceiveLoopAsync ended: {ex.Message}"); }
     }
 
-    private async Task HandleInviteRequestAsync(JsonElement root, CancellationToken ct)
-    {
-        string requestId = root.TryGetProperty("requestId", out var rid) ? rid.GetString() ?? "" : "";
-        string machineName = root.TryGetProperty("machineName", out var mn) ? mn.GetString() ?? "" : "";
-        string? label = root.TryGetProperty("label", out var l) && l.ValueKind != JsonValueKind.Null ? l.GetString() : null;
-        bool isManual = root.TryGetProperty("isManual", out var im) && im.GetBoolean();
-
-        bool approved = false;
-        if (InviteRequested != null)
-        {
-            try { approved = await InviteRequested(requestId, machineName, label, isManual); }
-            catch (Exception ex) { SwkLogger.Warn($"InviteRequested handler error: {ex.Message}"); }
-        }
-
-        FireAndForget(JsonSerializer.Serialize(new { cmd = "INVITE_RESPONSE", requestId, approved }));
-    }
 }

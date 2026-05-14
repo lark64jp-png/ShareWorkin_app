@@ -617,7 +617,6 @@ public partial class FriendsWindow : Window
                 _activeShopInfo!,
                 inviteId: null,
                 expectedThumbprint: null,
-                isReconnectRequest: false,
                 _cancellationTokenSource.Token);
 
             if (!result.Success)
@@ -690,7 +689,6 @@ public partial class FriendsWindow : Window
                 liveShop,
                 inviteId: null,
                 expectedThumbprint: null,
-                isReconnectRequest: true,
                 _cancellationTokenSource.Token);
 
             if (!result.Success)
@@ -761,7 +759,6 @@ public partial class FriendsWindow : Window
                 _activeShopInfo!,
                 inviteId: null,
                 expectedThumbprint: null,
-                isReconnectRequest: false,
                 _cancellationTokenSource.Token);
 
             if (!result.Success)

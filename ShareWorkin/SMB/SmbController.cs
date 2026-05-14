@@ -48,8 +48,7 @@ public static class SmbController
 
     public static ShopOpenResult OpenShopSequence(
         ShopOpenRequest request,
-        bool userAuthorizedOwnershipChange = false,
-        Func<SwkNotificationBroadcaster.InviteApprovalRequest, Task<bool>>? onInviteRequested = null)
+        bool userAuthorizedOwnershipChange = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         SwkLogger.Info($"OpenShopSequence start: name='{request.ShareName}', authorizedOwnership={userAuthorizedOwnershipChange}");
@@ -165,7 +164,6 @@ public static class SmbController
         try
         {
             _broadcaster = new SwkNotificationBroadcaster(request.ShareName);
-            _broadcaster.OnInviteRequested = onInviteRequested;
             _broadcaster.OnShopClosingReceived = (machine, share) => OnShopClosingReceived?.Invoke(machine, share);
             _ = _broadcaster.StartAsync(); // 非同期で起動（待たない）
             SwkLogger.Info($"SwkNotificationBroadcaster started for '{request.ShareName}'");

@@ -71,13 +71,6 @@ public sealed class TrayPipeServer
         return session?.IsConnected == true ? session.SendAsync(json) : Task.CompletedTask;
     }
 
-    public Task<bool> RequestInviteApprovalAsync(SwkNotificationBroadcaster.InviteApprovalRequest request)
-    {
-        return _tray.RequestInviteApprovalAsync(
-            request.ClientMachineName,
-            request.InviteLabel,
-            request.IsManualInvite);
-    }
 }
 
 internal sealed class TrayPipeSession : IDisposable
@@ -87,7 +80,6 @@ internal sealed class TrayPipeSession : IDisposable
     private readonly StreamWriter _writer;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly TrayApp _tray;
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingInvites = new();
     private bool _disposed;
 
     public bool IsConnected => !_disposed && _pipe.IsConnected;
@@ -184,15 +176,6 @@ internal sealed class TrayPipeSession : IDisposable
                     break;
                 }
 
-                case "INVITE_RESPONSE":
-                {
-                    string? requestId = root.TryGetProperty("requestId", out var rid) ? rid.GetString() : null;
-                    bool approved = root.TryGetProperty("approved", out var ap) && ap.GetBoolean();
-                    if (requestId != null && _pendingInvites.TryRemove(requestId, out var tcs))
-                        tcs.TrySetResult(approved);
-                    break;
-                }
-
                 case "EXIT_APP":
                     _tray.ExitApp(fromUiRequest: true);
                     break;
@@ -209,28 +192,6 @@ internal sealed class TrayPipeSession : IDisposable
         catch (Exception ex) { SwkLogger.Warn($"TrayPipeSession.ProcessMessageAsync error: {ex.Message}"); }
     }
 
-    public async Task<bool> RequestInviteApprovalAsync(string machineName, string? label, bool isManual)
-    {
-        string requestId = Guid.NewGuid().ToString("N");
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingInvites[requestId] = tcs;
-        try
-        {
-            await SendAsync(JsonSerializer.Serialize(new
-            {
-                type = "INVITE_REQUEST",
-                requestId,
-                machineName,
-                label = label ?? string.Empty,
-                isManual
-            }));
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            timeoutCts.Token.Register(() => tcs.TrySetResult(false));
-            return await tcs.Task;
-        }
-        finally { _pendingInvites.TryRemove(requestId, out _); }
-    }
-
     public async Task SendAsync(string json)
     {
         if (_disposed) return;
@@ -244,8 +205,6 @@ internal sealed class TrayPipeSession : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var tcs in _pendingInvites.Values) tcs.TrySetResult(false);
-        _pendingInvites.Clear();
         try { _pipe.Disconnect(); } catch { }
         _reader.Dispose();
         _writer.Dispose();

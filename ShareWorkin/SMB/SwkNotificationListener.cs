@@ -17,6 +17,7 @@ namespace ShareWorkin.SMB;
 /// </summary>
 public sealed class SwkNotificationListener : IAsyncDisposable
 {
+    private static readonly TimeSpan DiscoveryLoopInterval = TimeSpan.FromSeconds(8);
     private readonly Dictionary<string, ShopInfo> _discoveredShops = new();
     private readonly object _shopsLock = new();
     private CancellationTokenSource? _cancellationSource;
@@ -92,13 +93,13 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                     }
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken);
+                await Task.Delay(DiscoveryLoopInterval, cancellationToken);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"DiscoverShopsPeriodicAsync error: {ex.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+                await Task.Delay(DiscoveryLoopInterval, cancellationToken);
             }
         }
     }
@@ -213,7 +214,6 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         ShopInfo shop,
         string? inviteId,
         string? expectedThumbprint,
-        bool isReconnectRequest,
         CancellationToken cancellationToken)
     {
         string? capturedThumbprint = null;
@@ -302,7 +302,6 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 ShareName = shop.ShareName,
                 ClientMachineName = Environment.MachineName,
                 InviteId = inviteId,
-                RequestKind = isReconnectRequest ? "ReconnectKnownFriend" : null,
             };
             await WriteJsonAsync(sslStream, request, cancellationToken);
 

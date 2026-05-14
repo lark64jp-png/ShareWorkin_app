@@ -34,8 +34,8 @@ public static class SwkNotificationProtocol
 
     /// <summary>
     /// お友達側が送信：招待コードをください、という要求
-    /// inviteId が空の場合は LAN 発見経由(その場で店主の承認を求める)、
-    /// inviteId が空でない場合は手動コード経由(店主側の InviteRegistry で照合 + 承認)。
+    /// inviteId が空の場合は LAN 発見経由、
+    /// inviteId が空でない場合は手動コード経由(店主側の InviteRegistry で照合)。
     /// </summary>
     public sealed class InviteCodeRequest
     {
@@ -51,10 +51,6 @@ public static class SwkNotificationProtocol
         [JsonPropertyName("inviteId")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? InviteId { get; set; }
-
-        [JsonPropertyName("requestKind")]
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public string? RequestKind { get; set; }
     }
 
     /// <summary>

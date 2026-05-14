@@ -69,15 +69,14 @@ public partial class ImportInviteDialog : Window
             return null;
         }
 
-        // 2) TLS 交換 → 店主の承認 → パスワード + 証明書サムプリント取得。
-        StatusTextBlock.Text = "お友達に承認をお願いしています…";
+        // 2) TLS 交換 → 接続情報 + 証明書サムプリント取得。
+        StatusTextBlock.Text = "接続情報を取得しています…";
         var listener = new SwkNotificationListener();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
             shop,
             inviteId: payload.InviteId,
             expectedThumbprint: null,
-            isReconnectRequest: false,
             cts.Token);
 
         if (!result.Success)

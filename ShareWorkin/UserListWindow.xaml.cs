@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -23,19 +25,15 @@ public partial class UserListWindow : Window
     private readonly DispatcherTimer _autoRefreshTimer;
     private bool _isRefreshing;
     private bool _hasFriendUpdates;
-    private int _intervalStepIndex = 0;
-    private static readonly int[] IntervalSteps = { 8, 16, 30, 60 };
-    private static readonly TimeSpan TrustedRefreshReloadWindow = TimeSpan.FromSeconds(8);
-    private DateTime _lastManualReloadAtUtc = DateTime.MinValue;
+    private static readonly TimeSpan AutoRefreshInterval = TimeSpan.FromSeconds(8);
 
     public UserListWindow(Window owner)
     {
         InitializeComponent();
         _ownerWindow = owner;
         UserListView.ItemsSource = _rows;
-        _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(IntervalSteps[0]) };
+        _autoRefreshTimer = new DispatcherTimer { Interval = AutoRefreshInterval };
         _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
-        UserListView.SelectionChanged += UserListView_SelectionChanged;
         SwkLogger.Debug($"UserListWindow ctor: owner={owner?.GetType().Name ?? "null"}");
         Loaded += async (_, _) =>
         {
@@ -90,7 +88,7 @@ public partial class UserListWindow : Window
         await AutoRefreshSilentAsync();
     }
 
-    // 定期チェック用：UI表示なしでスキャンし、変化があればインターバルをリセット。
+    // 定期チェック用：UI表示なしでスキャンする。変化がなくても 8 秒固定で回し続ける。
     private async Task AutoRefreshSilentAsync()
     {
         if (_isRefreshing) return;
@@ -113,16 +111,14 @@ public partial class UserListWindow : Window
         bool changed = !snapshot.SequenceEqual(_rows.Select(r => (r.Kind, r.NameLabel)));
         if (changed)
         {
-            _intervalStepIndex = 0;
-            SwkLogger.Debug("UserListWindow.AutoRefreshSilentAsync: change detected -> interval reset to 8s");
+            SwkLogger.Debug("UserListWindow.AutoRefreshSilentAsync: change detected");
         }
-        else if (_intervalStepIndex < IntervalSteps.Length - 1)
+        else
         {
-            _intervalStepIndex++;
-            SwkLogger.Debug($"UserListWindow.AutoRefreshSilentAsync: no change -> interval={IntervalSteps[_intervalStepIndex]}s");
+            SwkLogger.Debug("UserListWindow.AutoRefreshSilentAsync: no change -> interval=8s");
         }
 
-        _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[_intervalStepIndex]);
+        _autoRefreshTimer.Interval = AutoRefreshInterval;
     }
 
     private void BuildUiFromCache()
@@ -145,9 +141,16 @@ public partial class UserListWindow : Window
                 friendsChanged = true;
             }
 
-            rows.Add(liveShop is not null && !f.HasCertificateMismatch
-                ? UserListRow.ForConnectedFriend(f, liveShop)
-                : UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), liveShop));
+            if (liveShop is not null && !f.HasCertificateMismatch)
+            {
+                rows.Add(CanOpenFriendShare(f, liveShop)
+                    ? UserListRow.ForConnectedFriend(f, liveShop)
+                    : UserListRow.ForResumeRequiredFriend(f, liveShop));
+            }
+            else
+            {
+                rows.Add(UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), liveShop));
+            }
 
             if (TryFindRecoveryCandidateForFriend(f, candidates, shopInfos, out LanCandidate? recoveryCandidate, out SwkNotificationListener.ShopInfo? recoveryShop))
             {
@@ -206,9 +209,11 @@ public partial class UserListWindow : Window
             _rows.Add(r);
         }
 
-        UpdateRefreshCertButtonState();
+        SwkLogger.Debug("UserListWindow.BuildUiFromCache rows: " +
+            string.Join(" | ", rows.Select(r => $"{r.Kind}:{r.StatusLabel}:{r.NameLabel}:{r.IpLabel}")));
 
         int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
+        int resumeRequired = rows.Count(r => r.Kind == UserListRowKind.ResumeRequiredFriend);
         int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
         int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
         int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
@@ -217,27 +222,70 @@ public partial class UserListWindow : Window
 
         string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
         ScanStateTextBlock.Text = modeLabel;
-        StatusTextBlock.Text = _rows.Count == 0
-            ? "周りには誰もいません。"
-            : $"登録済接続中 {connected}　切替候補 {switchable}　登録済不在 {unreach}　登録可能 {newShop}　登録不可 {windowsPcOnly}　全PC分 {installCandidate}";
+        if (_rows.Count == 0)
+        {
+            StatusTextBlock.Text = "周りには誰もいません。";
+        }
+        else
+        {
+            SetStatusCountsText(
+                connected,
+                resumeRequired,
+                switchable,
+                unreach,
+                newShop,
+                windowsPcOnly,
+                installCandidate);
+        }
 
-        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+    }
+
+    private void SetStatusCountsText(
+        int connected,
+        int resumeRequired,
+        int switchable,
+        int unreach,
+        int newShop,
+        int windowsPcOnly,
+        int installCandidate)
+    {
+        StatusTextBlock.Inlines.Clear();
+        AddStatusRun("登録済接続可能", connected, Color.FromRgb(76, 175, 80));
+        AddSeparatorRun();
+        AddStatusRun("再開待ち", resumeRequired, Color.FromRgb(191, 87, 0));
+        AddSeparatorRun();
+        AddStatusRun("切替候補", switchable, Color.FromRgb(191, 87, 0));
+        AddSeparatorRun();
+        AddStatusRun("登録済不在", unreach, Color.FromRgb(150, 50, 40));
+        AddSeparatorRun();
+        AddStatusRun("登録可能", newShop, Color.FromRgb(255, 152, 0));
+        AddSeparatorRun();
+        AddStatusRun("登録不可", windowsPcOnly, Color.FromRgb(120, 120, 120));
+        AddSeparatorRun();
+        AddStatusRun("全PC分", installCandidate, Color.FromRgb(80, 110, 170));
+    }
+
+    private void AddStatusRun(string label, int count, Color color)
+    {
+        StatusTextBlock.Inlines.Add(new Run(label)
+        {
+            Foreground = new SolidColorBrush(color),
+            FontWeight = FontWeights.SemiBold,
+        });
+        StatusTextBlock.Inlines.Add(new Run($" {count}"));
+    }
+
+    private void AddSeparatorRun()
+    {
+        StatusTextBlock.Inlines.Add(new Run("　"));
     }
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
-        DateTime nowUtc = DateTime.UtcNow;
-        bool trustedRefreshRequested = nowUtc - _lastManualReloadAtUtc <= TrustedRefreshReloadWindow;
-        _lastManualReloadAtUtc = nowUtc;
-        SwkLogger.Debug($"UserListWindow.ReloadButton_Click: trustedRefresh={trustedRefreshRequested}");
-        _intervalStepIndex = 0;
-        _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[0]);
+        SwkLogger.Debug("UserListWindow.ReloadButton_Click");
+        _autoRefreshTimer.Interval = AutoRefreshInterval;
         await RunScanAndBuildAsync();
-
-        if (trustedRefreshRequested)
-        {
-            await RefreshRegisteredFriendsFromBkAsync();
-        }
     }
 
     private static bool TryFindRecoveryCandidateForFriend(
@@ -282,20 +330,18 @@ public partial class UserListWindow : Window
         return friend.HasCertificateMismatch || IsLikelySwitchMatch(friend, candidate, shopInfo);
     }
 
-    private async void RefreshCertButton_Click(object sender, RoutedEventArgs e)
+    private async void ResumeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (UserListView.SelectedItem is not UserListRow row || row.Friend is null || !row.Friend.HasCertificateMismatch)
+        if (sender is not System.Windows.Controls.Button { Tag: UserListRow row } || row.Friend is null)
         {
-            UpdateRefreshCertButtonState();
             return;
         }
 
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
-        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(row.Friend, shopInfos);
+        SwkNotificationListener.ShopInfo? liveShop = row.ShopInfo ?? FindLiveShopForFriend(row.Friend, shopInfos);
         if (liveShop is null)
         {
-            StatusTextBlock.Text = "再確認できる接続先が見つかりません。先に再スキャンしてください。";
-            UpdateRefreshCertButtonState();
+            StatusTextBlock.Text = "再開できる接続先が見つかりません。先に再スキャンしてください。";
             return;
         }
 
@@ -304,21 +350,19 @@ public partial class UserListWindow : Window
         if (target is null)
         {
             StatusTextBlock.Text = "対象ユーザーを読み直してください。";
-            UpdateRefreshCertButtonState();
             return;
         }
 
         ReloadButton.IsEnabled = false;
-        RefreshCertButton.IsEnabled = false;
         LoadingBar.Visibility = Visibility.Visible;
-        StatusTextBlock.Text = "証明書を再確認中…";
+        StatusTextBlock.Text = "接続情報を再取得しています…";
         try
         {
             bool refreshed = await TryRefreshFriendFromBkAsync(target, liveShop);
             if (!refreshed)
             {
                 BuildUiFromCache();
-                StatusTextBlock.Text = "証明書を更新できませんでした。";
+                StatusTextBlock.Text = "接続情報を再取得できませんでした。";
                 return;
             }
 
@@ -331,13 +375,12 @@ public partial class UserListWindow : Window
 
             _hasFriendUpdates = true;
             BuildUiFromCache();
-            StatusTextBlock.Text = "証明書を更新しました。";
+            StatusTextBlock.Text = "接続情報を再取得しました。";
         }
         finally
         {
             LoadingBar.Visibility = Visibility.Collapsed;
             ReloadButton.IsEnabled = true;
-            UpdateRefreshCertButtonState();
         }
     }
 
@@ -383,8 +426,7 @@ public partial class UserListWindow : Window
 
             if (result == true)
             {
-                _intervalStepIndex = 0;
-                _autoRefreshTimer.Interval = TimeSpan.FromSeconds(IntervalSteps[0]);
+                _autoRefreshTimer.Interval = AutoRefreshInterval;
                 await RunScanAndBuildAsync();
             }
         }
@@ -392,11 +434,6 @@ public partial class UserListWindow : Window
         {
             _autoRefreshTimer.Start();
         }
-    }
-
-    private void UserListView_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        UpdateRefreshCertButtonState();
     }
 
     private static bool SameHost(string expected, string? found)
@@ -428,18 +465,13 @@ public partial class UserListWindow : Window
         bool sameShare = !string.IsNullOrWhiteSpace(friend.ShareName) &&
             string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
 
-        bool sameLastIp = !string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
-            string.Equals(friend.LastKnownAddress, candidate.Address.ToString(), StringComparison.OrdinalIgnoreCase);
-
-        return sameShare || sameLastIp;
+        return sameShare;
     }
 
     private static LanCandidate? FindCandidateForFriend(Friend friend, IReadOnlyList<LanCandidate> candidates)
     {
         return candidates.FirstOrDefault(c =>
-            SameHost(friend.HostMachineName, c.HostName) ||
-            (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
-             string.Equals(c.Address.ToString(), friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase)));
+            SameHost(friend.HostMachineName, c.HostName));
     }
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopForFriend(
@@ -453,94 +485,7 @@ public partial class UserListWindow : Window
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
         if (exact is not null) return exact;
 
-        SwkNotificationListener.ShopInfo? sameMachine = shopInfos.FirstOrDefault(s =>
-            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase));
-        if (sameMachine is not null) return sameMachine;
-
-        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
-        {
-            return shopInfos.FirstOrDefault(s =>
-                string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
-        }
-
-        if (!string.IsNullOrWhiteSpace(friend.ShareName))
-        {
-            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
-                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (sameShare.Count == 1)
-            {
-                SwkLogger.Debug($"FindLiveShopForFriend: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
-                return sameShare[0];
-            }
-        }
-
         return null;
-    }
-
-    private async Task RefreshRegisteredFriendsFromBkAsync()
-    {
-        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
-        List<Friend> friends = FriendsRepository.LoadAll().ToList();
-        List<(Friend Friend, SwkNotificationListener.ShopInfo LiveShop)> targets = friends
-            .Select(friend => (Friend: friend, LiveShop: FindLiveShopForFriend(friend, shopInfos)))
-            .Where(x => x.LiveShop is not null && x.Friend.HasCertificateMismatch)
-            .Select(x => (x.Friend, x.LiveShop!))
-            .ToList();
-
-        if (targets.Count == 0)
-        {
-            SwkLogger.Debug("UserListWindow.RefreshRegisteredFriendsFromBkAsync: no cert mismatch targets");
-            BuildUiFromCache();
-            return;
-        }
-
-        ReloadButton.IsEnabled = false;
-        LoadingBar.Visibility = Visibility.Visible;
-        StatusTextBlock.Text = "BKへ再確認中…";
-
-        int refreshed = 0;
-        try
-        {
-            foreach ((Friend friend, SwkNotificationListener.ShopInfo liveShop) in targets)
-            {
-                if (await TryRefreshFriendFromBkAsync(friend, liveShop))
-                {
-                    refreshed++;
-                }
-            }
-
-            if (refreshed > 0 && FriendsRepository.SaveAll(friends))
-            {
-                _hasFriendUpdates = true;
-            }
-
-            BuildUiFromCache();
-            StatusTextBlock.Text = refreshed > 0
-                ? $"BK再確認で {refreshed} 件更新しました。"
-                : "BK再確認では更新できませんでした。";
-        }
-        finally
-        {
-            LoadingBar.Visibility = Visibility.Collapsed;
-            ReloadButton.IsEnabled = true;
-        }
-    }
-
-    private void UpdateRefreshCertButtonState()
-    {
-        if (RefreshCertButton == null)
-        {
-            return;
-        }
-
-        bool canRefresh = false;
-        if (UserListView.SelectedItem is UserListRow row && row.Friend?.HasCertificateMismatch == true)
-        {
-            canRefresh = FindLiveShopForFriend(row.Friend, SwkNetworkCache.ShopInfos) is not null;
-        }
-
-        RefreshCertButton.IsEnabled = canRefresh && !_isRefreshing;
     }
 
     private static async Task<bool> TryRefreshFriendFromBkAsync(
@@ -553,7 +498,6 @@ public partial class UserListWindow : Window
             liveShop,
             inviteId: null,
             expectedThumbprint: null,
-            isReconnectRequest: true,
             cts.Token);
 
         if (!result.Success || string.IsNullOrEmpty(result.Password))
@@ -582,18 +526,6 @@ public partial class UserListWindow : Window
         string? previousLastSeen = friend.LastSeenAt;
         string nowIso = DateTime.UtcNow.ToString("o");
 
-        if (!string.Equals(friend.HostMachineName, liveShop.MachineName, StringComparison.OrdinalIgnoreCase))
-        {
-            friend.HostMachineName = liveShop.MachineName;
-            changed = true;
-        }
-
-        if (!string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase))
-        {
-            friend.ShareName = liveShop.ShareName;
-            changed = true;
-        }
-
         if (!string.IsNullOrWhiteSpace(liveShop.IpAddress) &&
             !string.Equals(friend.LastKnownAddress, liveShop.IpAddress, StringComparison.OrdinalIgnoreCase))
         {
@@ -614,9 +546,7 @@ public partial class UserListWindow : Window
     {
         foreach (Friend friend in friends)
         {
-            bool sameHost = SameHost(friend.HostMachineName, candidate.HostName) ||
-                (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
-                 string.Equals(friend.LastKnownAddress, candidate.Address.ToString(), StringComparison.OrdinalIgnoreCase));
+            bool sameHost = SameHost(friend.HostMachineName, candidate.HostName);
             if (!sameHost)
             {
                 continue;
@@ -653,17 +583,114 @@ public partial class UserListWindow : Window
         int dot = trimmed.IndexOf('.');
         return dot > 0 ? trimmed[..dot] : trimmed;
     }
+
+    private static bool CanOpenFriendShare(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        // 相手PCの終了直後は SMB/UNC の確認が OS 側で長く待つことがある。
+        // ユーザー一覧の再描画で UI を止めないよう、共有確認は短時間で打ち切る。
+        const int timeoutMs = 1500;
+        try
+        {
+            Task<bool> probeTask = Task.Run(() => ProbeFriendShare(friend, liveShop));
+            if (probeTask.Wait(timeoutMs))
+            {
+                return probeTask.Result;
+            }
+
+            SwkLogger.Warn($"UserListWindow.CanOpenFriendShare timed out after {timeoutMs}ms: friend={friend.Id}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow.CanOpenFriendShare failed: friend={friend.Id} {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool ProbeFriendShare(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        List<string> candidates = BuildFriendUncCandidates(friend, liveShop);
+        string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+
+        foreach (string path in candidates)
+        {
+            if (CanEnumerateShare(path))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(password))
+            {
+                SmbConnectionHelper.EnsureConnection(path, friend.UserName, password, liveShop.MachineName);
+                if (CanEnumerateShare(path))
+                {
+                    return true;
+                }
+            }
+        }
+
+        SwkLogger.Debug($"UserListWindow.ProbeFriendShare failed: friend={friend.Id} candidates={string.Join(", ", candidates)}");
+        return false;
+    }
+
+    private static bool CanEnumerateShare(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                return false;
+            }
+
+            using IEnumerator<string> enumerator = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
+            _ = enumerator.MoveNext();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"UserListWindow.CanEnumerateShare failed: {path}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static List<string> BuildFriendUncCandidates(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        List<string> candidates = [];
+        if (!string.IsNullOrWhiteSpace(liveShop.IpAddress))
+        {
+            AddFriendUncCandidate(candidates, liveShop.IpAddress, liveShop.ShareName);
+        }
+
+        AddFriendUncCandidate(candidates, liveShop.MachineName, liveShop.ShareName);
+        AddFriendUncCandidate(candidates, friend.HostMachineName, liveShop.ShareName);
+        return candidates;
+    }
+
+    private static void AddFriendUncCandidate(List<string> candidates, string? host, string shareName)
+    {
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(shareName))
+        {
+            return;
+        }
+
+        string uncPath = $@"\\{host.TrimStart('\\')}\{shareName}";
+        if (!candidates.Contains(uncPath, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(uncPath);
+        }
+    }
 }
 
 public enum UserListRowKind
 {
     // 値の小さい順に表示される(0 が先頭)。
     ConnectedFriend = 0,        // Friend登録済み + 開店中
-    SwitchCandidate = 1,        // Friend登録済み + 接続先切替候補
-    NewShop = 2,                // Friend未登録 + 開店中
-    UnreachableFriend = 3,      // Friend登録済み + オフライン
-    WindowsPcOnly = 4,          // Friend未登録 + ShareWorkinなし（445+135応答）
-    InstallCandidate = 5,       // Friend未登録 + ポート21/22応答（インストール候補）
+    ResumeRequiredFriend = 1,   // Friend登録済み + 開店中 + SMB共有列挙NG
+    SwitchCandidate = 2,        // Friend登録済み + 接続先切替候補
+    NewShop = 3,                // Friend未登録 + 開店中
+    UnreachableFriend = 4,      // Friend登録済み + オフライン
+    WindowsPcOnly = 5,          // Friend未登録 + ShareWorkinなし（445+135応答）
+    InstallCandidate = 6,       // Friend未登録 + ポート21/22応答（インストール候補）
 }
 
 public sealed class UserListRow
@@ -680,6 +707,7 @@ public sealed class UserListRow
     public Brush NameForeground { get; init; } = Brushes.Black;
     public FontWeight NameWeight { get; init; } = FontWeights.Medium;
     public System.Windows.FontStyle NameStyle { get; init; } = FontStyles.Normal;
+    public Visibility ResumeButtonVisibility { get; init; } = Visibility.Collapsed;
 
     public Friend? Friend { get; init; }
     public LanCandidate? Candidate { get; init; }
@@ -721,6 +749,27 @@ public sealed class UserListRow
         NameForeground = new SolidColorBrush(Color.FromRgb(76, 175, 80)),
         NameWeight = FontWeights.Normal,
         Friend = friend,
+        ShopInfo = liveShop,
+    };
+
+    public static UserListRow ForResumeRequiredFriend(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop) => new()
+    {
+        NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "登録済み / 再開待ち",
+        ShareFolderName = liveShop.ShareName,
+        Memo = "共有フォルダを表示できません。再開を試してください。",
+        IpLabel = liveShop.IpAddress ?? friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.ResumeRequiredFriend,
+        IconBrush = Brushes.White,
+        IconImage = LoadIconImage(friend.IconKey),
+        RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
+        NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
+        NameWeight = FontWeights.SemiBold,
+        ResumeButtonVisibility = Visibility.Visible,
+        Friend = friend,
+        ShopInfo = liveShop,
     };
 
     public static UserListRow ForUnreachableFriend(

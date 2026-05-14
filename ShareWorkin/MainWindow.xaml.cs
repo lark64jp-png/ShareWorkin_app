@@ -34,7 +34,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
-    private static readonly TimeSpan FriendReconnectRetryCooldown = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan FriendReconnectRetryCooldown = TimeSpan.FromSeconds(8);
     private const int FriendShopOfflineMissThreshold = 2;
 
     // 草案4 §A: アプリは自分のアプリホルダーの外に書き込まない。
@@ -129,7 +129,6 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        _pipeClient.InviteRequested += HandlePipeInviteRequestAsync;
         _pipeClient.TrayExiting += () => Dispatcher.Invoke(() => { _exitRequested = true; Close(); });
         _pipeClient.ShowRequested += () => Dispatcher.Invoke(ShowMainWindow);
         _pipeClient.FriendShopClosingReceived += (machine, share) =>
@@ -1946,20 +1945,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     // RestoreOpenShopIfNeeded は TrayApp に移動。HandleStartup から呼ばない。
 
-    private Task<bool> HandlePipeInviteRequestAsync(string requestId, string machineName, string? label, bool isManual)
-    {
-        return Dispatcher.InvokeAsync(() =>
-        {
-            string body = isManual
-                ? $"「{machineName}」が招待コードを使って接続設定を申請しています。\nこの相手に接続情報を渡しますか?"
-                : $"「{machineName}」がLAN経由で接続設定を申請しています。\n招待コードなしで接続情報を渡しますか?";
-            MessageBoxResult res = System.Windows.MessageBox.Show(
-                this, body, "接続の申請",
-                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-            return res == MessageBoxResult.Yes;
-        }).Task;
-    }
-
     private bool EnsureUiUnlocked()
     {
         if (_uiUnlocked)
@@ -2980,31 +2965,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             IReadOnlyList<SwkNotificationListener.ShopInfo> found =
                 await SwkNotificationListener.ProbeHostsAsync(candidates, cts.Token);
             SwkNotificationListener.ShopInfo? exact = found.FirstOrDefault(s =>
-                string.Equals(NormalizeHostName(s.MachineName), NormalizeHostName(friend.HostMachineName), StringComparison.OrdinalIgnoreCase));
+                string.Equals(NormalizeHostName(s.MachineName), NormalizeHostName(friend.HostMachineName), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
             if (exact is not null) return exact;
-
-            if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
-            {
-                SwkNotificationListener.ShopInfo? sameAddress = found.FirstOrDefault(s =>
-                    string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
-                if (sameAddress is not null)
-                {
-                    SwkLogger.Debug($"ProbeActiveFriendShopAsync: recovered by IP {friend.HostMachineName}/{friend.ShareName} -> {sameAddress.MachineName}/{sameAddress.ShareName}");
-                    return sameAddress;
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(friend.ShareName))
-            {
-                List<SwkNotificationListener.ShopInfo> sameShare = found
-                    .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                if (sameShare.Count == 1)
-                {
-                    SwkLogger.Debug($"ProbeActiveFriendShopAsync: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
-                    return sameShare[0];
-                }
-            }
 
             return null;
         }
@@ -3552,28 +3515,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
         if (exact is not null) return exact;
 
-        SwkNotificationListener.ShopInfo? sameMachine = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase));
-        if (sameMachine is not null) return sameMachine;
-
-        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
-        {
-            return SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-                string.Equals(s.IpAddress, friend.LastKnownAddress, StringComparison.OrdinalIgnoreCase));
-        }
-
-        if (!string.IsNullOrWhiteSpace(friend.ShareName))
-        {
-            List<SwkNotificationListener.ShopInfo> sameShare = SwkNetworkCache.ShopInfos
-                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (sameShare.Count == 1)
-            {
-                SwkLogger.Debug($"FindLiveShopInfo: recovered by unique share {friend.HostMachineName}/{friend.ShareName} -> {sameShare[0].MachineName}/{sameShare[0].ShareName}");
-                return sameShare[0];
-            }
-        }
-
         return null;
     }
 
@@ -3610,8 +3551,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private static void UpdateFriendExternalState(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
         string nowIso = DateTime.UtcNow.ToString("o");
-        friend.HostMachineName = liveShop.MachineName;
-        friend.ShareName = liveShop.ShareName;
         friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
         friend.LastFoundAt = nowIso;
         friend.LastCheckedAt = nowIso;
@@ -3625,8 +3564,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        stored.HostMachineName = friend.HostMachineName;
-        stored.ShareName = friend.ShareName;
         stored.PasswordProtected = friend.PasswordProtected;
         stored.OwnerCertThumbprint = friend.OwnerCertThumbprint;
         stored.LastKnownAddress = friend.LastKnownAddress;
@@ -3786,7 +3723,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 liveShop,
                 inviteId: null,
                 expectedThumbprint: friend.OwnerCertThumbprint,
-                isReconnectRequest: true,
                 cts.Token);
 
             if (!result.Success || string.IsNullOrEmpty(result.Password))

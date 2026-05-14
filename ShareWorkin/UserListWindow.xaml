@@ -63,6 +63,8 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="54" />
                             </Grid.ColumnDefinitions>
 
                             <Border Grid.Column="0"
@@ -110,6 +112,15 @@
                                        FontSize="12"
                                        Foreground="#6B6358"
                                        HorizontalAlignment="Right" />
+
+                            <Button Grid.Column="12"
+                                    Content="再開"
+                                    Tag="{Binding}"
+                                    Height="24"
+                                    Padding="6,0"
+                                    FontSize="11"
+                                    Visibility="{Binding ResumeButtonVisibility}"
+                                    Click="ResumeButton_Click" />
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
@@ -129,8 +140,8 @@
         <StackPanel Grid.Row="8">
             <DockPanel LastChildFill="True">
                 <UniformGrid DockPanel.Dock="Right"
-                             Rows="1" Columns="4"
-                             Width="430">
+                             Rows="1" Columns="3"
+                             Width="320">
                     <ComboBox x:Name="ScanModeComboBox"
                               Height="32"
                               Margin="4,0,0,0"
@@ -139,12 +150,6 @@
                         <ComboBoxItem Content="接続可能スキャン" />
                         <ComboBoxItem Content="全PCスキャン" />
                     </ComboBox>
-                    <Button x:Name="RefreshCertButton"
-                            Content="証明書再確認"
-                            Height="32"
-                            Margin="4,0,0,0"
-                            IsEnabled="False"
-                            Click="RefreshCertButton_Click" />
                     <Button x:Name="ReloadButton"
                             Content="再スキャン"
                             Height="32"
