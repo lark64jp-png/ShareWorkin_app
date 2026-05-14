@@ -26,6 +26,8 @@ public static class SwkNetworkCache
     public static bool IsReady => LastScanAt.HasValue;
     public static bool IsScanning => _scanLock.CurrentCount == 0;
 
+    public static event Action? Updated;
+
     public static void Update(
         IReadOnlyList<LanCandidate> candidates,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos,
@@ -39,6 +41,7 @@ public static class SwkNetworkCache
             _lastScanMode = mode;
         }
         SwkLogger.Info($"SwkNetworkCache updated: candidates={candidates.Count} shopInfos={shopInfos.Count} mode={mode}");
+        Updated?.Invoke();
     }
 
     public static void RemoveShop(string machineName, string shareName)
@@ -52,6 +55,7 @@ public static class SwkNetworkCache
             _shopInfos = updated;
         }
         SwkLogger.Info($"SwkNetworkCache.RemoveShop: {machineName}/{shareName}");
+        Updated?.Invoke();
     }
 
     public static void UpsertShop(SwkNotificationListener.ShopInfo shop)
@@ -66,6 +70,7 @@ public static class SwkNetworkCache
             _lastScanAt = DateTime.Now;
         }
         SwkLogger.Debug($"SwkNetworkCache.UpsertShop: {shop.MachineName}/{shop.ShareName}");
+        Updated?.Invoke();
     }
 
     public static async Task RefreshAsync(ScanMode mode, CancellationToken ct = default)

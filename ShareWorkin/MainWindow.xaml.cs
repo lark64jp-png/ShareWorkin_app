@@ -143,6 +143,8 @@ public partial class MainWindow : Window
         _transientStatusTimer = new DispatcherTimer { Interval = TransientStatusDuration };
         _transientStatusTimer.Tick += TransientStatusTimer_Tick;
 
+        SwkNetworkCache.Updated += UserListWindow.TrySaveSnapshot;
+
         LoadSettings();
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;

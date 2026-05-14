@@ -135,16 +135,56 @@ public partial class UserListWindow : Window
 
         SwkLogger.Debug($"UserListWindow.BuildUiFromCache: friends={friends.Count} candidates={candidates.Count} shopInfos={shopInfos.Count}");
 
+        foreach (Friend f in friends)
+        {
+            SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
+            if (liveShop is not null && UpdateFriendFromLiveShop(f, liveShop))
+                friendsChanged = true;
+        }
+
+        if (friendsChanged && FriendsRepository.SaveAll(friends))
+            _hasFriendUpdates = true;
+
+        List<UserListRow> rows = BuildRowsFromCache(candidates, shopInfos, friends);
+
+        _rows.Clear();
+        foreach (UserListRow r in rows)
+            _rows.Add(r);
+
+        SaveUserListState(rows);
+
+        SwkLogger.Debug("UserListWindow.BuildUiFromCache rows: " +
+            string.Join(" | ", rows.Select(r => $"{r.Kind}:{r.StatusLabel}:{r.NameLabel}:{r.IpLabel}")));
+
+        int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
+        int resumeRequired = rows.Count(r => r.Kind == UserListRowKind.ResumeRequiredFriend);
+        int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
+        int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
+        int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
+        int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
+        int installCandidate = rows.Count(r => r.Kind == UserListRowKind.InstallCandidate);
+
+        string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
+        ScanStateTextBlock.Text = modeLabel;
+        if (_rows.Count == 0)
+            StatusTextBlock.Text = "周りには誰もいません。";
+        else
+            SetStatusCountsText(connected, resumeRequired, switchable, unreach, newShop, windowsPcOnly, installCandidate);
+
+        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+    }
+
+    private static List<UserListRow> BuildRowsFromCache(
+        IReadOnlyList<LanCandidate> candidates,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos,
+        List<Friend> friends)
+    {
         HashSet<string> representedCandidateKeys = new(StringComparer.OrdinalIgnoreCase);
         List<UserListRow> rows = new();
 
         foreach (Friend f in friends)
         {
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
-            if (liveShop is not null && UpdateFriendFromLiveShop(f, liveShop))
-            {
-                friendsChanged = true;
-            }
 
             if (liveShop is not null && !f.HasCertificateMismatch)
             {
@@ -164,11 +204,6 @@ public partial class UserListWindow : Window
             }
         }
 
-        if (friendsChanged && FriendsRepository.SaveAll(friends))
-        {
-            _hasFriendUpdates = true;
-        }
-
         string myHost = NormalizeHostName(Environment.MachineName);
 
         foreach (LanCandidate c in candidates)
@@ -182,23 +217,15 @@ public partial class UserListWindow : Window
             SwkNotificationListener.ShopInfo? shopInfo = shopInfos
                 .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
             if (IsCandidateCoveredByRegisteredFriend(c, shopInfo, friends))
-            {
                 continue;
-            }
             bool isOpen = shopInfo is not null;
 
             if (isOpen)
-            {
                 rows.Add(UserListRow.ForNewShop(c, shopInfo));
-            }
             else if (c.IsInstallCandidate)
-            {
                 rows.Add(UserListRow.ForInstallCandidate(c));
-            }
             else
-            {
                 rows.Add(UserListRow.ForWindowsPcOnly(c));
-            }
         }
 
         rows.Sort(static (a, b) =>
@@ -208,44 +235,28 @@ public partial class UserListWindow : Window
             return string.Compare(a.NameLabel, b.NameLabel, StringComparison.OrdinalIgnoreCase);
         });
 
-        _rows.Clear();
-        foreach (UserListRow r in rows)
+        return rows;
+    }
+
+    public static void TrySaveSnapshot()
+    {
+        try
         {
-            _rows.Add(r);
+            IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
+            IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
+            List<Friend> friends = FriendsRepository.LoadAll().ToList();
+            foreach (Friend f in friends)
+            {
+                SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
+                if (liveShop is not null)
+                    UpdateFriendFromLiveShop(f, liveShop);
+            }
+            SaveUserListState(BuildRowsFromCache(candidates, shopInfos, friends));
         }
-
-        SaveUserListState(rows);
-
-        SwkLogger.Debug("UserListWindow.BuildUiFromCache rows: " +
-            string.Join(" | ", rows.Select(r => $"{r.Kind}:{r.StatusLabel}:{r.NameLabel}:{r.IpLabel}")));
-
-        int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
-        int resumeRequired = rows.Count(r => r.Kind == UserListRowKind.ResumeRequiredFriend);
-        int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
-        int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
-        int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
-        int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
-        int installCandidate = rows.Count(r => r.Kind == UserListRowKind.InstallCandidate);
-
-        string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
-        ScanStateTextBlock.Text = modeLabel;
-        if (_rows.Count == 0)
+        catch (Exception ex)
         {
-            StatusTextBlock.Text = "周りには誰もいません。";
+            SwkLogger.Warn($"UserListWindow.TrySaveSnapshot failed: {ex.Message}");
         }
-        else
-        {
-            SetStatusCountsText(
-                connected,
-                resumeRequired,
-                switchable,
-                unreach,
-                newShop,
-                windowsPcOnly,
-                installCandidate);
-        }
-
-        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
     }
 
     private void SetStatusCountsText(
