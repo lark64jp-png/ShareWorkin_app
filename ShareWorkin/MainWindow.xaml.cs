@@ -1297,7 +1297,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0
                 && !IsClickOnItemContent(e.OriginalSource as DependencyObject))
             {
-                // 行余白クリック → 選択解除してラバーバンド開始（WPF の再選択を抑制）
+                // 行余白クリック → リネーム中断・選択解除してラバーバンド開始（WPF の再選択を抑制）
+                CommitCurrentInlineRename(confirm: false);
                 ShopItemsListView.SelectedItems.Clear();
                 _rubberBandOrigin = e.GetPosition(ShopItemsListView);
                 _isRubberBanding = true;
