@@ -1291,9 +1291,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             // 未選択アイテムをクリック
             CancelRenameTimer();
-            // Shift/Ctrl なし: ドラッグでラバーバンド範囲選択を許可する
             // Shift/Ctrl あり: WPF に任せる（範囲選択・トグル選択）
-            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0)
+            // Shift/Ctrl なし + 行余白: ラバーバンド範囲選択
+            // Shift/Ctrl なし + コンテンツ部分(アイコン・ファイル名等): 通常選択→D&D を許可
+            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0
+                && !IsClickOnItemContent(e.OriginalSource as DependencyObject))
             {
                 _rubberBandOrigin = e.GetPosition(ShopItemsListView);
                 _isRubberBanding = true;
@@ -4856,6 +4858,22 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return System.Windows.DragDropEffects.Copy;
+    }
+
+    // アイコン・ファイル名など実コンテンツ上のクリックかどうかを判定する
+    // 行余白（ListViewItem の背景部分）は false を返す
+    private static bool IsClickOnItemContent(DependencyObject? source)
+    {
+        DependencyObject? current = source;
+        while (current is not null)
+        {
+            if (current is TextBlock or System.Windows.Controls.Image or System.Windows.Shapes.Shape)
+                return true;
+            if (current is System.Windows.Controls.ListViewItem)
+                return false;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     private string? GetDropDestinationFolder(System.Windows.DragEventArgs e)
