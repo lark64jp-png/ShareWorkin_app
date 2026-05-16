@@ -1316,9 +1316,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 }
                 else
                 {
-                    // コンテンツクリック（未選択）→ WPF に選択させるがこのジェスチャーでドラッグしない
-                    // ドラッグは既選択アイテムの再クリック時に開始する
-                    _dragStartItem = null;
+                    // コンテンツクリック（アイコン・名前）→ WPF にアイテム選択させつつラバーバンドも開始
+                    // MouseMove では _isRubberBanding が優先されドラッグは起動しない
+                    // 単独クリックでドラッグなし → WPF の選択のみ残る
+                    _rubberBandOrigin = e.GetPosition(ShopItemsListView);
+                    _isRubberBanding = true;
                 }
             }
         }
