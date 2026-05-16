@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.17"
+#define MyAppVersion "1.18"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.17_install
+OutputBaseFilename=ShareWorkin_v1.18_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -59,7 +59,7 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFil
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.17';
+  APP_VERSION = '1.18';
   APP_EXE = 'ShareWorkin.exe';
   TRAY_EXE = 'ShareWorkinTray.exe';
   STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';
@@ -362,6 +362,39 @@ begin
     Result := True;
 end;
 
+function QueryInstalledAppVersionFromExe(var VersionText: String): Boolean;
+var
+  InstallLocation: String;
+  ExePath: String;
+begin
+  Result := False;
+  VersionText := '';
+
+  ExePath := INSTALL_DIR + '\' + APP_EXE;
+  if FileExists(ExePath) and GetVersionNumbersString(ExePath, VersionText) and (VersionText <> '') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  ExePath := OldInstallDir() + '\' + APP_EXE;
+  if FileExists(ExePath) and GetVersionNumbersString(ExePath, VersionText) and (VersionText <> '') then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if QueryInstallLocation(InstallLocation) then
+  begin
+    ExePath := RemoveBackslashUnlessRoot(InstallLocation) + '\' + APP_EXE;
+    if FileExists(ExePath) and GetVersionNumbersString(ExePath, VersionText) and (VersionText <> '') then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 procedure DeleteDirIfExists(DirName: String);
 begin
   if DirExists(DirName) then
@@ -500,6 +533,10 @@ begin
   begin
     if DetectedAppVersion = '' then
       DetectedAppVersion := '(不明)';
+    DetectedAppStatus := 1;
+  end
+  else if QueryInstalledAppVersionFromExe(DetectedAppVersion) then
+  begin
     DetectedAppStatus := 1;
   end
   else if FileExists(INSTALL_DIR + '\' + APP_EXE) or FileExists(OldInstallDir() + '\' + APP_EXE) or DirExists(OldDataDir()) then
@@ -880,4 +917,3 @@ begin
     '/C net user swkguest /delete >nul 2>&1',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
-

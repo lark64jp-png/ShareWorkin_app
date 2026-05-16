@@ -89,6 +89,13 @@ public partial class ImportInviteDialog : Window
         string display = string.IsNullOrWhiteSpace(DisplayNameTextBox.Text)
             ? payload.HostMachineName
             : DisplayNameTextBox.Text.Trim();
+        var existing = FriendsRepository.LoadAll().ToList();
+        if (existing.Any(f =>
+            string.Equals((f.DisplayName ?? string.Empty).Trim(), display, StringComparison.OrdinalIgnoreCase)))
+        {
+            StatusTextBlock.Text = "同じお友達名は使えません。別の名前を指定してください。";
+            return null;
+        }
 
         string nowIso = DateTime.UtcNow.ToString("o");
         Friend friend = new()
@@ -108,7 +115,6 @@ public partial class ImportInviteDialog : Window
             LastCheckedAt = nowIso,
         };
 
-        var existing = FriendsRepository.LoadAll().ToList();
         existing.RemoveAll(f => ShouldReplaceExistingRegistration(f, friend));
         existing.Add(friend);
 

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Win32;
 
 namespace ShareWorkin.SMB;
 
@@ -16,19 +17,31 @@ public static class SwkInstanceIdentity
     {
         lock (Sync)
         {
-            string? existing = TryLoadId();
-            if (!string.IsNullOrWhiteSpace(existing))
+            string currentBinding = GetCurrentMachineBinding();
+            IdentityFile? existing = TryLoadIdentity();
+            if (!string.IsNullOrWhiteSpace(existing?.SwkInstanceId))
             {
-                return existing;
+                if (string.IsNullOrWhiteSpace(existing.MachineBinding))
+                {
+                    Save(existing.SwkInstanceId, currentBinding);
+                    return existing.SwkInstanceId;
+                }
+
+                if (string.Equals(existing.MachineBinding, currentBinding, StringComparison.OrdinalIgnoreCase))
+                {
+                    return existing.SwkInstanceId;
+                }
+
+                SwkLogger.Warn("SwkInstanceIdentity binding mismatch detected; regenerating instance id for this machine");
             }
 
             string created = Guid.NewGuid().ToString("N");
-            Save(created);
+            Save(created, currentBinding);
             return created;
         }
     }
 
-    private static string? TryLoadId()
+    private static IdentityFile? TryLoadIdentity()
     {
         try
         {
@@ -38,7 +51,7 @@ public static class SwkInstanceIdentity
             }
 
             IdentityFile? file = JsonSerializer.Deserialize<IdentityFile>(File.ReadAllText(IdentityPath));
-            return string.IsNullOrWhiteSpace(file?.SwkInstanceId) ? null : file.SwkInstanceId;
+            return string.IsNullOrWhiteSpace(file?.SwkInstanceId) ? null : file;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -47,7 +60,7 @@ public static class SwkInstanceIdentity
         }
     }
 
-    private static void Save(string id)
+    private static void Save(string id, string machineBinding)
     {
         try
         {
@@ -55,6 +68,8 @@ public static class SwkInstanceIdentity
             IdentityFile file = new()
             {
                 SwkInstanceId = id,
+                MachineBinding = machineBinding,
+                MachineName = Environment.MachineName,
                 CreatedAt = DateTime.UtcNow.ToString("o"),
             };
             string json = JsonSerializer.Serialize(file, new JsonSerializerOptions { WriteIndented = true });
@@ -67,13 +82,40 @@ public static class SwkInstanceIdentity
         }
     }
 
+    private static string GetCurrentMachineBinding()
+    {
+        try
+        {
+            object? value = Registry.GetValue(
+                @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography",
+                "MachineGuid",
+                null);
+            if (value is string text && !string.IsNullOrWhiteSpace(text))
+            {
+                return text.Trim();
+            }
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            SwkLogger.Warn($"SwkInstanceIdentity machine binding fallback: {ex.Message}");
+        }
+
+        return Environment.MachineName.Trim();
+    }
+
     private sealed class IdentityFile
     {
         [JsonPropertyName("version")]
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = 2;
 
         [JsonPropertyName("swkInstanceId")]
         public string SwkInstanceId { get; set; } = string.Empty;
+
+        [JsonPropertyName("machineBinding")]
+        public string MachineBinding { get; set; } = string.Empty;
+
+        [JsonPropertyName("machineName")]
+        public string MachineName { get; set; } = string.Empty;
 
         [JsonPropertyName("createdAt")]
         public string CreatedAt { get; set; } = string.Empty;

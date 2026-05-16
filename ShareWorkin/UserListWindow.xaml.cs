@@ -422,6 +422,17 @@ public partial class UserListWindow : Window
             bool refreshed = await TryRefreshFriendFromBkAsync(target, liveShop);
             if (!refreshed)
             {
+                HistoryRepository.Append(new HistoryEntry
+                {
+                    Channel = HistoryChannel.Access,
+                    FriendId = target.Id,
+                    FriendName = string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName,
+                    Direction = HistoryDirection.Outgoing,
+                    EventType = "Resume",
+                    Message = $"{(string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName)} の接続情報を再取得できませんでした。",
+                    Outcome = HistoryOutcome.Failure,
+                    TargetName = liveShop.ShareName,
+                });
                 BuildUiFromCache();
                 StatusTextBlock.Text = "接続情報を再取得できませんでした。";
                 return;
@@ -445,6 +456,19 @@ public partial class UserListWindow : Window
             }
 
             _hasFriendUpdates = true;
+            HistoryRepository.Append(new HistoryEntry
+            {
+                Channel = HistoryChannel.Access,
+                FriendId = target.Id,
+                FriendName = string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName,
+                Direction = HistoryDirection.Outgoing,
+                EventType = "Resume",
+                Message = verified
+                    ? $"{(string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName)} の接続を再開しました。"
+                    : $"{(string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName)} の接続情報を再取得しました。",
+                Outcome = verified ? HistoryOutcome.Success : HistoryOutcome.Info,
+                TargetName = liveShop.ShareName,
+            });
             BuildUiFromCache();
             StatusTextBlock.Text = verified
                 ? "接続情報を再取得し、共有接続も確認しました。"
@@ -949,7 +973,9 @@ public sealed class UserListRow
             : string.IsNullOrWhiteSpace(friend.Memo)
                 ? candidate is not null ? "接続先の見直し候補があります。" : "接続先を確認できていません。"
                 : friend.Memo,
-        IpLabel = friend.LastKnownAddress ?? string.Empty,
+        IpLabel = liveShop?.IpAddress
+            ?? candidate?.Address.ToString()
+            ?? string.Empty,
         Kind = UserListRowKind.UnreachableFriend,
         IconBrush = Brushes.White,
         IconImage = LoadIconImage(friend.IconKey),

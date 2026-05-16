@@ -36,6 +36,8 @@ public partial class FriendsWindow : Window
     private LanCandidate? _activeNewCandidate;  // Update時の新接続先 or ShopInfo なし候補
 
     private readonly ObservableCollection<CandidateRow> _candidateRows = new();
+    private readonly ObservableCollection<FriendHistoryRow> _incomingHistoryRows = new();
+    private readonly ObservableCollection<FriendHistoryRow> _outgoingHistoryRows = new();
     private string _initialName = string.Empty;
     private string _initialMemo = string.Empty;
     private string _initialIconKey = string.Empty;
@@ -69,6 +71,8 @@ public partial class FriendsWindow : Window
         }
 
         CandidateListView.ItemsSource = _candidateRows;
+        IncomingHistoryListBox.ItemsSource = _incomingHistoryRows;
+        OutgoingHistoryListBox.ItemsSource = _outgoingHistoryRows;
         SwkLogger.Debug(
             $"FriendsWindow ctor: existing={existing?.DisplayName ?? "null"} " +
             $"candidate={initialCandidate?.HostName ?? "null"}");
@@ -98,6 +102,8 @@ public partial class FriendsWindow : Window
         _activeNewCandidate = null;
 
         CandidateListView.ItemsSource = _candidateRows;
+        IncomingHistoryListBox.ItemsSource = _incomingHistoryRows;
+        OutgoingHistoryListBox.ItemsSource = _outgoingHistoryRows;
         SwkLogger.Debug($"FriendsWindow ctor (ShopInfo): {shopInfo.MachineName}/{shopInfo.ShareName}");
         Loaded += (_, _) =>
         {
@@ -129,6 +135,7 @@ public partial class FriendsWindow : Window
     {
         DeleteButton.IsEnabled = false;
         CommitAction action = ResolveCommitAction();
+        bool activeFriendIsLive = IsActiveFriendLive();
 
         if (_activeFriend != null)
         {
@@ -160,7 +167,7 @@ public partial class FriendsWindow : Window
                         $"「{friendName}」の接続先を「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
                 }
             }
-            else if (_activeFriend.IsCurrentlyFound)
+            else if (activeFriendIsLive)
             {
                 TitleTextBlock.Text = "ユーザー情報を更新";
                 SubtitleTextBlock.Text = $"「{friendName}」の名前・メモ・アイコンを更新できます。";
@@ -178,7 +185,7 @@ public partial class FriendsWindow : Window
             AccessTextBlock.Text =
                 string.Equals(_activeFriend.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
                     ? "見るだけ" : "自由に編集";
-            PresenceTextBlock.Text = ResolvePresence(_activeFriend);
+            PresenceTextBlock.Text = ResolvePresence(_activeFriend, activeFriendIsLive);
             DeleteButton.IsEnabled = true;
             if (_activeShopInfo != null)
             {
@@ -238,7 +245,80 @@ public partial class FriendsWindow : Window
         _initialIconKey = _activeFriend?.IconKey ?? string.Empty;
         _pendingIconKey = _initialIconKey;
         RenderIcon();
+        RefreshHistoryPanels();
         UpdateOkState();
+    }
+
+    private void RefreshHistoryPanels()
+    {
+        _incomingHistoryRows.Clear();
+        _outgoingHistoryRows.Clear();
+
+        if (_activeFriend is null)
+        {
+            FriendPermissionSummaryTextBlock.Text = _activeShopInfo is null
+                ? "接続先を選ぶと、現在の共有状況が表示されます。"
+                : "登録後に、この相手との履歴がここに表示されます。";
+            FriendPermissionDetailTextBlock.Text = string.Empty;
+            return;
+        }
+
+        string shareName = _activeShopInfo?.ShareName ?? _activeFriend.ShareName;
+        string accessLabel = string.Equals(_activeFriend.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
+            ? "見るだけ"
+            : "自由に編集";
+        string presence = ResolvePresence(_activeFriend, IsActiveFriendLive());
+        FriendPermissionSummaryTextBlock.Text =
+            $"共有フォルダー: {(string.IsNullOrWhiteSpace(shareName) ? "(未設定)" : shareName)} / 権限: {accessLabel}";
+        FriendPermissionDetailTextBlock.Text = $"現在の状態: {presence}";
+
+        AddHistoryRows(_incomingHistoryRows, HistoryRepository.GetFriendEntries(_activeFriend.Id, HistoryDirection.Incoming, maxCount: 8));
+        AddHistoryRows(_outgoingHistoryRows, HistoryRepository.GetFriendEntries(_activeFriend.Id, HistoryDirection.Outgoing, maxCount: 8));
+
+        if (_incomingHistoryRows.Count == 0)
+        {
+            _incomingHistoryRows.Add(new FriendHistoryRow("まだ履歴はありません。", string.Empty));
+        }
+        if (_outgoingHistoryRows.Count == 0)
+        {
+            _outgoingHistoryRows.Add(new FriendHistoryRow("まだ履歴はありません。", string.Empty));
+        }
+    }
+
+    private static void AddHistoryRows(
+        ObservableCollection<FriendHistoryRow> target,
+        IReadOnlyList<HistoryEntry> entries)
+    {
+        foreach (HistoryEntry entry in entries)
+        {
+            target.Add(new FriendHistoryRow(
+                entry.Message,
+                entry.OccurredAt.ToString("yyyy/MM/dd HH:mm")));
+        }
+    }
+
+    private static string GetFriendLabel(Friend friend) =>
+        string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+
+    private static void AppendFriendHistory(
+        Friend friend,
+        string message,
+        string eventType,
+        HistoryDirection direction,
+        HistoryOutcome outcome = HistoryOutcome.Info,
+        string? targetName = null)
+    {
+        HistoryRepository.Append(new HistoryEntry
+        {
+            Channel = HistoryChannel.Access,
+            FriendId = friend.Id,
+            FriendName = GetFriendLabel(friend),
+            Message = message,
+            EventType = eventType,
+            Direction = direction,
+            Outcome = outcome,
+            TargetName = targetName,
+        });
     }
 
     private void RenderIcon()
@@ -282,15 +362,20 @@ public partial class FriendsWindow : Window
         IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
         string myHost = NormalizeHost(Environment.MachineName);
 
-        // 確立済み = friends.json に登録済み かつ IsCurrentlyFound
+        HashSet<string> liveFriendIds = allFriends
+            .Where(IsFriendLive)
+            .Select(f => f.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // 確立済み = friends.json に登録済み かつ live な ShopInfo が見つかる
         HashSet<string> establishedHosts = allFriends
-            .Where(f => f.IsCurrentlyFound)
+            .Where(f => liveFriendIds.Contains(f.Id))
             .Select(f => NormalizeHost(f.HostMachineName))
             .Where(h => !string.IsNullOrEmpty(h))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         HashSet<string> offlineFriendHosts = allFriends
-            .Where(f => !f.IsCurrentlyFound)
+            .Where(f => !liveFriendIds.Contains(f.Id))
             .Select(f => NormalizeHost(f.HostMachineName))
             .Where(h => !string.IsNullOrEmpty(h))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -317,7 +402,7 @@ public partial class FriendsWindow : Window
         // LAN スキャンに現れない登録済み・未確立友達も追加
         foreach (Friend f in allFriends)
         {
-            if (f.IsCurrentlyFound) continue;
+            if (liveFriendIds.Contains(f.Id)) continue;
             string host = NormalizeHost(f.HostMachineName);
             if (string.IsNullOrEmpty(host)) continue;
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
@@ -344,7 +429,7 @@ public partial class FriendsWindow : Window
                 string.Equals(r.Source.Address.ToString(), _activeNewCandidate.Address.ToString(), StringComparison.OrdinalIgnoreCase));
         }
 
-        if (selected == null && _activeFriend != null && !_activeFriend.IsCurrentlyFound)
+        if (selected == null && _activeFriend != null && !IsActiveFriendLive())
         {
             selected = _candidateRows.FirstOrDefault(r =>
                 r.ExistingFriend != null &&
@@ -391,7 +476,7 @@ public partial class FriendsWindow : Window
             IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
             Friend? matchedFriend = allFriends.FirstOrDefault(f =>
                 MatchesCandidateFriend(f, selected.ShopInfo, host) &&
-                !f.IsCurrentlyFound);
+                !IsFriendLive(f));
 
             if (matchedFriend != null)
             {
@@ -400,7 +485,7 @@ public partial class FriendsWindow : Window
                 _activeShopInfo = selected.ShopInfo;
                 _activeNewCandidate = selected.ShopInfo == null ? selected.Source : null;
             }
-            else if (_activeFriend != null && !_activeFriend.IsCurrentlyFound && selected.ShopInfo != null)
+            else if (_activeFriend != null && !IsActiveFriendLive() && selected.ShopInfo != null)
             {
                 // 未接続の登録済み友達が表示中 → 接続先変更を提案
                 string dlgHost = NormalizeHost(selected.Source.HostName);
@@ -461,12 +546,18 @@ public partial class FriendsWindow : Window
     {
         error = null;
         string name = NameTextBox.Text?.Trim() ?? string.Empty;
+        IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
 
         if (_activeFriend != null)
         {
             if (string.IsNullOrWhiteSpace(name))
             {
                 error = "お友達名を入れてください。";
+                return false;
+            }
+            if (IsDuplicateDisplayName(name, allFriends, _activeFriend.Id))
+            {
+                error = "同じお友達名は使えません。別の名前を入れてください。";
                 return false;
             }
             bool nameChanged = !string.Equals(name, _initialName, StringComparison.Ordinal);
@@ -493,6 +584,11 @@ public partial class FriendsWindow : Window
                 error = "お友達名を入れてください。";
                 return false;
             }
+            if (IsDuplicateDisplayName(name, allFriends))
+            {
+                error = "同じお友達名は使えません。別の名前を入れてください。";
+                return false;
+            }
             return true;
         }
 
@@ -500,6 +596,19 @@ public partial class FriendsWindow : Window
             ? "ShareWorkin が起動していないため登録できません。"
             : "接続未確定リストから相手を選んでください。";
         return false;
+    }
+
+    private static bool IsDuplicateDisplayName(string name, IReadOnlyList<Friend> friends, string? ignoreFriendId = null)
+    {
+        string normalized = name.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return friends.Any(f =>
+            !string.Equals(f.Id, ignoreFriendId, StringComparison.Ordinal) &&
+            string.Equals((f.DisplayName ?? string.Empty).Trim(), normalized, StringComparison.OrdinalIgnoreCase));
     }
 
     // ── ボタンアクション ─────────────────────────────────────────────
@@ -657,8 +766,14 @@ public partial class FriendsWindow : Window
 
             SwkLogger.Debug(
                 $"FriendsWindow.ChangeConnectionAsync: id={target.Id} newHost={target.HostMachineName}");
-            DialogResult = true;
-            Close();
+            AppendFriendHistory(
+                target,
+                $"{GetFriendLabel(target)} の接続先を更新しました。",
+                "Switch",
+                HistoryDirection.Outgoing,
+                HistoryOutcome.Success,
+                target.ShareName);
+            CompleteDialog(true);
         }
         catch (OperationCanceledException)
         {
@@ -732,8 +847,14 @@ public partial class FriendsWindow : Window
 
             SwkLogger.Debug(
                 $"FriendsWindow.RefreshExistingFriendAsync: id={target.Id} host={target.HostMachineName}");
-            DialogResult = true;
-            Close();
+            AppendFriendHistory(
+                target,
+                $"{GetFriendLabel(target)} の接続情報を更新しました。",
+                "RefreshFriend",
+                HistoryDirection.Outgoing,
+                HistoryOutcome.Success,
+                target.ShareName);
+            CompleteDialog(true);
         }
         catch (OperationCanceledException)
         {
@@ -809,8 +930,14 @@ public partial class FriendsWindow : Window
 
             SwkLogger.Debug(
                 $"FriendsWindow.RegisterFromShopInfoAsync: registered name={name} host={friend.HostMachineName}");
-            DialogResult = true;
-            Close();
+            AppendFriendHistory(
+                friend,
+                $"{GetFriendLabel(friend)} を登録しました。",
+                "Register",
+                HistoryDirection.Outgoing,
+                HistoryOutcome.Success,
+                friend.ShareName);
+            CompleteDialog(true);
         }
         catch (OperationCanceledException)
         {
@@ -860,8 +987,14 @@ public partial class FriendsWindow : Window
         }
         SwkLogger.Debug(
             $"FriendsWindow.UpdateExistingFriend: id={target.Id} newHost={_activeNewCandidate?.Address}");
-        DialogResult = true;
-        Close();
+        AppendFriendHistory(
+            target,
+            $"{GetFriendLabel(target)} の情報を更新しました。",
+            "UpdateFriend",
+            HistoryDirection.Outgoing,
+            HistoryOutcome.Success,
+            target.ShareName);
+        CompleteDialog(true);
     }
 
     private static bool ShouldReplaceExistingRegistration(Friend existing, Friend incoming)
@@ -904,18 +1037,66 @@ public partial class FriendsWindow : Window
         }
     }
 
-    private static string ResolvePresence(Friend f)
+    private string ResolvePresence(Friend f, bool isLive)
     {
         if (string.IsNullOrWhiteSpace(f.LastCheckedAt)) return "未確認";
         if (f.HasCertificateMismatch) return "証明書不一致";
-        return f.IsCurrentlyFound ? "来店可能" : "不在";
+        return isLive ? "来店可能" : "不在";
     }
+
+    private bool IsActiveFriendLive() =>
+        _activeFriend is not null && IsFriendLive(_activeFriend);
+
+    private bool IsFriendLive(Friend friend) =>
+        FindLiveShopForFriend(friend, _shopInfos) is not null;
 
     private bool CanRefreshExistingFriend()
     {
-        return _activeFriend is not null &&
-               _activeShopInfo is null &&
-               FindLiveShopForFriend(_activeFriend, _shopInfos) is not null;
+        if (_activeFriend is null || _activeShopInfo is not null)
+        {
+            return false;
+        }
+
+        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(_activeFriend, _shopInfos);
+        if (liveShop is null)
+        {
+            return false;
+        }
+
+        return _activeFriend.HasCertificateMismatch ||
+               !FriendShareAccessTracker.IsVerifiedFor(_activeFriend, liveShop);
+    }
+
+    private void CompleteDialog(bool accepted)
+    {
+        void CompleteCore()
+        {
+            if (!IsLoaded)
+            {
+                return;
+            }
+
+            try
+            {
+                DialogResult = accepted;
+            }
+            catch (InvalidOperationException ex)
+            {
+                SwkLogger.Warn($"FriendsWindow.CompleteDialog fallback: {ex.Message}");
+                if (IsLoaded)
+                {
+                    Close();
+                }
+            }
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            CompleteCore();
+            return;
+        }
+
+        Dispatcher.Invoke(CompleteCore);
     }
 
     private void PromoteCertificateMismatchToLiveShop()
@@ -1133,15 +1314,13 @@ public partial class FriendsWindow : Window
         all.RemoveAll(f => string.Equals(f.Id, _activeFriend.Id, StringComparison.Ordinal));
         FriendsRepository.SaveAll(all);
         SwkLogger.Debug($"FriendsWindow.DeleteButton_Click: deleted, remaining={all.Count}");
-        DialogResult = true;
-        Close();
+        CompleteDialog(true);
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Debug("FriendsWindow.CancelButton_Click");
-        DialogResult = false;
-        Close();
+        CompleteDialog(false);
     }
 
     private static string NormalizeHost(string? host)
@@ -1208,3 +1387,5 @@ public partial class FriendsWindow : Window
         }
     }
 }
+
+public sealed record FriendHistoryRow(string Message, string TimeText);

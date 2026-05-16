@@ -14,11 +14,11 @@ $readmeName = -join ([char[]](0x3054, 0x5229, 0x7528, 0x306b, 0x3042, 0x305f, 0x
 $readme = Join-Path $root $readmeName
 $runtimeInstallerName = "windowsdesktop-runtime-8.0.24-win-x64.exe"
 $runtimeInstaller = Join-Path $root $runtimeInstallerName
-$hashFile = Join-Path $root "ShareWorkin_v1.17_SHA256.txt"
-$zipFile = Join-Path $root "ShareWorkin_v1.17_Setup.zip"
-$installer = Join-Path $root "ShareWorkin_v1.17_install.exe"
+$hashFile = Join-Path $root "ShareWorkin_v1.18_SHA256.txt"
+$zipFile = Join-Path $root "ShareWorkin_v1.18_Setup.zip"
+$installer = Join-Path $root "ShareWorkin_v1.18_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-$appVersion = "1.17"
+$appVersion = "1.18"
 $informationalVersion = $appVersion
 
 try {
@@ -57,6 +57,9 @@ if (Test-Path -LiteralPath $publishDir) {
 
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 $cleanupPatterns = @(
+    "ShareWorkin_v1.17_install*.exe",
+    "ShareWorkin_v1.17_SHA256*.txt",
+    "ShareWorkin_v1.17_Setup.zip",
     "ShareWorkin_v1.14_install*.exe",
     "ShareWorkin_v1.14_SHA256*.txt",
     "ShareWorkin_v1.14_Setup.zip",
@@ -135,7 +138,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
 
 $items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), (Join-Path $publishDir "ShareWorkinTray.exe"), $readme, $runtimeInstaller)
 $lines = @(
-    "ShareWorkin 1.17 SHA-256",
+    "ShareWorkin 1.18 SHA-256",
     "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
     ""
 )

@@ -312,6 +312,19 @@
                     </DockPanel>
 
                     <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0">
+                        <Canvas x:Name="RubberBandCanvas" IsHitTestVisible="False" Panel.ZIndex="10">
+                            <Rectangle x:Name="RubberBandRect"
+                                       Visibility="Collapsed"
+                                       Fill="#1A0078D4"
+                                       Stroke="#0078D4"
+                                       StrokeThickness="1" />
+                        </Canvas>
                         <ListView x:Name="ShopItemsListView"
                                   ItemsSource="{Binding ShopItems}"
                                   ItemContainerStyle="{StaticResource ShopListViewItemStyle}"
@@ -326,8 +339,10 @@
                                   PreviewMouseLeftButtonDown="ShopItemsListView_PreviewMouseLeftButtonDown"
                                   MouseMove="ShopItemsListView_MouseMove"
                                   PreviewMouseRightButtonDown="ShopItemsListView_PreviewMouseRightButtonDown"
+                                  MouseLeftButtonUp="ShopItemsListView_MouseLeftButtonUp"
                                   PreviewKeyDown="ShopItemsListView_PreviewKeyDown"
                                   SizeChanged="ShopItemsListView_SizeChanged"
+                                  SelectionChanged="ShopItemsListView_SelectionChanged"
                                   GridViewColumnHeader.Click="ShopItemsListView_HeaderClick"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   ToolTip="ダブルクリックで中に入るか、開きます。">
@@ -377,7 +392,39 @@
                                                               StrokeEndLineCap="Round" />
                                                     </Viewbox>
                                                     <TextBlock Text="{Binding Name}"
-                                                               VerticalAlignment="Center" />
+                                                               VerticalAlignment="Center">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <TextBox VerticalAlignment="Center"
+                                                             Padding="2,1"
+                                                             BorderThickness="1"
+                                                             BorderBrush="#B0413E"
+                                                             MinWidth="80"
+                                                             IsVisibleChanged="InlineRenameBox_IsVisibleChanged"
+                                                             KeyDown="InlineRenameBox_KeyDown"
+                                                             LostFocus="InlineRenameBox_LostFocus">
+                                                        <TextBox.Text>
+                                                            <Binding Path="Name" Mode="OneTime" />
+                                                        </TextBox.Text>
+                                                        <TextBox.Style>
+                                                            <Style TargetType="TextBox">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBox.Style>
+                                                    </TextBox>
                                                 </StackPanel>
                                             </DataTemplate>
                                         </GridViewColumn.CellTemplate>
@@ -454,9 +501,87 @@
                                 CornerRadius="4"
                                 IsHitTestVisible="False"
                                 Visibility="Collapsed">
-                            <TextBlock Text="移動先のフォルダーに重ねて離すと移動します"
+                            <TextBlock x:Name="DragHintTextBlock"
+                                       Text="移動先のフォルダーに重ねて離すと移動します"
                                        Foreground="#1F4E79"
                                        FontSize="12" />
+                        </Border>
+                        </Grid>
+
+                        <Border x:Name="SelectionActionBar"
+                                Grid.Row="1"
+                                Visibility="Collapsed"
+                                Background="#EDE8DF"
+                                BorderBrush="#D8D2C3"
+                                BorderThickness="0,1,0,0"
+                                Padding="6,2,6,2"
+                                Margin="0,4,0,0">
+                            <DockPanel LastChildFill="False">
+                                <Button x:Name="DeselectAllButton"
+                                        DockPanel.Dock="Left"
+                                        Content="✕"
+                                        ToolTip="選択を解除"
+                                        Width="16"
+                                        Height="16"
+                                        Padding="0"
+                                        Background="Transparent"
+                                        BorderBrush="Transparent"
+                                        FontSize="9"
+                                        Cursor="Hand"
+                                        VerticalAlignment="Center"
+                                        Click="DeselectAllButton_Click" />
+                                <TextBlock x:Name="SelectionCountText"
+                                           DockPanel.Dock="Left"
+                                           Text=""
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Margin="4,0,14,0"
+                                           Foreground="#3D3833" />
+                                <Button x:Name="ActionBarRenameButton"
+                                        DockPanel.Dock="Left"
+                                        Content="名前変更"
+                                        Height="20"
+                                        Padding="10,0"
+                                        FontSize="10"
+                                        Margin="0,0,8,0"
+                                        Visibility="Collapsed"
+                                        Click="ActionBarRenameButton_Click" />
+                                <Button x:Name="ActionBarMoveButton"
+                                        DockPanel.Dock="Left"
+                                        Content="移動"
+                                        Height="20"
+                                        Padding="10,0"
+                                        FontSize="10"
+                                        Margin="0,0,8,0"
+                                        Visibility="Collapsed"
+                                        Click="ActionBarMoveButton_Click" />
+                                <Button x:Name="ActionBarHoldButton"
+                                        DockPanel.Dock="Left"
+                                        Content="保留"
+                                        Height="20"
+                                        Padding="10,0"
+                                        FontSize="10"
+                                        Margin="0,0,8,0"
+                                        Visibility="Collapsed"
+                                        Click="ActionBarHoldButton_Click" />
+                                <Button x:Name="ActionBarPlaceButton"
+                                        DockPanel.Dock="Left"
+                                        Content="お店に戻す"
+                                        Height="20"
+                                        Padding="10,0"
+                                        FontSize="10"
+                                        Margin="0,0,8,0"
+                                        Visibility="Collapsed"
+                                        Click="ActionBarPlaceButton_Click" />
+                                <Button x:Name="ActionBarDeleteButton"
+                                        DockPanel.Dock="Left"
+                                        Content="削除"
+                                        Height="20"
+                                        Padding="10,0"
+                                        FontSize="10"
+                                        Visibility="Collapsed"
+                                        Click="ActionBarDeleteButton_Click" />
+                            </DockPanel>
                         </Border>
                     </Grid>
 

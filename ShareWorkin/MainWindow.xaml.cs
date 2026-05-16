@@ -16,6 +16,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using Microsoft.Win32.SafeHandles;
 using ShareWorkin.SMB;
@@ -30,6 +31,24 @@ public partial class MainWindow : Window
     private const int MaxArrivedItemCount = 100;
     private const string HoldFolderName = "保留";
     private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
+
+    // UIPI: requireAdministrator マニフェストのため、非昇格プロセス（デスクトップ等）からの
+    // DragDrop がシステムに遮断される。ChangeWindowMessageFilterEx でメッセージを通す。
+    [DllImport("user32.dll")] private static extern bool ChangeWindowMessageFilterEx(
+        IntPtr hwnd, uint message, uint action, ref CHANGEFILTERSTRUCT pChangeFilterStruct);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CHANGEFILTERSTRUCT { public uint cbSize; public uint ExtStatus; }
+    private const uint MSGFLT_ALLOW = 1;
+    private const uint WM_DROPFILES = 0x0233;
+    private const uint WM_COPYGLOBALDATA = 0x0049;
+    private const uint WM_COPYDATA = 0x004A;
+
+    [DllImport("shell32.dll")]
+    private static extern void DragAcceptFiles(IntPtr hwnd, bool accept);
+    [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+    private static extern uint DragQueryFile(IntPtr hDrop, uint iFile, System.Text.StringBuilder? lpszFile, uint cch);
+    [DllImport("shell32.dll")]
+    private static extern void DragFinish(IntPtr hDrop);
 
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
@@ -89,6 +108,10 @@ public partial class MainWindow : Window
     private TextBlock? _dragPreviewTextBlock;
     private System.Windows.Point _dragStartPoint;
     private ShopItem? _dragStartItem;
+    private bool _isRubberBanding;
+    private System.Windows.Point _rubberBandOrigin;
+    private System.Windows.Threading.DispatcherTimer? _renameTimer;
+    private ShopItem? _renameTimerTarget;
     private string _breadcrumbFullText = string.Empty;
     private DateTime _suppressExternalChangeNotificationsUntil = DateTime.MinValue;
     private DateTime _lastExternalChangeNotificationAt = DateTime.MinValue;
@@ -105,6 +128,8 @@ public partial class MainWindow : Window
     private DisplayMode _currentMode = DisplayMode.Shop;
     private Friend? _activeFriendShop;
     private bool _suppressDropdownChange;
+    private bool _clickSelectionPending;
+    private bool _itemWasSelectedAtPress;
     private ShopSortField _sortField = ShopSortField.Name;
     private ListSortDirection _sortDirection = ListSortDirection.Ascending;
 
@@ -129,10 +154,18 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        _pipeClient.TrayExiting += () => Dispatcher.Invoke(() => { _exitRequested = true; Close(); });
-        _pipeClient.ShowRequested += () => Dispatcher.Invoke(ShowMainWindow);
+        _pipeClient.TrayExiting += () =>
+            _ = Dispatcher.InvokeAsync(() =>
+            {
+                _exitRequested = true;
+                Close();
+            }, DispatcherPriority.Background);
+        _pipeClient.ShowRequested += () =>
+            _ = Dispatcher.InvokeAsync(ShowMainWindow, DispatcherPriority.Background);
         _pipeClient.FriendShopClosingReceived += (machine, share) =>
-            Dispatcher.Invoke(() => HandleFriendShopClosingReceived(machine, share));
+            _ = Dispatcher.InvokeAsync(
+                () => HandleFriendShopClosingReceived(machine, share),
+                DispatcherPriority.Background);
 
         _notificationTimer = new DispatcherTimer { Interval = NotificationQuietTime };
         _notificationTimer.Tick += NotificationTimer_Tick;
@@ -174,8 +207,51 @@ public partial class MainWindow : Window
         return dirty ? $"v{baseVer}+{sha}-dirty" : $"v{baseVer}+{sha}";
     }
 
+    private void AllowExternalDragDrop()
+    {
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return;
+        CHANGEFILTERSTRUCT cfs = new() { cbSize = (uint)Marshal.SizeOf<CHANGEFILTERSTRUCT>() };
+        ChangeWindowMessageFilterEx(handle, WM_DROPFILES,      MSGFLT_ALLOW, ref cfs);
+        ChangeWindowMessageFilterEx(handle, WM_COPYGLOBALDATA, MSGFLT_ALLOW, ref cfs);
+        ChangeWindowMessageFilterEx(handle, WM_COPYDATA,       MSGFLT_ALLOW, ref cfs);
+        DragAcceptFiles(handle, true);
+        HwndSource.FromHwnd(handle)?.AddHook(WndProc);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == (int)WM_DROPFILES)
+        {
+            HandleWmDropFiles(wParam);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void HandleWmDropFiles(IntPtr hDrop)
+    {
+        uint count = DragQueryFile(hDrop, 0xFFFFFFFF, null, 0);
+        var paths = new List<string>((int)count);
+        for (uint i = 0; i < count; i++)
+        {
+            uint len = DragQueryFile(hDrop, i, null, 0);
+            if (len == 0) continue;
+            var sb = new System.Text.StringBuilder((int)(len + 1));
+            DragQueryFile(hDrop, i, sb, len + 1);
+            paths.Add(sb.ToString());
+        }
+        DragFinish(hDrop);
+
+        if (paths.Count == 0 || string.IsNullOrWhiteSpace(_currentFolder)) return;
+        string destination = _currentFolder!;
+        _ = Dispatcher.InvokeAsync(() => PlaceExternalFiles(paths, destination));
+    }
+
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        AllowExternalDragDrop();
+
         if (_startupHandled)
         {
             return;
@@ -655,6 +731,50 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         };
     }
 
+    private void AppendHistory(
+        HistoryChannel channel,
+        string message,
+        string eventType,
+        HistoryOutcome outcome = HistoryOutcome.Info,
+        HistoryDirection direction = HistoryDirection.None,
+        Friend? friend = null,
+        string? targetName = null)
+    {
+        HistoryRepository.Append(new HistoryEntry
+        {
+            Channel = channel,
+            Message = message,
+            EventType = eventType,
+            Outcome = outcome,
+            Direction = direction,
+            FriendId = friend?.Id,
+            FriendName = friend is null ? null : GetFriendLabel(friend),
+            TargetName = targetName,
+        });
+    }
+
+    private static string GetFriendLabel(Friend friend) =>
+        string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+
+    private void ShowHistoryDialog(HistoryChannel channel, string title)
+    {
+        IReadOnlyList<HistoryEntry> entries = HistoryRepository.GetEntries(channel, maxCount: 40);
+        if (entries.Count == 0)
+        {
+            SetTransientStatus($"{title}はまだありません。");
+            return;
+        }
+
+        string subtitle = channel switch
+        {
+            HistoryChannel.Access => "自分とお友達の出入りや接続の履歴です。",
+            HistoryChannel.Notification => "通知対象になった出来事の履歴です。",
+            _ => "自分のお店で起きた更新の履歴です。",
+        };
+        HistoryWindow window = new(title, subtitle, entries) { Owner = this };
+        window.ShowDialog();
+    }
+
     private void NotifyExternalShopChange()
     {
         if (ShouldSuppressExternalChangeNotification() || !CanShowNotification(externalOnly: true))
@@ -784,18 +904,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
     {
-        Dispatcher.Invoke(() =>
-        {
-            if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null) return;
-            if (!string.Equals(_activeFriendShop.HostMachineName, machineName, StringComparison.OrdinalIgnoreCase)) return;
-            if (!string.Equals(_activeFriendShop.ShareName, shareName, StringComparison.OrdinalIgnoreCase)) return;
+        if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null) return;
+        if (!string.Equals(_activeFriendShop.HostMachineName, machineName, StringComparison.OrdinalIgnoreCase)) return;
+        if (!string.Equals(_activeFriendShop.ShareName, shareName, StringComparison.OrdinalIgnoreCase)) return;
 
-            ShopItems.Clear();
-            string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
-                ? machineName
-                : _activeFriendShop.DisplayName;
-            SetTransientStatus($"{label} のお店が閉じました。");
-        });
+        ShopItems.Clear();
+        string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
+            ? machineName
+            : _activeFriendShop.DisplayName;
+        SetTransientStatus($"{label} のお店が閉じました。");
     }
 
     private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
@@ -1132,6 +1249,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        CancelRenameTimer();
         if (ShopItemsListView.SelectedItem is ShopItem item)
         {
             OpenShopItem(item);
@@ -1142,11 +1260,75 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         _dragStartPoint = e.GetPosition(null);
         _dragStartItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
+        _itemWasSelectedAtPress = false;
+
+        if (_dragStartItem is null)
+        {
+            ShopItemsListView.SelectedItems.Clear();
+            CancelRenameTimer();
+            _rubberBandOrigin = e.GetPosition(ShopItemsListView);
+            _isRubberBanding = true;
+        }
+        else if (ShopItemsListView.SelectedItems.Contains(_dragStartItem))
+        {
+            // 選択済みアイテムをクリック → リネームタイマー or D&D へ
+            CancelRenameTimer();
+            _itemWasSelectedAtPress = !_dragStartItem.IsHoldFolder &&
+                !_dragStartItem.IsRenaming &&
+                ShopItemsListView.SelectedItems.Count == 1 &&
+                _currentMode != DisplayMode.FriendShop;
+            if (ShopItemsListView.SelectedItems.Count > 1)
+            {
+                // 複数選択中のアイテムをクリック → D&D 開始まで選択解除を保留
+                _clickSelectionPending = true;
+                e.Handled = true;
+            }
+        }
+        else
+        {
+            // 未選択アイテムをクリック → ラバーバンド選択
+            CancelRenameTimer();
+            _rubberBandOrigin = e.GetPosition(ShopItemsListView);
+            _isRubberBanding = true;
+        }
+    }
+
+    private void ShopItemsListView_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        bool wasSelected = _itemWasSelectedAtPress;
+        ShopItem? pressedItem = _dragStartItem;
+        _itemWasSelectedAtPress = false;
+
+        CancelRenameTimer();
+        EndRubberBand();
+
+        if (_clickSelectionPending && pressedItem is not null)
+        {
+            ShopItemsListView.SelectedItem = pressedItem;
+            _clickSelectionPending = false;
+        }
+
+        if (wasSelected && pressedItem is not null && !pressedItem.IsRenaming)
+        {
+            StartRenameTimer(pressedItem);
+        }
     }
 
     private void ShopItemsListView_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed || _dragStartItem is null || _dragStartItem.IsHoldFolder)
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            EndRubberBand();
+            return;
+        }
+
+        if (_isRubberBanding)
+        {
+            UpdateRubberBand(e.GetPosition(ShopItemsListView));
+            return;
+        }
+
+        if (_dragStartItem is null || _dragStartItem.IsHoldFolder)
         {
             return;
         }
@@ -1157,6 +1339,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             return;
         }
+
+        _clickSelectionPending = false;
+        _itemWasSelectedAtPress = false;
+        CancelRenameTimer();
 
         List<ShopItem> itemsToDrag;
         if (ShopItemsListView.SelectedItems.Contains(_dragStartItem))
@@ -1225,6 +1411,47 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         e.Handled = true;
+    }
+
+    private void UpdateRubberBand(System.Windows.Point current)
+    {
+        double left   = Math.Min(_rubberBandOrigin.X, current.X);
+        double top    = Math.Min(_rubberBandOrigin.Y, current.Y);
+        double width  = Math.Abs(current.X - _rubberBandOrigin.X);
+        double height = Math.Abs(current.Y - _rubberBandOrigin.Y);
+
+        Canvas.SetLeft(RubberBandRect, left);
+        Canvas.SetTop(RubberBandRect, top);
+        RubberBandRect.Width  = Math.Max(width,  1);
+        RubberBandRect.Height = Math.Max(height, 1);
+        RubberBandRect.Visibility = Visibility.Visible;
+
+        if (width >= 2 || height >= 2)
+            SelectItemsInRect(new Rect(left, top, width, height));
+    }
+
+    private void EndRubberBand()
+    {
+        if (!_isRubberBanding) return;
+        _isRubberBanding = false;
+        RubberBandRect.Visibility = Visibility.Collapsed;
+    }
+
+    private void SelectItemsInRect(Rect rect)
+    {
+        bool shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        foreach (ShopItem item in ShopItems)
+        {
+            if (ShopItemsListView.ItemContainerGenerator.ContainerFromItem(item) is not System.Windows.Controls.ListViewItem container)
+                continue;
+            GeneralTransform tf = container.TransformToAncestor(ShopItemsListView);
+            Rect itemRect = new(tf.Transform(new System.Windows.Point(0, 0)),
+                                new System.Windows.Size(container.ActualWidth, container.ActualHeight));
+            if (rect.IntersectsWith(itemRect))
+                ShopItemsListView.SelectedItems.Add(item);
+            else if (!shift)
+                ShopItemsListView.SelectedItems.Remove(item);
+        }
     }
 
     private static ShopItem? GetShopItemFromSource(DependencyObject? source)
@@ -1304,26 +1531,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void HistoryButton_Click(object sender, RoutedEventArgs e)
     {
-        if (ArrivedItems.Count == 0)
-        {
-            SetTransientStatus("履歴はまだありません。");
-            return;
-        }
-
-        string historyText = string.Join(
-            Environment.NewLine,
-            ArrivedItems.Take(20).Select(item => $"{item.ArrivedAtText}  {item.Name}"));
-        System.Windows.MessageBox.Show(this, historyText, "履歴", MessageBoxButton.OK, MessageBoxImage.None);
+        ShowHistoryDialog(HistoryChannel.Update, "履歴");
     }
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
+
         if (e.Data.GetDataPresent(InternalDragPathFormat))
         {
+            bool isCopy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
+            DragHintTextBlock.Text = isCopy
+                ? "Ctrl を押しています — フォルダーに重ねて離すとコピーします"
+                : "移動先のフォルダーに重ねて離すと移動します";
             ShowDragHint(Path.GetFileName((string)e.Data.GetData(InternalDragPathFormat)));
         }
+        else if (e.Effects != System.Windows.DragDropEffects.None)
+        {
+            DragHintTextBlock.Text = "ここに離すとこのフォルダーにコピーします";
+            ShowDragHint();
+        }
+
         e.Handled = true;
     }
 
@@ -1357,7 +1586,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string destinationFolder = GetDropDestinationFolder(e) ?? _currentFolder;
         if (e.Data.GetDataPresent(InternalDragPathFormat))
         {
-            MoveInternalDraggedItem((string)e.Data.GetData(InternalDragPathFormat), destinationFolder);
+            string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
+            if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+                CopyInternalDraggedItem(sourcePath, destinationFolder);
+            else
+                MoveInternalDraggedItem(sourcePath, destinationFolder);
             e.Handled = true;
             return;
         }
@@ -1370,6 +1603,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         string[] paths = (string[])e.Data.GetData(System.Windows.DataFormats.FileDrop);
+        PlaceExternalFiles(paths, destinationFolder);
+        e.Handled = true;
+    }
+
+    private void PlaceExternalFiles(IReadOnlyList<string> paths, string destinationFolder)
+    {
+        if (_currentMode == DisplayMode.FriendShop || !Directory.Exists(destinationFolder)) return;
+
         int placedCount = 0;
         string? lastPlacedName = null;
         bool sawSameName = false;
@@ -1384,7 +1625,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 sawSameName = true;
                 continue;
             }
-
             try
             {
                 SuppressExternalChangeNotifications();
@@ -1415,8 +1655,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 ? $"{lastPlacedName} を置きました。"
                 : $"{placedCount} つ置きました。";
             SetTransientStatus(message);
+            AppendHistory(
+                HistoryChannel.Update,
+                message,
+                eventType: "Place",
+                outcome: HistoryOutcome.Success,
+                direction: HistoryDirection.None,
+                friend: null,
+                targetName: lastPlacedName);
 
-            if (string.Equals(
+            if (_currentFolder is not null &&
+                string.Equals(
                     Path.GetFullPath(destinationFolder),
                     Path.GetFullPath(_currentFolder),
                     StringComparison.OrdinalIgnoreCase) &&
@@ -1437,8 +1686,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             SetTransientStatus("同じ名前があるので置けません。");
         }
-
-        e.Handled = true;
     }
 
     private void MoveInternalDraggedItem(string sourcePath, string destinationFolder)
@@ -1498,6 +1745,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             SetTransientStatus($"{Path.GetFileName(sourcePath)} を移しました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{Path.GetFileName(sourcePath)} を移しました。",
+                "Move",
+                HistoryOutcome.Success,
+                targetName: Path.GetFileName(sourcePath));
             NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
             InvalidateSizeCacheUnder(sourceParent);
             InvalidateSizeCacheUnder(destinationFolder);
@@ -1506,6 +1759,84 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             SetTransientStatus("移せませんでした。");
+        }
+    }
+
+    private void CopyInternalDraggedItem(string sourcePath, string destinationFolder)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || !Directory.Exists(destinationFolder))
+        {
+            SetTransientStatus("その場所が見つかりません。");
+            return;
+        }
+
+        if (IsHoldFolderPath(sourcePath))
+        {
+            SetTransientStatus("保留はコピーできません。");
+            return;
+        }
+
+        bool sourceIsDirectory = Directory.Exists(sourcePath);
+        bool sourceIsFile = File.Exists(sourcePath);
+        if (!sourceIsDirectory && !sourceIsFile)
+        {
+            SetTransientStatus("その場所が見つかりません。");
+            return;
+        }
+
+        string sourceName = Path.GetFileName(sourcePath);
+        string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        if (string.Equals(
+                Path.GetFullPath(sourceParent),
+                Path.GetFullPath(destinationFolder),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            SetTransientStatus("同じ場所にはコピーできません。");
+            return;
+        }
+
+        if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath))
+        {
+            SetTransientStatus("その中へはコピーできません。");
+            return;
+        }
+
+        string destinationPath = Path.Combine(destinationFolder, sourceName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            SetTransientStatus("同じ名前があるのでコピーできません。");
+            return;
+        }
+
+        try
+        {
+            SuppressExternalChangeNotifications();
+            if (sourceIsDirectory)
+                CopyDirectory(sourcePath, destinationPath);
+            else
+                File.Copy(sourcePath, destinationPath);
+
+            SetTransientStatus($"{sourceName} をコピーしました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{sourceName} をコピーしました。",
+                "Place",
+                HistoryOutcome.Success,
+                targetName: sourceName);
+            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Placed);
+            InvalidateSizeCacheUnder(destinationFolder);
+            if (string.Equals(
+                    Path.GetFullPath(destinationFolder),
+                    Path.GetFullPath(_currentFolder ?? string.Empty),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingFocusName = sourceName;
+            }
+            RefreshShopItems();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetTransientStatus("コピーできませんでした。");
         }
     }
 
@@ -1528,7 +1859,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         else if (selectedCount > 1)
         {
             MoveShopItemMenuItem.Visibility = Visibility.Collapsed;
-            MoveToFolderMenuItem.Visibility = Visibility.Collapsed;
+            MoveToFolderMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
             HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
             DeleteShopItemMenuItem.Visibility = Visibility.Visible;
             AddFolderSeparator.Visibility = Visibility.Collapsed;
@@ -1609,6 +1940,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             SetTransientStatus($"{item.Name} を {newName} に変えました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{item.Name} を {newName} に変えました。",
+                "Rename",
+                HistoryOutcome.Success,
+                targetName: newName);
             NoteFutureSharePolicyRepair(destinationPath, sourceParent, SharePolicyRepairReason.Renamed);
             InvalidateSizeCacheUnder(sourceParent);
             _pendingFocusName = newName;
@@ -1620,30 +1957,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (ShopItemsListView.SelectedItem is not ShopItem item)
-        {
-            return;
-        }
+    private void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
+        MoveSelectedItemsToFolder();
 
-        MoveDestinationDialog dialog = new(_shopFolder, GetHoldFolderPath(), item.FullPath)
+    private void MoveSelectedItemsToFolder()
+    {
+        List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
+            .Where(i => !i.IsHoldFolder)
+            .ToList();
+        if (items.Count == 0) return;
+
+        MoveDestinationDialog dialog = new(_shopFolder, GetHoldFolderPath(), items[0].FullPath)
         {
             Owner = this
         };
 
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
+        if (dialog.ShowDialog() != true) return;
 
         string? destinationFolder = dialog.SelectedFolderPath;
-        if (string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder))
-        {
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder)) return;
 
-        string sourceParent = Path.GetDirectoryName(item.FullPath) ?? string.Empty;
+        string sourceParent = Path.GetDirectoryName(items[0].FullPath) ?? string.Empty;
         if (string.Equals(
                 Path.GetFullPath(destinationFolder),
                 Path.GetFullPath(sourceParent),
@@ -1652,35 +1986,46 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        string destinationPath = Path.Combine(destinationFolder, item.Name);
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        int movedCount = 0;
+        int skipCount = 0;
+
+        SuppressExternalChangeNotifications();
+        foreach (ShopItem item in items)
         {
-            SetTransientStatus("同じ名前があるので移せません。");
-            return;
+            string destinationPath = Path.Combine(destinationFolder, item.Name);
+            if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+            {
+                skipCount++;
+                continue;
+            }
+            try
+            {
+                if (item.IsDirectory)
+                    Directory.Move(item.FullPath, destinationPath);
+                else
+                    File.Move(item.FullPath, destinationPath);
+
+                NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
+                movedCount++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                skipCount++;
+            }
         }
 
-        try
-        {
-            SuppressExternalChangeNotifications();
-            if (item.IsDirectory)
-            {
-                Directory.Move(item.FullPath, destinationPath);
-            }
-            else
-            {
-                File.Move(item.FullPath, destinationPath);
-            }
+        InvalidateSizeCacheUnder(sourceParent);
+        InvalidateSizeCacheUnder(destinationFolder);
 
-            SetTransientStatus($"{item.Name} を移しました。");
-            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
-            InvalidateSizeCacheUnder(sourceParent);
-            InvalidateSizeCacheUnder(destinationFolder);
-            RefreshShopItems();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SetTransientStatus("移せませんでした。");
-        }
+        string msg = skipCount == 0
+            ? $"{movedCount} 件移しました。"
+            : $"{movedCount} 件移しました（{skipCount} 件スキップ）。";
+        SetTransientStatus(msg);
+
+        if (movedCount > 0)
+            AppendHistory(HistoryChannel.Update, msg, "Move", HistoryOutcome.Success);
+
+        RefreshShopItems();
     }
 
     private void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1728,6 +2073,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SetTransientStatus(movedCount == 1 && lastName is not null
                 ? $"{lastName} を保留にしまいました。"
                 : $"{movedCount} つ保留にしまいました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                movedCount == 1 && lastName is not null
+                    ? $"{lastName} を保留にしまいました。"
+                    : $"{movedCount} つ保留にしまいました。",
+                "Hold",
+                HistoryOutcome.Success,
+                targetName: lastName);
             RefreshShopItems();
         }
         else
@@ -1777,6 +2130,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SetTransientStatus(deletedCount == 1 && lastName is not null
                 ? $"{lastName} を消しました。"
                 : $"{deletedCount} つ消しました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                deletedCount == 1 && lastName is not null
+                    ? $"{lastName} を消しました。"
+                    : $"{deletedCount} つ消しました。",
+                "Delete",
+                HistoryOutcome.Success,
+                targetName: lastName);
             RefreshShopItems();
         }
         else
@@ -1836,6 +2197,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SuppressExternalChangeNotifications();
             Directory.CreateDirectory(destinationPath);
             SetTransientStatus($"{folderName} を作りました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{folderName} を作りました。",
+                "CreateFolder",
+                HistoryOutcome.Success,
+                targetName: folderName);
             NoteFutureSharePolicyRepair(destinationPath, targetFolder, SharePolicyRepairReason.FolderCreated);
             InvalidateSizeCacheUnder(targetFolder);
             if (string.Equals(
@@ -1851,6 +2218,243 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             SetTransientStatus("作れませんでした。");
         }
+    }
+
+    // --- 選択アクションバー ---
+
+    private void ShopItemsListView_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        UpdateSelectionActionBar();
+    }
+
+    private void UpdateSelectionActionBar()
+    {
+        int count = ShopItemsListView.SelectedItems.Count;
+
+        if (count == 0)
+        {
+            SelectionActionBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        SelectionActionBar.Visibility = Visibility.Visible;
+        SelectionCountText.Text = $"{count}個選択中";
+
+        bool inHoldMode = _currentMode == DisplayMode.Hold;
+        bool singleSelect = count == 1;
+        bool hasHoldFolder = ShopItemsListView.SelectedItems.Cast<ShopItem>().Any(i => i.IsHoldFolder);
+
+        ActionBarRenameButton.Visibility =
+            singleSelect && !hasHoldFolder && !inHoldMode
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        ActionBarMoveButton.Visibility =
+            !hasHoldFolder && !inHoldMode
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        ActionBarHoldButton.Visibility =
+            !hasHoldFolder && !inHoldMode
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        ActionBarPlaceButton.Visibility =
+            inHoldMode
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        ActionBarDeleteButton.Visibility =
+            !hasHoldFolder
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void DeselectAllButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShopItemsListView.SelectedItems.Clear();
+    }
+
+    private void ActionBarRenameButton_Click(object sender, RoutedEventArgs e) =>
+        RenameShopItemMenuItem_Click(sender, e);
+
+    private void ActionBarMoveButton_Click(object sender, RoutedEventArgs e) =>
+        MoveSelectedItemsToFolder();
+
+    private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e) =>
+        HoldShopItemMenuItem_Click(sender, e);
+
+    private void ActionBarDeleteButton_Click(object sender, RoutedEventArgs e) =>
+        DeleteShopItemMenuItem_Click(sender, e);
+
+    private void ActionBarPlaceButton_Click(object sender, RoutedEventArgs e) =>
+        PlaceBackSelectedItems();
+
+    private void PlaceBackSelectedItems()
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder)) return;
+
+        List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>().ToList();
+        if (items.Count == 0) return;
+
+        int movedCount = 0;
+        string? lastName = null;
+
+        foreach (ShopItem item in items)
+        {
+            string destinationPath = Path.Combine(_shopFolder!, item.Name);
+            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) continue;
+
+            try
+            {
+                SuppressExternalChangeNotifications();
+                if (item.IsDirectory)
+                    Directory.Move(item.FullPath, destinationPath);
+                else
+                    File.Move(item.FullPath, destinationPath);
+
+                movedCount++;
+                lastName = item.Name;
+                string? sourceParent = Path.GetDirectoryName(item.FullPath);
+                if (!string.IsNullOrWhiteSpace(sourceParent))
+                    InvalidateSizeCacheUnder(sourceParent);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
+        if (movedCount > 0)
+        {
+            InvalidateSizeCacheUnder(_shopFolder!);
+            string msg = movedCount == 1 && lastName is not null
+                ? $"{lastName} をお店に戻しました。"
+                : $"{movedCount} つお店に戻しました。";
+            SetTransientStatus(msg);
+            AppendHistory(
+                HistoryChannel.Update,
+                msg,
+                "Place",
+                HistoryOutcome.Success,
+                targetName: lastName);
+            RefreshShopItems();
+        }
+        else
+        {
+            SetTransientStatus("戻せませんでした。");
+        }
+    }
+
+    // --- インラインリネーム ---
+
+    private void StartRenameTimer(ShopItem item)
+    {
+        CancelRenameTimer();
+        _renameTimerTarget = item;
+        _renameTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(650)
+        };
+        _renameTimer.Tick += (_, _) =>
+        {
+            ShopItem? target = _renameTimerTarget;
+            CancelRenameTimer();
+            BeginInlineRename(target);
+        };
+        _renameTimer.Start();
+    }
+
+    private void CancelRenameTimer()
+    {
+        _renameTimer?.Stop();
+        _renameTimer = null;
+        _renameTimerTarget = null;
+    }
+
+    private void BeginInlineRename(ShopItem? item)
+    {
+        if (item is null || item.IsHoldFolder || item.IsRenaming) return;
+        if (ShopItemsListView.SelectedItem != item) return;
+
+        CommitCurrentInlineRename(confirm: false);
+        item.IsRenaming = true;
+    }
+
+    private void CommitCurrentInlineRename(bool confirm, System.Windows.Controls.TextBox? textBox = null)
+    {
+        ShopItem? item = ShopItems.FirstOrDefault(i => i.IsRenaming);
+        if (item is null) return;
+
+        string newName = textBox?.Text?.Trim() ?? string.Empty;
+        item.IsRenaming = false;
+
+        if (!confirm || string.IsNullOrEmpty(newName) || newName == item.Name) return;
+
+        if (newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            SetTransientStatus("その名前には変えられません。");
+            return;
+        }
+
+        string sourceParent = Path.GetDirectoryName(item.FullPath) ?? string.Empty;
+        string destinationPath = Path.Combine(sourceParent, newName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            SetTransientStatus("同じ名前があるので変えられません。");
+            return;
+        }
+
+        try
+        {
+            SuppressExternalChangeNotifications();
+            if (item.IsDirectory)
+                Directory.Move(item.FullPath, destinationPath);
+            else
+                File.Move(item.FullPath, destinationPath);
+
+            string oldName = item.Name;
+            SetTransientStatus($"{oldName} を {newName} に変えました。");
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{oldName} を {newName} に変えました。",
+                "Rename",
+                HistoryOutcome.Success,
+                targetName: newName);
+            NoteFutureSharePolicyRepair(destinationPath, sourceParent, SharePolicyRepairReason.Renamed);
+            InvalidateSizeCacheUnder(sourceParent);
+            _pendingFocusName = newName;
+            RefreshShopItems();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetTransientStatus("名前を変えられませんでした。");
+        }
+    }
+
+    private void InlineRenameBox_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if ((bool)e.NewValue && sender is System.Windows.Controls.TextBox tb)
+        {
+            Dispatcher.InvokeAsync(() =>
+            {
+                tb.SelectAll();
+                tb.Focus();
+            }, System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+    }
+
+    private void InlineRenameBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox tb) return;
+
+        if (e.Key == System.Windows.Input.Key.Return)
+        {
+            CommitCurrentInlineRename(confirm: true, tb);
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            CommitCurrentInlineRename(confirm: false);
+            e.Handled = true;
+        }
+    }
+
+    private void InlineRenameBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        CommitCurrentInlineRename(confirm: true, sender as System.Windows.Controls.TextBox);
     }
 
     private void EnterHoldMode()
@@ -2320,6 +2924,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
             }
+            AppendHistory(
+                HistoryChannel.Update,
+                $"{item.Name} を受け取りました。",
+                "Receive",
+                HistoryOutcome.Success,
+                HistoryDirection.Incoming,
+                targetName: item.Name);
         }
 
         if (newcomers.Count > 0 || removed.Count > 0)
@@ -2355,6 +2966,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 {
                     ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
                 }
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{item.Name} を受け取りました。",
+                    "Receive",
+                    HistoryOutcome.Success,
+                    HistoryDirection.Incoming,
+                    targetName: item.Name);
             }
 
             NotifyExternalShopChange();
@@ -2421,6 +3039,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        AppendHistory(
+            HistoryChannel.Notification,
+            notificationText,
+            "Notify",
+            HistoryOutcome.Info);
         _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", notificationText, _shopFolder);
     }
 
@@ -2439,6 +3062,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         string notifFolder = _pendingNotificationItems[0].FolderPath;
         _pendingNotificationItems.Clear();
+        AppendHistory(
+            HistoryChannel.Notification,
+            "お店の中身が変更されました。",
+            "Notify",
+            HistoryOutcome.Info);
         _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", "お店の中身が変更されました。", notifFolder);
     }
 
@@ -3146,6 +3774,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ShopSortField.Name => ascending
                 ? items.OrderBy(i => i.SortKey).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
                 : items.OrderBy(i => i.SortKey).ThenByDescending(i => i.Name, StringComparer.CurrentCultureIgnoreCase),
+            ShopSortField.ShareStatus => ascending
+                ? items.OrderBy(i => i.ShareStatusText, StringComparer.CurrentCultureIgnoreCase).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
+                : items.OrderByDescending(i => i.ShareStatusText, StringComparer.CurrentCultureIgnoreCase).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase),
             ShopSortField.Kind => ascending
                 ? items.OrderBy(i => i.KindText).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
                 : items.OrderByDescending(i => i.KindText).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase),
@@ -3205,6 +3836,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void UpdateColumnHeaders()
     {
         SetColumnHeader(NameColumnHeader, "名前", ShopSortField.Name);
+        SetColumnHeader(ShareStatusColumnHeader, "共有状況", ShopSortField.ShareStatus);
         SetColumnHeader(KindColumnHeader, "種類", ShopSortField.Kind);
         SetColumnHeader(UpdatedAtColumnHeader, "更新日時", ShopSortField.UpdatedAt);
         SetColumnHeader(SizeColumnHeader, "サイズ", ShopSortField.Size);
@@ -3533,6 +4165,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return FindLiveShopByHostAndShare(friend, SwkNetworkCache.ShopInfos);
     }
 
+    private static bool IsCompatibleLiveShopForFriend(Friend friend, SwkNotificationListener.ShopInfo liveShop)
+    {
+        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
+            !string.IsNullOrWhiteSpace(liveShop.SwkInstanceId))
+        {
+            return SameSwkInstance(friend, liveShop) &&
+                   string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(NormalizeHostName(friend.HostMachineName), NormalizeHostName(liveShop.MachineName), StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
@@ -3583,6 +4228,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static void UpdateFriendExternalState(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
+        if (!IsCompatibleLiveShopForFriend(friend, liveShop))
+        {
+            SwkLogger.Warn(
+                $"UpdateFriendExternalState skipped incompatible shop: friend={friend.Id}/{friend.DisplayName} " +
+                $"friendHost={friend.HostMachineName} friendShare={friend.ShareName} friendInstance={friend.RemoteSwkInstanceId ?? "-"} " +
+                $"shopHost={liveShop.MachineName} shopShare={liveShop.ShareName} shopInstance={liveShop.SwkInstanceId ?? "-"}");
+            return;
+        }
+
         string nowIso = DateTime.UtcNow.ToString("o");
         friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
         friend.LastFoundAt = nowIso;
@@ -3653,7 +4307,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         UpdateBreadcrumb();
         UpdateNavigationState();
 
-        SwkNotificationListener.ShopInfo? liveShop = knownLiveShop ?? await ResolveLiveFriendShopAsync(friend);
+        SwkNotificationListener.ShopInfo? liveShop = knownLiveShop;
+        if (liveShop is not null && !IsCompatibleLiveShopForFriend(friend, liveShop))
+        {
+            SwkLogger.Warn(
+                $"NavigateToFriendShopAsync ignored incompatible knownLiveShop: friend={friend.Id}/{friend.DisplayName} " +
+                $"friendHost={friend.HostMachineName} friendShare={friend.ShareName} friendInstance={friend.RemoteSwkInstanceId ?? "-"} " +
+                $"shopHost={liveShop.MachineName} shopShare={liveShop.ShareName} shopInstance={liveShop.SwkInstanceId ?? "-"}");
+            liveShop = null;
+        }
+
+        liveShop ??= await ResolveLiveFriendShopAsync(friend);
         if (liveShop is null)
         {
             SetTransientStatus("接続できません");
@@ -3700,6 +4364,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {string.Join(", ", uncCandidates)}");
             FriendShareAccessTracker.ClearVerified(friend);
             UpdateFriendExternalState(friend, liveShop);
+            AppendHistory(
+                HistoryChannel.Access,
+                $"{label} に接続できませんでした。",
+                "Connect",
+                HistoryOutcome.Failure,
+                HistoryDirection.Outgoing,
+                friend);
             SetTransientStatus("接続できません");
             return;
         }
@@ -3716,6 +4387,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         SuppressExternalChangeNotifications();
         NavigateTo(accessiblePath, addHistory: false, clearForward: true);
+        AppendHistory(
+            HistoryChannel.Access,
+            $"{label} のお店に入りました。",
+            "Connect",
+            HistoryOutcome.Success,
+            HistoryDirection.Outgoing,
+            friend,
+            targetName: liveShop.ShareName);
         await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
     }
 
@@ -3752,6 +4431,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Friend friend,
         SwkNotificationListener.ShopInfo liveShop)
     {
+        if (!IsCompatibleLiveShopForFriend(friend, liveShop))
+        {
+            SwkLogger.Warn(
+                $"TryRefreshFriendPasswordAsync skipped incompatible shop: friend={friend.Id}/{friend.DisplayName} " +
+                $"friendHost={friend.HostMachineName} friendShare={friend.ShareName} friendInstance={friend.RemoteSwkInstanceId ?? "-"} " +
+                $"shopHost={liveShop.MachineName} shopShare={liveShop.ShareName} shopInstance={liveShop.SwkInstanceId ?? "-"}");
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(friend.OwnerCertThumbprint))
         {
             SwkLogger.Warn($"TryRefreshFriendPasswordAsync skipped: no pinned certificate for friend id={friend.Id}");
@@ -3861,17 +4549,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void AccessHistoryButton_Click(object sender, RoutedEventArgs e)
     {
-        SetTransientStatus("アクセス履歴は準備中です。");
+        ShowHistoryDialog(HistoryChannel.Access, "アクセス履歴");
     }
 
     private void UpdateHistoryButton_Click(object sender, RoutedEventArgs e)
     {
-        SetTransientStatus("更新履歴は準備中です。");
+        ShowHistoryDialog(HistoryChannel.Update, "更新履歴");
     }
 
     private void NotificationHistoryButton_Click(object sender, RoutedEventArgs e)
     {
-        SetTransientStatus("通知履歴は準備中です。");
+        ShowHistoryDialog(HistoryChannel.Notification, "通知履歴");
     }
 
     private void StartFolderSizeCalculation()
@@ -4047,9 +4735,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return System.Windows.DragDropEffects.None;
         }
 
-        return e.Data.GetDataPresent(InternalDragPathFormat)
-            ? System.Windows.DragDropEffects.Move
-            : System.Windows.DragDropEffects.Copy;
+        if (e.Data.GetDataPresent(InternalDragPathFormat))
+        {
+            return (e.KeyStates & DragDropKeyStates.ControlKey) != 0
+                ? System.Windows.DragDropEffects.Copy
+                : System.Windows.DragDropEffects.Move;
+        }
+
+        return System.Windows.DragDropEffects.Copy;
     }
 
     private string? GetDropDestinationFolder(System.Windows.DragEventArgs e)
@@ -4601,6 +5294,18 @@ public sealed class ShopItem : INotifyPropertyChanged
         }
     }
 
+    private bool _isRenaming;
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        set
+        {
+            if (_isRenaming == value) return;
+            _isRenaming = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRenaming)));
+        }
+    }
+
     public string KindText => IsDirectory ? "フォルダー" : "ファイル";
 
     // Per-item sharing state. Empty list = 全員, non-empty = 指定.
@@ -4716,6 +5421,7 @@ public sealed class ShopItem : INotifyPropertyChanged
 public enum ShopSortField
 {
     Name,
+    ShareStatus,
     Kind,
     UpdatedAt,
     Size,
