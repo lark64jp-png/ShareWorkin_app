@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private const int MaxArrivedItemCount = 100;
     private const string HoldFolderName = "保留";
     private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
+    private const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
 
     // UIPI: requireAdministrator マニフェストのため、非昇格プロセス（デスクトップ等）からの
     // DragDrop がシステムに遮断される。ChangeWindowMessageFilterEx でメッセージを通す。
@@ -49,6 +50,8 @@ public partial class MainWindow : Window
     private static extern uint DragQueryFile(IntPtr hDrop, uint iFile, System.Text.StringBuilder? lpszFile, uint cch);
     [DllImport("shell32.dll")]
     private static extern void DragFinish(IntPtr hDrop);
+    [DllImport("ole32.dll")]
+    private static extern int RevokeDragDrop(IntPtr hwnd);
 
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
@@ -216,6 +219,8 @@ public partial class MainWindow : Window
         ChangeWindowMessageFilterEx(handle, WM_COPYGLOBALDATA, MSGFLT_ALLOW, ref cfs);
         ChangeWindowMessageFilterEx(handle, WM_COPYDATA,       MSGFLT_ALLOW, ref cfs);
         DragAcceptFiles(handle, true);
+        // WPF の OLE ドロップターゲットを解除して Explorer に WM_DROPFILES を使わせる
+        RevokeDragDrop(handle);
         HwndSource.FromHwnd(handle)?.AddHook(WndProc);
     }
 
@@ -1286,10 +1291,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else
         {
-            // 未選択アイテムをクリック → ラバーバンド選択
+            // 未選択アイテムをクリック → 通常選択に任せ D&D を許可する
             CancelRenameTimer();
-            _rubberBandOrigin = e.GetPosition(ShopItemsListView);
-            _isRubberBanding = true;
         }
     }
 
@@ -1362,15 +1365,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         System.Windows.DataObject data = new();
-        data.SetData(System.Windows.DataFormats.FileDrop, itemsToDrag.Select(i => i.FullPath).ToArray());
+        string[] dragPaths = itemsToDrag.Select(i => i.FullPath).ToArray();
+        data.SetData(System.Windows.DataFormats.FileDrop, dragPaths);
         if (itemsToDrag.Count == 1)
         {
-            data.SetData(InternalDragPathFormat, itemsToDrag[0].FullPath);
+            data.SetData(InternalDragPathFormat, dragPaths[0]);
+        }
+        else
+        {
+            data.SetData(InternalDragPathsFormat, dragPaths);
         }
 
         string hint = itemsToDrag.Count == 1 ? itemsToDrag[0].Name : $"{itemsToDrag.Count} つのアイテム";
         ShowDragHint(hint);
+        // 内部ドラッグ用に WPF の OLE ドロップターゲットを一時再登録する
+        ShopItemsListView.AllowDrop = false;
+        ShopItemsListView.AllowDrop = true;
         System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Copy | System.Windows.DragDropEffects.Move);
+        // ドラッグ終了後、外部ドロップ用に WM_DROPFILES モードへ戻す
+        IntPtr hwndRestore = new WindowInteropHelper(this).Handle;
+        if (hwndRestore != IntPtr.Zero)
+            RevokeDragDrop(hwndRestore);
         HideDragHint();
         ClearDropTargetHighlight();
         _dragStartItem = null;
@@ -1539,13 +1554,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
 
-        if (e.Data.GetDataPresent(InternalDragPathFormat))
+        if (e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat))
         {
             bool isCopy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
             DragHintTextBlock.Text = isCopy
                 ? "Ctrl を押しています — フォルダーに重ねて離すとコピーします"
                 : "移動先のフォルダーに重ねて離すと移動します";
-            ShowDragHint(Path.GetFileName((string)e.Data.GetData(InternalDragPathFormat)));
+            if (e.Data.GetDataPresent(InternalDragPathFormat))
+            {
+                ShowDragHint(Path.GetFileName((string)e.Data.GetData(InternalDragPathFormat)));
+            }
+            else
+            {
+                string[] ps = (string[])e.Data.GetData(InternalDragPathsFormat);
+                ShowDragHint($"{ps.Length} つのアイテム");
+            }
         }
         else if (e.Effects != System.Windows.DragDropEffects.None)
         {
@@ -1591,6 +1614,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 CopyInternalDraggedItem(sourcePath, destinationFolder);
             else
                 MoveInternalDraggedItem(sourcePath, destinationFolder);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Data.GetDataPresent(InternalDragPathsFormat))
+        {
+            string[] sourcePaths = (string[])e.Data.GetData(InternalDragPathsFormat);
+            if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+                PlaceExternalFiles(sourcePaths, destinationFolder);
+            else
+                MoveInternalDraggedItems(sourcePaths, destinationFolder);
             e.Handled = true;
             return;
         }
@@ -1757,6 +1791,80 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             RefreshShopItems();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetTransientStatus("移せませんでした。");
+        }
+    }
+
+    private void MoveInternalDraggedItems(IReadOnlyList<string> sourcePaths, string destinationFolder)
+    {
+        if (!Directory.Exists(destinationFolder))
+        {
+            SetTransientStatus("その場所が見つかりません。");
+            return;
+        }
+
+        int movedCount = 0;
+        int skippedCount = 0;
+        string? lastName = null;
+        string? lastSourceParent = null;
+
+        foreach (string sourcePath in sourcePaths)
+        {
+            if (IsHoldFolderPath(sourcePath)) { skippedCount++; continue; }
+
+            bool sourceIsDirectory = Directory.Exists(sourcePath);
+            bool sourceIsFile = File.Exists(sourcePath);
+            if (!sourceIsDirectory && !sourceIsFile) { skippedCount++; continue; }
+
+            string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+            if (string.Equals(
+                    Path.GetFullPath(sourceParent),
+                    Path.GetFullPath(destinationFolder),
+                    StringComparison.OrdinalIgnoreCase))
+            { skippedCount++; continue; }
+
+            if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath)) { skippedCount++; continue; }
+
+            string destinationPath = Path.Combine(destinationFolder, Path.GetFileName(sourcePath));
+            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) { skippedCount++; continue; }
+
+            try
+            {
+                SuppressExternalChangeNotifications();
+                if (sourceIsDirectory)
+                    Directory.Move(sourcePath, destinationPath);
+                else
+                    File.Move(sourcePath, destinationPath);
+
+                NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
+                InvalidateSizeCacheUnder(sourceParent);
+                movedCount++;
+                lastName = Path.GetFileName(sourcePath);
+                lastSourceParent = sourceParent;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                skippedCount++;
+            }
+        }
+
+        if (movedCount > 0)
+        {
+            string message = movedCount == 1 && lastName is not null
+                ? $"{lastName} を移しました。"
+                : $"{movedCount} つ移しました。";
+            SetTransientStatus(message);
+            AppendHistory(
+                HistoryChannel.Update,
+                message,
+                "Move",
+                HistoryOutcome.Success,
+                targetName: lastName);
+            InvalidateSizeCacheUnder(destinationFolder);
+            RefreshShopItems();
+        }
+        else if (skippedCount > 0)
         {
             SetTransientStatus("移せませんでした。");
         }
@@ -4725,7 +4833,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return !string.IsNullOrWhiteSpace(_currentFolder) &&
                Directory.Exists(_currentFolder) &&
                (e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ||
-                e.Data.GetDataPresent(InternalDragPathFormat));
+                e.Data.GetDataPresent(InternalDragPathFormat) ||
+                e.Data.GetDataPresent(InternalDragPathsFormat));
     }
 
     private System.Windows.DragDropEffects GetDropEffect(System.Windows.DragEventArgs e)
@@ -4735,7 +4844,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return System.Windows.DragDropEffects.None;
         }
 
-        if (e.Data.GetDataPresent(InternalDragPathFormat))
+        if (e.Data.GetDataPresent(InternalDragPathFormat) ||
+            e.Data.GetDataPresent(InternalDragPathsFormat))
         {
             return (e.KeyStates & DragDropKeyStates.ControlKey) != 0
                 ? System.Windows.DragDropEffects.Copy
