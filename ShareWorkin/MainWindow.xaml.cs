@@ -1291,15 +1291,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else
         {
-            // 未選択アイテムをクリック
+            // 未選択アイテムをクリック → 通常選択に任せ D&D を許可する
             CancelRenameTimer();
-            // Shift/Ctrl なし: ドラッグでラバーバンド範囲選択を許可する
-            // Shift/Ctrl あり: WPF に任せる（範囲選択・トグル選択）
-            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0)
-            {
-                _rubberBandOrigin = e.GetPosition(ShopItemsListView);
-                _isRubberBanding = true;
-            }
         }
     }
 
@@ -1604,6 +1597,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
     {
+        // DragOver で特定済みのフォルダを Drop 前にキャプチャ（ClearDropTargetHighlight で消える前に）
+        ShopItem? highlightedFolder = _dropTargetItem;
         ClearDropTargetHighlight();
         HideDragHint();
 
@@ -1613,7 +1608,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        string destinationFolder = GetDropDestinationFolder(e) ?? _currentFolder;
+        // 視覚ツリーウォークを試み、失敗なら DragOver で特定済みのフォルダをフォールバックに使う
+        string destinationFolder = GetDropDestinationFolder(e)
+            ?? highlightedFolder?.FullPath
+            ?? _currentFolder;
         if (e.Data.GetDataPresent(InternalDragPathFormat))
         {
             string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
