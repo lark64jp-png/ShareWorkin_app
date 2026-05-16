@@ -1549,7 +1549,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
-        DragDropLog($"DragEnter: formats=[{string.Join(",", e.Data.GetFormats())}], effects={e.Effects}");
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
 
@@ -1598,13 +1597,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         // DragOver で特定済みのフォルダを Drop 前にキャプチャ（ClearDropTargetHighlight で消える前に）
         ShopItem? highlightedFolder = _dropTargetItem;
-        DragDropLog($"Drop enter: highlightedFolder={highlightedFolder?.FullPath ?? "null"}, formats=[{string.Join(",", e.Data.GetFormats())}]");
         ClearDropTargetHighlight();
         HideDragHint();
 
         if (!CanAcceptDrop(e) || string.IsNullOrWhiteSpace(_currentFolder))
         {
-            DragDropLog($"Drop: CanAcceptDrop=false or no currentFolder → return");
             e.Handled = true;
             return;
         }
@@ -1613,7 +1610,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string destinationFolder = GetDropDestinationFolder(e)
             ?? highlightedFolder?.FullPath
             ?? _currentFolder;
-        DragDropLog($"Drop: destinationFolder={destinationFolder}, currentFolder={_currentFolder}");
         if (e.Data.GetDataPresent(InternalDragPathFormat))
         {
             string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
@@ -1816,27 +1812,25 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         string? lastSourceParent = null;
 
-        DragDropLog($"MoveItems: dest={destinationFolder}, count={sourcePaths.Count}");
         foreach (string sourcePath in sourcePaths)
         {
-            if (IsHoldFolderPath(sourcePath)) { DragDropLog($"  skip(hold): {sourcePath}"); skippedCount++; continue; }
+            if (IsHoldFolderPath(sourcePath)) { skippedCount++; continue; }
 
             bool sourceIsDirectory = Directory.Exists(sourcePath);
             bool sourceIsFile = File.Exists(sourcePath);
-            if (!sourceIsDirectory && !sourceIsFile) { DragDropLog($"  skip(notexist): {sourcePath}"); skippedCount++; continue; }
+            if (!sourceIsDirectory && !sourceIsFile) { skippedCount++; continue; }
 
             string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
             if (string.Equals(
                     Path.GetFullPath(sourceParent),
                     Path.GetFullPath(destinationFolder),
                     StringComparison.OrdinalIgnoreCase))
-            { DragDropLog($"  skip(sameDir): {sourcePath}"); skippedCount++; continue; }
+            { skippedCount++; continue; }
 
-            if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath)) { DragDropLog($"  skip(underFolder): {sourcePath}"); skippedCount++; continue; }
+            if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath)) { skippedCount++; continue; }
 
             string destinationPath = Path.Combine(destinationFolder, Path.GetFileName(sourcePath));
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) { DragDropLog($"  skip(destExists): {destinationPath}"); skippedCount++; continue; }
-            DragDropLog($"  move: {sourcePath} → {destinationPath}");
+            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) { skippedCount++; continue; }
 
             try
             {
@@ -4871,27 +4865,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             if (current is System.Windows.Controls.ListViewItem { DataContext: ShopItem { IsDirectory: true } item })
             {
-                DragDropLog($"GetDropDest: visual-walk found folder={item.FullPath}");
-                return item.FullPath;
+                        return item.FullPath;
             }
 
             current = VisualTreeHelper.GetParent(current);
         }
 
-        DragDropLog($"GetDropDest: visual-walk found nothing (src={e.OriginalSource?.GetType().Name})");
         return null;
-    }
-
-    private static readonly string _dragDropLogPath = @"H:\dragdrop.log";
-
-    private static void DragDropLog(string msg)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_dragDropLogPath)!);
-            File.AppendAllText(_dragDropLogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
-        }
-        catch { }
     }
 
     private void UpdateDropTargetHighlight(System.Windows.DragEventArgs e)
