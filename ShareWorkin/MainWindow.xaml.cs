@@ -1303,15 +1303,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             // Shift/Ctrl あり: WPF に任せる（範囲選択・トグル選択）
             // Shift/Ctrl なし + 行余白: ラバーバンド範囲選択
             // Shift/Ctrl なし + コンテンツ部分(アイコン・ファイル名等): 通常選択→D&D を許可
-            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0
-                && !IsClickOnItemContent(e.OriginalSource as DependencyObject))
+            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0)
             {
-                // 行余白クリック → リネーム中断・選択解除してラバーバンド開始（WPF の再選択を抑制）
-                CommitCurrentInlineRename(confirm: false);
-                ShopItemsListView.SelectedItems.Clear();
-                _rubberBandOrigin = e.GetPosition(ShopItemsListView);
-                _isRubberBanding = true;
-                e.Handled = true;
+                if (!IsClickOnItemContent(e.OriginalSource as DependencyObject))
+                {
+                    // 行余白クリック → リネーム中断・選択解除してラバーバンド開始
+                    CommitCurrentInlineRename(confirm: false);
+                    ShopItemsListView.SelectedItems.Clear();
+                    _rubberBandOrigin = e.GetPosition(ShopItemsListView);
+                    _isRubberBanding = true;
+                    e.Handled = true;
+                }
+                else
+                {
+                    // コンテンツクリック（未選択）→ WPF に選択させるがこのジェスチャーでドラッグしない
+                    // ドラッグは既選択アイテムの再クリック時に開始する
+                    _dragStartItem = null;
+                }
             }
         }
     }
@@ -1467,19 +1475,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void SelectItemsInRect(Rect rect)
     {
+        DragDropLog($"SelectItemsInRect rect={rect}");
         bool shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
         foreach (ShopItem item in ShopItems)
         {
-            if (ShopItemsListView.ItemContainerGenerator.ContainerFromItem(item) is not System.Windows.Controls.ListViewItem container)
-                continue;
+            var container = ShopItemsListView.ItemContainerGenerator.ContainerFromItem(item) as System.Windows.Controls.ListViewItem;
+            if (container == null) { DragDropLog($"  {item.Name}: container=null"); continue; }
             GeneralTransform tf = container.TransformToAncestor(ShopItemsListView);
             Rect itemRect = new(tf.Transform(new System.Windows.Point(0, 0)),
                                 new System.Windows.Size(container.ActualWidth, container.ActualHeight));
-            if (rect.IntersectsWith(itemRect))
+            bool hit = rect.IntersectsWith(itemRect);
+            DragDropLog($"  {item.Name}(dir={item.IsDirectory}): itemRect={itemRect} hit={hit}");
+            if (hit)
                 ShopItemsListView.SelectedItems.Add(item);
             else if (!shift)
                 ShopItemsListView.SelectedItems.Remove(item);
         }
+    }
+
+    private static readonly string _dragDropLogPath = @"H:\dragdrop.log";
+    private static void DragDropLog(string msg)
+    {
+        try { File.AppendAllText(_dragDropLogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
+        catch { }
     }
 
     private static ShopItem? GetShopItemFromSource(DependencyObject? source)
