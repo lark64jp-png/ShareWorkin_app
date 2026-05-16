@@ -1291,8 +1291,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else
         {
-            // 未選択アイテムをクリック → 通常選択に任せ D&D を許可する
+            // 未選択アイテムをクリック
             CancelRenameTimer();
+            // Shift/Ctrl なし: ドラッグでラバーバンド範囲選択を許可する
+            // Shift/Ctrl あり: WPF に任せる（範囲選択・トグル選択）
+            if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) == 0)
+            {
+                _rubberBandOrigin = e.GetPosition(ShopItemsListView);
+                _isRubberBanding = true;
+            }
         }
     }
 
