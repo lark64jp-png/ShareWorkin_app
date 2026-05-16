@@ -1477,29 +1477,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void SelectItemsInRect(Rect rect)
     {
-        DragDropLog($"SelectItemsInRect rect={rect}");
         bool shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
         foreach (ShopItem item in ShopItems)
         {
             var container = ShopItemsListView.ItemContainerGenerator.ContainerFromItem(item) as System.Windows.Controls.ListViewItem;
-            if (container == null) { DragDropLog($"  {item.Name}: container=null"); continue; }
+            if (container == null) continue;
             GeneralTransform tf = container.TransformToAncestor(ShopItemsListView);
             Rect itemRect = new(tf.Transform(new System.Windows.Point(0, 0)),
                                 new System.Windows.Size(container.ActualWidth, container.ActualHeight));
             bool hit = rect.IntersectsWith(itemRect);
-            DragDropLog($"  {item.Name}(dir={item.IsDirectory}): itemRect={itemRect} hit={hit}");
             if (hit)
                 ShopItemsListView.SelectedItems.Add(item);
             else if (!shift)
                 ShopItemsListView.SelectedItems.Remove(item);
         }
-    }
-
-    private static readonly string _dragDropLogPath = @"H:\dragdrop.log";
-    private static void DragDropLog(string msg)
-    {
-        try { File.AppendAllText(_dragDropLogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); }
-        catch { }
     }
 
     private static ShopItem? GetShopItemFromSource(DependencyObject? source)
