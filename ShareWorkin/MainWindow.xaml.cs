@@ -1265,6 +1265,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _dragStartItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
         _itemWasSelectedAtPress = false;
 
+        // リネーム中に TextBox 以外をクリック → キャンセルして選択解除（ブランチ共通）
+        if (ShopItems.Any(i => i.IsRenaming) && !IsClickOnRenameTextBox(e.OriginalSource as DependencyObject))
+        {
+            CommitCurrentInlineRename(confirm: false);
+            ShopItemsListView.SelectedItems.Clear();
+            e.Handled = true;
+            return;
+        }
+
         if (_dragStartItem is null)
         {
             ShopItemsListView.SelectedItems.Clear();
@@ -4862,6 +4871,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return System.Windows.DragDropEffects.Copy;
+    }
+
+    // クリック位置がリネーム TextBox の上かどうかを判定する
+    private static bool IsClickOnRenameTextBox(DependencyObject? source)
+    {
+        DependencyObject? current = source;
+        while (current is not null)
+        {
+            if (current is System.Windows.Controls.TextBox) return true;
+            if (current is System.Windows.Controls.ListViewItem) return false;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
     }
 
     // アイコン・ファイル名など実コンテンツ上のクリックかどうかを判定する
