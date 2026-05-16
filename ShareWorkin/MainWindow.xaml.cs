@@ -219,8 +219,6 @@ public partial class MainWindow : Window
         ChangeWindowMessageFilterEx(handle, WM_COPYGLOBALDATA, MSGFLT_ALLOW, ref cfs);
         ChangeWindowMessageFilterEx(handle, WM_COPYDATA,       MSGFLT_ALLOW, ref cfs);
         DragAcceptFiles(handle, true);
-        // WPF の OLE ドロップターゲットを解除して Explorer に WM_DROPFILES を使わせる
-        RevokeDragDrop(handle);
         HwndSource.FromHwnd(handle)?.AddHook(WndProc);
     }
 
@@ -1385,14 +1383,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         string hint = itemsToDrag.Count == 1 ? itemsToDrag[0].Name : $"{itemsToDrag.Count} つのアイテム";
         ShowDragHint(hint);
-        // 内部ドラッグ用に WPF の OLE ドロップターゲットを一時再登録する
-        ShopItemsListView.AllowDrop = false;
-        ShopItemsListView.AllowDrop = true;
         System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Copy | System.Windows.DragDropEffects.Move);
-        // ドラッグ終了後、外部ドロップ用に WM_DROPFILES モードへ戻す
-        IntPtr hwndRestore = new WindowInteropHelper(this).Handle;
-        if (hwndRestore != IntPtr.Zero)
-            RevokeDragDrop(hwndRestore);
         HideDragHint();
         ClearDropTargetHighlight();
         _dragStartItem = null;
@@ -1558,6 +1549,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
+        DragDropLog($"DragEnter: formats=[{string.Join(",", e.Data.GetFormats())}], effects={e.Effects}");
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
 
@@ -4890,9 +4882,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return null;
     }
 
-    private static readonly string _dragDropLogPath =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                     "ShareWorkin", "dragdrop.log");
+    private static readonly string _dragDropLogPath = @"H:\dragdrop.log";
 
     private static void DragDropLog(string msg)
     {
