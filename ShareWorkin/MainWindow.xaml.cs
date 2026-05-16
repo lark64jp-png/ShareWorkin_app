@@ -387,7 +387,7 @@ public partial class MainWindow : Window
         try
         {
             ExplorerTargetComboBox.Items.Clear();
-            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null, null));
+            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("自分の共有", null, null));
             ExplorerTargetComboBox.SelectedIndex = 0;
         }
         finally
@@ -1815,6 +1815,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 HistoryOutcome.Success,
                 targetName: Path.GetFileName(sourcePath));
             NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
+            PreservePermissionOnMove(sourcePath, sourceParent, destinationPath, destinationFolder);
             InvalidateSizeCacheUnder(sourceParent);
             InvalidateSizeCacheUnder(destinationFolder);
             RefreshShopItems();
@@ -1867,6 +1868,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     File.Move(sourcePath, destinationPath);
 
                 NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
+                PreservePermissionOnMove(sourcePath, sourceParent, destinationPath, destinationFolder);
                 InvalidateSizeCacheUnder(sourceParent);
                 movedCount++;
                 lastName = Path.GetFileName(sourcePath);
@@ -2143,6 +2145,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     File.Move(item.FullPath, destinationPath);
 
                 NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
+                PreservePermissionOnMove(item.FullPath, Path.GetDirectoryName(item.FullPath) ?? string.Empty, destinationPath, destinationFolder);
                 movedCount++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -4137,6 +4140,50 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return null;
     }
 
+    private static int PermissionLevel((List<string> Users, bool IsReadOnly, bool IsSharedOff)? perm)
+    {
+        if (perm == null) return 0;
+        var (users, isReadOnly, isSharedOff) = perm.Value;
+        if (isSharedOff) return 4;
+        if (users.Count > 0 && isReadOnly) return 3;
+        if (users.Count > 0) return 2;
+        if (isReadOnly) return 1;
+        return 0;
+    }
+
+    private void PreservePermissionOnMove(
+        string sourcePath,
+        string sourceParent,
+        string destinationPath,
+        string destinationFolder)
+    {
+        bool hasOwnEntry = _permissionMap.TryGetValue(sourcePath, out var ownPerm)
+            && (ownPerm.Users.Count > 0 || ownPerm.IsReadOnly || ownPerm.IsSharedOff);
+
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? effectiveSource = hasOwnEntry
+            ? ownPerm
+            : FindEffectiveAncestorPermission(sourceParent);
+
+        bool changed = hasOwnEntry && _permissionMap.Remove(sourcePath);
+
+        if (effectiveSource == null)
+        {
+            if (changed) SavePermissionMap();
+            return;
+        }
+
+        var effectiveDest = FindEffectiveAncestorPermission(destinationFolder);
+
+        if (PermissionLevel(effectiveDest) >= PermissionLevel(effectiveSource))
+        {
+            if (changed) SavePermissionMap();
+            return;
+        }
+
+        _permissionMap[destinationPath] = effectiveSource.Value;
+        SavePermissionMap();
+    }
+
     private void UpdateBreadcrumb()
     {
         _breadcrumbFullText = BuildRelativeLocationText();
@@ -4221,7 +4268,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         try
         {
             ExplorerTargetComboBox.Items.Clear();
-            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("わたしのお店", null, null));
+            ExplorerTargetComboBox.Items.Add(new ExplorerTarget("自分の共有", null, null));
 
             IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
             foreach (Friend f in friends
