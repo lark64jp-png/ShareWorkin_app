@@ -25,6 +25,9 @@ public static class SmbNtfsManager
     private const string SidAdministrators = "*S-1-5-32-544";
     private const string PermFull = "(OI)(CI)(F)";
     private const string PermReadOnly = "(OI)(CI)(RX)";
+    // ファイル用: (OI)(CI) はフォルダーでのみ有効。ファイルに適用すると INHERIT_ONLY_ACE になりアクセス不可になる。
+    private const string PermFullFile = "(F)";
+    private const string PermReadOnlyFile = "(RX)";
 
     private const uint WRITE_DAC = 0x00040000;
     private const uint WRITE_OWNER = 0x00080000;
@@ -348,24 +351,21 @@ public static class SmbNtfsManager
             return false;
         }
 
-        if (Directory.Exists(subfolderPath) &&
-            !RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance"))
-        {
+        if (!RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance"))
             return false;
-        }
-        if (File.Exists(subfolderPath) &&
-            !RunIcacls(new[] { subfolderPath, "/inheritance:r" }, "Disable inheritance"))
-        {
-            return false;
-        }
-        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidSystem}:{PermFull}" }, "Grant SYSTEM")) return false;
-        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidAdministrators}:{PermFull}" }, "Grant Admins")) return false;
-        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"*{ownerSid}:{PermFull}" }, "Grant Owner")) return false;
+
+        bool isFile = File.Exists(subfolderPath);
+        string permFull = isFile ? PermFullFile : PermFull;
+        string permRo   = isFile ? PermReadOnlyFile : PermReadOnly;
+
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidSystem}:{permFull}" }, "Grant SYSTEM")) return false;
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SidAdministrators}:{permFull}" }, "Grant Admins")) return false;
+        if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"*{ownerSid}:{permFull}" }, "Grant Owner")) return false;
 
         if (isReadOnly && !isSharedOff)
         {
             SwkLogger.Info($"SetSubfolderPermission read-only: {subfolderPath}");
-            if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{PermReadOnly}" }, "Grant swkguest read-only"))
+            if (!RunIcacls(new[] { subfolderPath, "/grant:r", $"{SmbAccountManager.LocalQualifiedAccountName}:{permRo}" }, "Grant swkguest read-only"))
             {
                 return false;
             }
