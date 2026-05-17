@@ -301,18 +301,10 @@
 
         <!-- 6: 中段ボタン行 -->
         <DockPanel Grid.Row="6" LastChildFill="False">
-            <UniformGrid DockPanel.Dock="Left" Rows="1" Columns="2" Width="280">
-                <ComboBox x:Name="ScanModeComboBox"
-                          Height="32"
-                          Margin="0,0,4,0"
-                          SelectedIndex="0">
-                    <ComboBoxItem Content="接続可能スキャン" />
-                    <ComboBoxItem Content="全PCスキャン" />
-                </ComboBox>
+            <UniformGrid DockPanel.Dock="Left" Rows="1" Columns="1" Width="140">
                 <Button x:Name="ReloadButton"
                         Content="再スキャン"
                         Height="32"
-                        Margin="4,0,0,0"
                         Click="ReloadButton_Click" />
             </UniformGrid>
             <UniformGrid DockPanel.Dock="Right" Rows="1" Columns="2" Width="220">
@@ -372,9 +364,10 @@
                     </ListView.ItemContainerStyle>
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="ホスト名" Width="220" DisplayMemberBinding="{Binding HostNameLabel}" />
-                            <GridViewColumn Header="IP" Width="140" DisplayMemberBinding="{Binding IpLabel}" />
-                            <GridViewColumn Header="状態" Width="220" DisplayMemberBinding="{Binding StatusLabel}" />
+                            <GridViewColumn Header="共有フォルダー名" Width="180" DisplayMemberBinding="{Binding ShareNameLabel}" />
+                            <GridViewColumn Header="ホスト名" Width="200" DisplayMemberBinding="{Binding HostNameLabel}" />
+                            <GridViewColumn Header="IP" Width="130" DisplayMemberBinding="{Binding IpLabel}" />
+                            <GridViewColumn Header="状態" Width="150" DisplayMemberBinding="{Binding StatusLabel}" />
                         </GridView>
                     </ListView.View>
                 </ListView>

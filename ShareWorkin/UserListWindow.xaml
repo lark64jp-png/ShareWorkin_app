@@ -132,7 +132,7 @@
                      x:Name="LoadingBar"
                      Height="3"
                      IsIndeterminate="True"
-                     Foreground="#4A7C59"
+                     Foreground="#76A88A"
                      Background="Transparent"
                      BorderThickness="0"
                      Visibility="Collapsed" />
@@ -140,20 +140,11 @@
         <StackPanel Grid.Row="8">
             <DockPanel LastChildFill="True">
                 <UniformGrid DockPanel.Dock="Right"
-                             Rows="1" Columns="3"
-                             Width="320">
-                    <ComboBox x:Name="ScanModeComboBox"
-                              Height="32"
-                              Margin="4,0,0,0"
-                              VerticalContentAlignment="Center"
-                              SelectedIndex="0">
-                        <ComboBoxItem Content="接続可能スキャン" />
-                        <ComboBoxItem Content="全PCスキャン" />
-                    </ComboBox>
+                             Rows="1" Columns="2"
+                             Width="220">
                     <Button x:Name="ReloadButton"
                             Content="再スキャン"
                             Height="32"
-                            Margin="4,0,0,0"
                             Click="ReloadButton_Click" />
                     <Button Content="閉じる"
                             Height="32"

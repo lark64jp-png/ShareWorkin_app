@@ -14,6 +14,14 @@ public enum SharePolicyRepairReason
 
 public static class SharePolicyRepair
 {
+    private static readonly TimeSpan[] RepairRetryDelays =
+    [
+        TimeSpan.Zero,
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(500),
+        TimeSpan.FromMilliseconds(900),
+    ];
+
     public static void MarkActionAftercare(
         string shopRootPath,
         string affectedPath,
@@ -31,14 +39,50 @@ public static class SharePolicyRepair
             return;
         }
 
-        if (!SmbNtfsManager.TakeOwnershipPath(affectedPath) ||
-            !SmbNtfsManager.ResetPathToInherited(affectedPath))
+        if (!TryNormalizeForSharedShop(affectedPath))
         {
             SwkLogger.Warn($"SharePolicyRepair failed: reason={reason} affected={affectedPath}");
             return;
         }
 
         SwkLogger.Info($"SharePolicyRepair ok: reason={reason} affected={affectedPath}");
+    }
+
+    public static bool TryNormalizeForSharedShop(string affectedPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(affectedPath);
+
+        for (int attempt = 0; attempt < RepairRetryDelays.Length; attempt++)
+        {
+            TimeSpan delay = RepairRetryDelays[attempt];
+            if (delay > TimeSpan.Zero)
+            {
+                try
+                {
+                    System.Threading.Thread.Sleep(delay);
+                }
+                catch
+                {
+                }
+            }
+
+            if (!System.IO.Directory.Exists(affectedPath) && !System.IO.File.Exists(affectedPath))
+            {
+                return true;
+            }
+
+            bool takeOwnershipOk = SmbNtfsManager.TakeOwnershipPath(affectedPath);
+            bool resetOk = takeOwnershipOk && SmbNtfsManager.ResetPathToInherited(affectedPath);
+            if (resetOk)
+            {
+                return true;
+            }
+
+            SwkLogger.Debug(
+                $"SharePolicyRepair retry needed: attempt={attempt + 1}/{RepairRetryDelays.Length} affected={affectedPath} takeown={takeOwnershipOk} reset={resetOk}");
+        }
+
+        return false;
     }
 
     private static bool IsUnderFolder(string path, string rootPath)

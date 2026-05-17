@@ -78,7 +78,6 @@ public partial class FriendsWindow : Window
             $"candidate={initialCandidate?.HostName ?? "null"}");
         Loaded += (_, _) =>
         {
-            SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
@@ -107,7 +106,6 @@ public partial class FriendsWindow : Window
         SwkLogger.Debug($"FriendsWindow ctor (ShopInfo): {shopInfo.MachineName}/{shopInfo.ShareName}");
         Loaded += (_, _) =>
         {
-            SyncScanModeFromCache();
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
             PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
@@ -115,11 +113,6 @@ public partial class FriendsWindow : Window
             SelectCurrentCandidateRow();
             _initialApplied = true;
         };
-    }
-
-    private void SyncScanModeFromCache()
-    {
-        ScanModeComboBox.SelectedIndex = SwkNetworkCache.LastScanMode == ScanMode.Full ? 1 : 0;
     }
 
     // ── フォーム適用 ──────────────────────────────────────────────────
@@ -136,6 +129,9 @@ public partial class FriendsWindow : Window
         DeleteButton.IsEnabled = false;
         CommitAction action = ResolveCommitAction();
         bool activeFriendIsLive = IsActiveFriendLive();
+        SwkNotificationListener.ShopInfo? activeFriendVisibleShop = _activeFriend is null
+            ? null
+            : FindVisibleShopForFriend(_activeFriend, _shopInfos);
 
         if (_activeFriend != null)
         {
@@ -145,32 +141,40 @@ public partial class FriendsWindow : Window
             {
                 string targetHost = NormalizeHost(_activeNewCandidate.HostName);
                 if (string.IsNullOrEmpty(targetHost)) targetHost = _activeNewCandidate.Address.ToString();
+                string targetShare = _activeFriend.ShareName;
                 TitleTextBlock.Text = "接続先を切替";
                 SubtitleTextBlock.Text =
-                    $"「{friendName}」の接続先を「{targetHost}」へ切り替えます。下の接続未確定リストで候補を選んだ状態です。";
+                    $"「{friendName}」の接続先を共有「{targetShare}」として「{targetHost}」へ切り替えます。下の接続未確定リストで候補を選んだ状態です。";
             }
             else if (_activeShopInfo != null)
             {
                 // 接続先切替モード: 招待コード交換で接続先を更新
                 string shopHost = NormalizeHost(_activeShopInfo.MachineName);
                 string shopIp = string.IsNullOrEmpty(_activeShopInfo.IpAddress) ? string.Empty : $"({_activeShopInfo.IpAddress}) ";
+                string shopShare = string.IsNullOrWhiteSpace(_activeShopInfo.ShareName) ? "(共有名なし)" : _activeShopInfo.ShareName;
                 if (_activeFriend.HasCertificateMismatch)
                 {
                     TitleTextBlock.Text = "証明書を再確認";
                     SubtitleTextBlock.Text =
-                        $"「{friendName}」の証明書が変わっています。検出中の「{shopHost}」{shopIp}へ再接続して登録情報を更新します。";
+                        $"「{friendName}」の証明書が変わっています。検出中の共有「{shopShare}」の「{shopHost}」{shopIp}へ再接続して登録情報を更新します。";
                 }
                 else
                 {
                     TitleTextBlock.Text = "接続先を切替";
                     SubtitleTextBlock.Text =
-                        $"「{friendName}」の接続先を「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
+                        $"「{friendName}」の接続先を共有「{shopShare}」の「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
                 }
             }
             else if (activeFriendIsLive)
             {
                 TitleTextBlock.Text = "ユーザー情報を更新";
                 SubtitleTextBlock.Text = $"「{friendName}」の名前・メモ・アイコンを更新できます。";
+            }
+            else if (activeFriendVisibleShop is not null)
+            {
+                TitleTextBlock.Text = "ユーザー情報を更新";
+                SubtitleTextBlock.Text =
+                    $"「{friendName}」は現在 ShareWorkin 起動中です。接続情報を更新するか、下の接続未確定リストから候補を選んで接続先を切り替えてください。";
             }
             else
             {
@@ -185,7 +189,7 @@ public partial class FriendsWindow : Window
             AccessTextBlock.Text =
                 string.Equals(_activeFriend.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
                     ? "見るだけ" : "自由に編集";
-            PresenceTextBlock.Text = ResolvePresence(_activeFriend, activeFriendIsLive);
+            PresenceTextBlock.Text = ResolvePresence(_activeFriend, activeFriendIsLive, activeFriendVisibleShop is not null);
             DeleteButton.IsEnabled = true;
             if (_activeShopInfo != null)
             {
@@ -267,7 +271,7 @@ public partial class FriendsWindow : Window
         string accessLabel = string.Equals(_activeFriend.AccessLevel, "Read", StringComparison.OrdinalIgnoreCase)
             ? "見るだけ"
             : "自由に編集";
-        string presence = ResolvePresence(_activeFriend, IsActiveFriendLive());
+        string presence = ResolvePresence(_activeFriend, IsActiveFriendLive(), FindVisibleShopForFriend(_activeFriend, _shopInfos) is not null);
         FriendPermissionSummaryTextBlock.Text =
             $"共有フォルダー: {(string.IsNullOrWhiteSpace(shareName) ? "(未設定)" : shareName)} / 権限: {accessLabel}";
         FriendPermissionDetailTextBlock.Text = $"現在の状態: {presence}";
@@ -381,6 +385,7 @@ public partial class FriendsWindow : Window
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         HashSet<string> addedHosts = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> addedLiveShops = new(StringComparer.OrdinalIgnoreCase);
         _candidateRows.Clear();
 
         // LAN スキャン結果から未確立のものを追加
@@ -395,6 +400,16 @@ public partial class FriendsWindow : Window
                 string.Equals(NormalizeHost(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
             // 登録可能 = ShopInfo あり（ShareWorkin 起動中）または 既存オフライン友達と一致（接続先変更/再開できる）
             bool isSelectable = shopInfo != null || offlineFriendHosts.Contains(host);
+
+            if (shopInfo is not null)
+            {
+                string liveShopKey = $"{NormalizeHost(shopInfo.MachineName)}|{shopInfo.ShareName}";
+                if (!addedLiveShops.Add(liveShopKey))
+                {
+                    continue;
+                }
+            }
+
             _candidateRows.Add(new CandidateRow(c, shopInfo, isSelectable));
             addedHosts.Add(host);
         }
@@ -490,9 +505,10 @@ public partial class FriendsWindow : Window
                 // 未接続の登録済み友達が表示中 → 接続先変更を提案
                 string dlgHost = NormalizeHost(selected.Source.HostName);
                 if (string.IsNullOrEmpty(dlgHost)) dlgHost = selected.Source.Address.ToString();
+                string dlgShare = string.IsNullOrWhiteSpace(selected.ShopInfo?.ShareName) ? "(共有名なし)" : selected.ShopInfo!.ShareName;
                 MessageBoxResult confirm = System.Windows.MessageBox.Show(
                     this,
-                    $"「{_activeFriend.DisplayName}」の接続先を「{dlgHost}」へ切り替えますか？",
+                    $"「{_activeFriend.DisplayName}」の接続先を共有「{dlgShare}」の「{dlgHost}」へ切り替えますか？",
                     "ShareWorkin",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question,
@@ -615,13 +631,12 @@ public partial class FriendsWindow : Window
 
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
-        ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
-        SwkLogger.Debug($"FriendsWindow.ReloadButton_Click: mode={mode}");
+        SwkLogger.Debug("FriendsWindow.ReloadButton_Click: mode=Quick");
         ReloadButton.IsEnabled = false;
-        StatusTextBlock.Text = mode == ScanMode.Full ? "全PCスキャン中…" : "接続可能スキャン中…";
+        StatusTextBlock.Text = "接続可能スキャン中…";
         try
         {
-            await SwkNetworkCache.RefreshAsync(mode);
+            await SwkNetworkCache.RefreshAsync(ScanMode.Quick);
         }
         catch (Exception ex)
         {
@@ -1037,10 +1052,11 @@ public partial class FriendsWindow : Window
         }
     }
 
-    private string ResolvePresence(Friend f, bool isLive)
+    private string ResolvePresence(Friend f, bool isLive, bool isVisible)
     {
         if (string.IsNullOrWhiteSpace(f.LastCheckedAt)) return "未確認";
         if (f.HasCertificateMismatch) return "証明書不一致";
+        if (!isLive && isVisible) return "ShareWorkin 起動中";
         return isLive ? "来店可能" : "不在";
     }
 
@@ -1057,7 +1073,9 @@ public partial class FriendsWindow : Window
             return false;
         }
 
-        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(_activeFriend, _shopInfos);
+        SwkNotificationListener.ShopInfo? liveShop =
+            FindLiveShopForFriend(_activeFriend, _shopInfos) ??
+            FindVisibleShopForFriend(_activeFriend, _shopInfos);
         if (liveShop is null)
         {
             return false;
@@ -1101,10 +1119,12 @@ public partial class FriendsWindow : Window
 
     private void PromoteCertificateMismatchToLiveShop()
     {
-        if (_activeFriend?.HasCertificateMismatch != true) return;
+        if (_activeFriend is null) return;
         if (_activeShopInfo != null) return;
 
-        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(_activeFriend, _shopInfos);
+        SwkNotificationListener.ShopInfo? liveShop =
+            FindLiveShopForFriend(_activeFriend, _shopInfos) ??
+            FindVisibleShopForFriend(_activeFriend, _shopInfos);
         if (liveShop is null) return;
 
         _activeShopInfo = liveShop;
@@ -1127,6 +1147,37 @@ public partial class FriendsWindow : Window
         }
 
         return FindLiveShopByHostAndShare(friend, shopInfos);
+    }
+
+    private static SwkNotificationListener.ShopInfo? FindVisibleShopForFriend(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
+        SwkNotificationListener.ShopInfo? exact = FindLiveShopByHostAndShare(friend, shopInfos);
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
+                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (sameShare.Count == 1)
+            {
+                return sameShare[0];
+            }
+        }
+
+        string friendIp = friend.LastKnownAddress ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(friendIp))
+        {
+            return shopInfos.FirstOrDefault(s =>
+                string.Equals(s.IpAddress, friendIp, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return null;
     }
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
@@ -1351,6 +1402,24 @@ public partial class FriendsWindow : Window
                 if (ExistingFriend != null)
                     return $"{ExistingFriend.DisplayName} ({ExistingFriend.HostMachineName})";
                 return "?";
+            }
+        }
+
+        public string ShareNameLabel
+        {
+            get
+            {
+                if (ShopInfo != null)
+                {
+                    return string.IsNullOrWhiteSpace(ShopInfo.ShareName) ? "(共有名なし)" : ShopInfo.ShareName;
+                }
+
+                if (ExistingFriend != null)
+                {
+                    return string.IsNullOrWhiteSpace(ExistingFriend.ShareName) ? "(共有名なし)" : ExistingFriend.ShareName;
+                }
+
+                return "(未検出)";
             }
         }
 

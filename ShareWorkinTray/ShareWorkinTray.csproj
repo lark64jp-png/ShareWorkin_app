@@ -14,6 +14,7 @@
     <AssemblyVersion>1.18.0.0</AssemblyVersion>
     <InformationalVersion>1.18</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\ShareWorkin\app.ico</ApplicationIcon>
     <Company>ShareWorkin</Company>
     <Product>ShareWorkin</Product>
     <Copyright>Copyright (c) 2026 ShareWorkin</Copyright>

@@ -18,6 +18,7 @@ public sealed class TrayApp : IDisposable
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
     internal readonly TrayPipeServer PipeServer;
+    private FileSystemWatcher? _shopContentsWatcher;
 
     private bool _isShopOpen;
     private string? _shopFolder;
@@ -64,6 +65,7 @@ public sealed class TrayApp : IDisposable
 
     public void Dispose()
     {
+        StopShopContentsWatcher();
         PipeServer.Stop();
         if (_isShopOpen && !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder))
         {
@@ -144,12 +146,14 @@ public sealed class TrayApp : IDisposable
         _activeShareName = shareName;
         _shareAccessRight = accessRight;
         PatchSettingsOpenState(true, shopFolder);
+        StartShopContentsWatcher(shopFolder);
         return (true, null, false, OwnershipChangePrompt.None, null);
     }
 
     public bool CloseShop()
     {
         if (!_isShopOpen) return true;
+        StopShopContentsWatcher();
         bool ok = !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder)
             && SmbController.CloseShopSequence(_activeShareName!, _shopFolder!);
         _isShopOpen = false;
@@ -256,6 +260,100 @@ public sealed class TrayApp : IDisposable
             File.WriteAllText(SettingsPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { SwkLogger.Warn($"TrayApp.PatchSettingsOpenState error: {ex.Message}"); }
+    }
+
+    private void StartShopContentsWatcher(string shopFolder)
+    {
+        StopShopContentsWatcher();
+
+        try
+        {
+            _shopContentsWatcher = new FileSystemWatcher(shopFolder)
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
+                IncludeSubdirectories = true,
+                EnableRaisingEvents = true,
+            };
+            _shopContentsWatcher.Created += ShopContentsWatcher_Created;
+            _shopContentsWatcher.Renamed += ShopContentsWatcher_Renamed;
+            _shopContentsWatcher.Error += ShopContentsWatcher_Error;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            SwkLogger.Warn($"StartShopContentsWatcher failed: {ex.Message}");
+            StopShopContentsWatcher();
+        }
+    }
+
+    private void StopShopContentsWatcher()
+    {
+        if (_shopContentsWatcher is null)
+        {
+            return;
+        }
+
+        _shopContentsWatcher.EnableRaisingEvents = false;
+        _shopContentsWatcher.Created -= ShopContentsWatcher_Created;
+        _shopContentsWatcher.Renamed -= ShopContentsWatcher_Renamed;
+        _shopContentsWatcher.Error -= ShopContentsWatcher_Error;
+        _shopContentsWatcher.Dispose();
+        _shopContentsWatcher = null;
+    }
+
+    private void ShopContentsWatcher_Created(object sender, FileSystemEventArgs e)
+    {
+        HandleShopContentArrival(e.FullPath, SharePolicyRepairReason.ExternalCreated);
+    }
+
+    private void ShopContentsWatcher_Renamed(object sender, RenamedEventArgs e)
+    {
+        HandleShopContentArrival(e.FullPath, SharePolicyRepairReason.ExternalRenamed);
+    }
+
+    private void ShopContentsWatcher_Error(object sender, ErrorEventArgs e)
+    {
+        SwkLogger.Warn($"ShopContentsWatcher error: {e.GetException()?.Message ?? "unknown"}");
+    }
+
+    private void HandleShopContentArrival(string affectedPath, SharePolicyRepairReason reason)
+    {
+        string? shopRootPath = _shopFolder;
+        if (!_isShopOpen || string.IsNullOrWhiteSpace(shopRootPath) || string.IsNullOrWhiteSpace(affectedPath))
+        {
+            return;
+        }
+
+        if (!IsUnderFolder(affectedPath, shopRootPath) || IsUnderHoldFolder(affectedPath, shopRootPath))
+        {
+            return;
+        }
+
+        string policySourceFolder = Path.GetDirectoryName(affectedPath) ?? shopRootPath;
+        _ = Task.Run(() => SharePolicyRepair.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason));
+    }
+
+    private static bool IsUnderHoldFolder(string path, string shopRootPath)
+    {
+        string holdFolderPath = Path.Combine(shopRootPath, "保留");
+        return IsUnderFolder(path, holdFolderPath);
+    }
+
+    private static bool IsUnderFolder(string path, string rootPath)
+    {
+        try
+        {
+            string root = Path.GetFullPath(rootPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string current = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            return string.Equals(root, current, StringComparison.OrdinalIgnoreCase) ||
+                   current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static System.Drawing.Icon LoadAppIcon()

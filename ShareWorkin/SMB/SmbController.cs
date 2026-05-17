@@ -65,43 +65,31 @@ public static class SmbController
             return Fail("お店の鍵が用意できませんでした。", before, null);
         }
 
-        // 草案6 §A: 所有権が現ユーザーに無い項目が配下に混ざる場合も、
-        // 開店時点でお店の管理下へ揃えるために同意取得を挟む。
+        // 草案6 §A を運用に合わせて更新:
+        // ローカル PC 内のお店配下は、開店時に現在の Windows 利用者の管理下へ自動で揃える。
+        // Tray 復元でもここで止まらないよう、承認待ちは返さず takeown を実行する。
         AclRepairPreflight aclRepair = SmbNtfsManager.PreflightAclRepair(request.ShopRootPath);
         if (aclRepair.NeedsOwnershipChange)
         {
-            OwnershipChangePrompt prompt = aclRepair.EnumerationBlocked
-                ? OwnershipChangePrompt.Unverifiable
-                : OwnershipChangePrompt.Verified;
-
-            if (!aclRepair.CanRepairWithOwnershipChange)
+            if (aclRepair.BlockedPaths.Count > 0)
             {
-                SwkLogger.Warn($"OpenShopSequence aborted: {aclRepair.BlockedPaths.Count} item(s) cannot have ownership changed");
+                SwkLogger.Warn(
+                    $"OpenShopSequence: preflight marked {aclRepair.BlockedPaths.Count} item(s) as blocked; trying ownership repair anyway");
+            }
+
+            SwkLogger.Info("OpenShopSequence: ownership change required, executing takeown automatically");
+            if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
+            {
+                string message = aclRepair.BlockedPaths.Count > 0
+                    ? "このフォルダーの一部のファイルはアクセス設定を整えられないため、お店として開けません。"
+                    : "お店のアクセス設定を整えられませんでした。";
                 return new ShopOpenResult(
                     Succeeded: false,
-                    FailureMessage: "このフォルダーの一部のファイルはアクセス設定を整えられないため、お店として開けません。",
+                    FailureMessage: message,
                     StatusBefore: before,
                     StatusAfter: null,
                     OwnershipPrompt: OwnershipChangePrompt.None,
-                    BlockedPaths: aclRepair.BlockedPaths);
-            }
-
-            if (!userAuthorizedOwnershipChange)
-            {
-                SwkLogger.Info($"OpenShopSequence: ownership change required ({prompt}), awaiting user consent");
-                return new ShopOpenResult(
-                    Succeeded: false,
-                    FailureMessage: null,
-                    StatusBefore: before,
-                    StatusAfter: null,
-                    OwnershipPrompt: prompt,
-                    BlockedPaths: null);
-            }
-
-            SwkLogger.Info("OpenShopSequence: user authorized ownership change, executing takeown");
-            if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
-            {
-                return Fail("お店のアクセス設定を整えられませんでした。", before, null);
+                    BlockedPaths: aclRepair.BlockedPaths.Count > 0 ? aclRepair.BlockedPaths : null);
             }
         }
 

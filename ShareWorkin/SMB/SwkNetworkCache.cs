@@ -150,11 +150,18 @@ public static class SwkNetworkCache
             if (string.IsNullOrWhiteSpace(value)) return;
             if (!IPAddress.TryParse(value, out IPAddress? address)) return;
             if (address.AddressFamily != AddressFamily.InterNetwork) return;
+            if (IsLinkLocal(address)) return;
             string key = address.ToString();
             if (!merged.ContainsKey(key))
             {
                 merged[key] = new LanCandidate(address, hostName);
             }
+        }
+
+        static bool IsLinkLocal(IPAddress address)
+        {
+            byte[] bytes = address.GetAddressBytes();
+            return bytes.Length == 4 && bytes[0] == 169 && bytes[1] == 254;
         }
     }
 }

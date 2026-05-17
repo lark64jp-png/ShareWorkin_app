@@ -73,17 +73,15 @@ public partial class UserListWindow : Window
     {
         if (_isRefreshing) return;
 
-        ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
-
         ReloadButton.IsEnabled = false;
         LoadingBar.Visibility = Visibility.Visible;
-        ScanStateTextBlock.Text = mode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
+        ScanStateTextBlock.Text = "接続可能スキャン";
         StatusTextBlock.Text = "スキャン中…";
 
         try
         {
             _isRefreshing = true;
-            await SwkNetworkCache.RefreshAsync(mode);
+            await SwkNetworkCache.RefreshAsync(ScanMode.Quick);
         }
         finally
         {
@@ -107,15 +105,16 @@ public partial class UserListWindow : Window
 
         var snapshot = _rows.Select(r => (r.Kind, r.NameLabel)).ToList();
 
-        ScanMode mode = ScanModeComboBox.SelectedIndex == 1 ? ScanMode.Full : ScanMode.Quick;
+        LoadingBar.Visibility = Visibility.Visible;
         _isRefreshing = true;
         try
         {
-            await SwkNetworkCache.RefreshAsync(mode);
+            await SwkNetworkCache.RefreshAsync(ScanMode.Quick);
         }
         finally
         {
             _isRefreshing = false;
+            LoadingBar.Visibility = Visibility.Collapsed;
         }
 
         BuildUiFromCache();
@@ -160,8 +159,7 @@ public partial class UserListWindow : Window
         int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
         int installCandidate = rows.Count(r => r.Kind == UserListRowKind.InstallCandidate);
 
-        string modeLabel = SwkNetworkCache.LastScanMode == ScanMode.Full ? "全PCスキャン" : "接続可能スキャン";
-        ScanStateTextBlock.Text = modeLabel;
+        ScanStateTextBlock.Text = "接続可能スキャン";
         if (_rows.Count == 0)
             StatusTextBlock.Text = "周りには誰もいません。";
         else
@@ -176,11 +174,13 @@ public partial class UserListWindow : Window
         List<Friend> friends)
     {
         HashSet<string> representedCandidateKeys = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> representedLiveShopKeys = new(StringComparer.OrdinalIgnoreCase);
         List<UserListRow> rows = new();
 
         foreach (Friend f in friends)
         {
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
+            SwkNotificationListener.ShopInfo? visibleShop = liveShop ?? FindVisibleShopForFriend(f, shopInfos);
 
             if (liveShop is not null && !f.HasCertificateMismatch)
             {
@@ -190,7 +190,7 @@ public partial class UserListWindow : Window
             }
             else
             {
-                rows.Add(UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), liveShop));
+                rows.Add(UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), visibleShop));
             }
 
             if (TryFindRecoveryCandidateForFriend(f, candidates, shopInfos, out LanCandidate? recoveryCandidate, out SwkNotificationListener.ShopInfo? recoveryShop))
@@ -217,7 +217,14 @@ public partial class UserListWindow : Window
             bool isOpen = shopInfo is not null;
 
             if (isOpen)
+            {
+                string liveShopKey = $"{NormalizeHostName(shopInfo!.MachineName)}|{shopInfo.ShareName}";
+                if (!representedLiveShopKeys.Add(liveShopKey))
+                {
+                    continue;
+                }
                 rows.Add(UserListRow.ForNewShop(c, shopInfo));
+            }
             else if (c.IsInstallCandidate)
                 rows.Add(UserListRow.ForInstallCandidate(c));
             else
@@ -323,8 +330,11 @@ public partial class UserListWindow : Window
         AddStatusRun("登録可能", newShop, Color.FromRgb(255, 152, 0));
         AddSeparatorRun();
         AddStatusRun("登録不可", windowsPcOnly, Color.FromRgb(120, 120, 120));
-        AddSeparatorRun();
-        AddStatusRun("全PC分", installCandidate, Color.FromRgb(80, 110, 170));
+        if (installCandidate > 0)
+        {
+            AddSeparatorRun();
+            AddStatusRun("Windowsのみ", installCandidate, Color.FromRgb(80, 110, 170));
+        }
     }
 
     private void AddStatusRun(string label, int count, Color color)
@@ -594,6 +604,27 @@ public partial class UserListWindow : Window
         return FindLiveShopByHostAndShare(friend, shopInfos);
     }
 
+    private static SwkNotificationListener.ShopInfo? FindVisibleShopForFriend(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+    {
+        SwkNotificationListener.ShopInfo? exact = FindLiveShopByHostAndShare(friend, shopInfos);
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        if (string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            return null;
+        }
+
+        List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
+            .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return sameShare.Count == 1 ? sameShare[0] : null;
+    }
+
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
@@ -645,31 +676,38 @@ public partial class UserListWindow : Window
     {
         foreach (Friend friend in friends)
         {
-            if (shopInfo is not null && HasBothInstanceIds(friend, shopInfo))
+            bool sameHost = SameHost(friend.HostMachineName, candidate.HostName);
+            if (shopInfo is null)
             {
-                if (SameSwkInstance(friend, shopInfo) &&
-                    string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase))
+                if (sameHost)
                 {
                     return true;
                 }
-
                 continue;
             }
 
-            bool sameHost = SameHost(friend.HostMachineName, candidate.HostName);
-            if (!sameHost)
-            {
-                continue;
-            }
-
-            if (shopInfo is null)
+            bool sameShare = string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
+            if (HasBothInstanceIds(friend, shopInfo) &&
+                SameSwkInstance(friend, shopInfo) &&
+                sameShare)
             {
                 return true;
             }
 
-            if (string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase))
+            if (sameHost && sameShare)
             {
                 return true;
+            }
+
+            if (!sameHost && sameShare)
+            {
+                List<Friend> sameShareFriends = friends
+                    .Where(f => string.Equals(f.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (sameShareFriends.Count == 1)
+                {
+                    return true;
+                }
             }
         }
 

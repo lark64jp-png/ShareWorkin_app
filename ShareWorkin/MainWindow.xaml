@@ -16,9 +16,9 @@
         <Style x:Key="ShopColumnHeaderStyle" TargetType="{x:Type GridViewColumnHeader}">
             <Setter Property="Background" Value="#F1EFE8" />
             <Setter Property="BorderBrush" Value="#D8D2C3" />
-            <Setter Property="BorderThickness" Value="0,0,1,1" />
-            <Setter Property="Padding" Value="10,6" />
-            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FontWeight" Value="Medium" />
             <Setter Property="Foreground" Value="#3F3A32" />
@@ -36,8 +36,8 @@
             <Setter Property="Foreground" Value="#3F3A32" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="Width" Value="32" />
-            <Setter Property="Height" Value="30" />
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="26" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -108,7 +108,7 @@
                                Margin="10,0,0,6"
                                VerticalAlignment="Bottom" />
                 </StackPanel>
-                <TextBlock Text="共有フォルダーをあなたのお店として開くアプリ"
+                <TextBlock Text="共有相手と自分のPC内部のフォルダーを共有します"
                            Foreground="#E7EFE8"
                            Margin="0,6,0,0"
                            FontSize="14" />
@@ -151,15 +151,17 @@
                                  Height="34"
                                  VerticalContentAlignment="Center"
                                  IsReadOnly="True"
+                                 Background="#FFF8CC"
                                  FontSize="13" />
-                        <Button Grid.Column="2"
-                                Content="選ぶ"
+                        <Button x:Name="BrowseButton"
+                                Grid.Column="2"
+                                Content="共有指定"
                                 Width="88"
                                 Height="34"
                                 Click="BrowseButton_Click" />
                         <Button x:Name="ShopDoorButton"
                                 Grid.Column="4"
-                                Content="お店を開く"
+                                Content="共有開始"
                                 Width="100"
                                 Height="34"
                                 Click="ShopDoorButton_Click" />
@@ -291,11 +293,12 @@
 
                         <StackPanel Orientation="Horizontal"
                                     VerticalAlignment="Center"
-                                    Margin="0,0,16,0">
+                                    Margin="0,0,6,0">
                             <ComboBox x:Name="ExplorerTargetComboBox"
                                       DisplayMemberPath="Label"
-                                      MinWidth="130"
+                                      MinWidth="136"
                                       Height="32"
+                                      Padding="4,0,2,0"
                                       FontSize="16"
                                       FontWeight="SemiBold"
                                       VerticalContentAlignment="Center"
@@ -686,7 +689,7 @@
 
                 <TextBlock x:Name="FooterMessageTextBlock"
                            Grid.Column="0"
-                           Text="ShareWorkin - お店の気配を受け取ります"
+                           Text="共有相手の気配を受け取ります"
                            Foreground="#5D5448"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"
