@@ -1,48 +1,111 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Windows;
+using ShareWorkin.SMB;
 
 namespace ShareWorkin;
 
 public partial class HistoryWindow : Window
 {
-    public HistoryWindow(string title, string subtitle, IReadOnlyList<HistoryEntry> entries)
+    private readonly HistoryChannel _channel;
+    private readonly int _maxCount;
+    private readonly ObservableCollection<HistoryRow> _rows = [];
+    private readonly Dictionary<string, HistoryEntry> _entryMap = [];
+    private const string TimestampFormat = "yyyy/MM/dd HH:mm:ss";
+
+    public HistoryWindow(string title, string subtitle, HistoryChannel channel, int maxCount)
     {
         InitializeComponent();
 
+        _channel = channel;
+        _maxCount = maxCount;
         Title = title;
         TitleTextBlock.Text = title;
         SubtitleTextBlock.Text = subtitle;
+        HistoryDataGrid.ItemsSource = _rows;
 
-        List<HistoryRow> rows = entries
+        RefreshRows();
+        HistoryRepository.HistoryChanged += HistoryRepository_HistoryChanged;
+        SwkHistoryJournal.RecordAppended += SwkHistoryJournal_RecordAppended;
+        Closed += HistoryWindow_Closed;
+    }
+
+    private void RefreshRows()
+    {
+        List<HistoryRow> rows = HistoryRepository.GetEntries(_channel, _maxCount)
             .OrderByDescending(e => e.OccurredAt)
             .Select(static e => new HistoryRow
             {
+                EntryId = e.Id,
                 TimeText = e.OccurredAt.ToString("yyyy/MM/dd HH:mm:ss"),
-                FriendName = string.IsNullOrWhiteSpace(e.FriendName) ? "-" : e.FriendName,
-                DirectionText = GetDirectionText(e.Direction),
+                UserText = string.IsNullOrWhiteSpace(e.FriendName) ? "自分" : e.FriendName,
+                PathText = BuildPathText(e),
                 EventTypeText = GetEventTypeText(e.EventType),
-                TargetName = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
+                FileNameText = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
+                ContentText = e.Message,
+                NoteText = string.IsNullOrWhiteSpace(e.Note) ? BuildFallbackNote(e) : e.Note,
                 OutcomeText = GetOutcomeText(e.Outcome),
-                DetailText = e.Message,
             })
             .ToList();
 
-        HistoryDataGrid.ItemsSource = rows;
+        _entryMap.Clear();
+        foreach (HistoryEntry entry in HistoryRepository.GetEntries(_channel, _maxCount))
+        {
+            _entryMap[entry.Id] = entry;
+        }
+
+        _rows.Clear();
+        foreach (HistoryRow row in rows)
+        {
+            _rows.Add(row);
+        }
+
         CountTextBlock.Text = $"{rows.Count} 件";
+        if (_rows.Count > 0)
+        {
+            HistoryDataGrid.SelectedIndex = 0;
+        }
+        else
+        {
+            DetailTextBox.Text = string.Empty;
+        }
     }
 
-    private static string GetDirectionText(HistoryDirection direction) => direction switch
+    private void HistoryRepository_HistoryChanged(HistoryChannel channel)
     {
-        HistoryDirection.Incoming => "もらう",
-        HistoryDirection.Outgoing => "渡す",
-        _ => "-"
-    };
+        if (channel != _channel)
+        {
+            return;
+        }
+
+        Dispatcher.InvokeAsync(RefreshRows);
+    }
+
+    private void SwkHistoryJournal_RecordAppended(string channel)
+    {
+        if (!string.Equals(channel, _channel.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Dispatcher.InvokeAsync(RefreshRows);
+    }
+
+    private void HistoryWindow_Closed(object? sender, EventArgs e)
+    {
+        HistoryRepository.HistoryChanged -= HistoryRepository_HistoryChanged;
+        SwkHistoryJournal.RecordAppended -= SwkHistoryJournal_RecordAppended;
+        Closed -= HistoryWindow_Closed;
+    }
 
     private static string GetOutcomeText(HistoryOutcome outcome) => outcome switch
     {
         HistoryOutcome.Success => "成功",
+        HistoryOutcome.Warning => "警告",
         HistoryOutcome.Failure => "失敗",
         _ => "情報"
     };
@@ -64,17 +127,143 @@ public partial class HistoryWindow : Window
         "UpdateFriend" => "内容更新",
         "Switch" => "接続先変更",
         "Place" => "配置",
+        "Log" => "記録",
         _ => eventType
     };
+
+    private static string BuildPathText(HistoryEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.PathText))
+        {
+            return entry.PathText!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.DestinationFolder))
+        {
+            return entry.DestinationFolder!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SourcePath))
+        {
+            return Path.GetDirectoryName(entry.SourcePath) ?? entry.SourcePath!;
+        }
+
+        return "-";
+    }
+
+    private static string BuildFallbackNote(HistoryEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.Source))
+        {
+            return entry.Source!;
+        }
+
+        return "-";
+    }
+
+    private static string BuildDetailText(HistoryEntry entry)
+    {
+        List<string> lines =
+        [
+            $"日時: {entry.OccurredAt:yyyy/MM/dd HH:mm:ss}",
+            $"ユーザー: {GetUserText(entry)}",
+            $"アクション: {GetEventTypeText(entry.EventType)}",
+            $"結果: {GetOutcomeText(entry.Outcome)}",
+            $"パス: {BuildPathText(entry)}",
+            $"ファイル名: {entry.TargetName ?? "-"}",
+            $"内容: {entry.Message}",
+            $"備考: {(string.IsNullOrWhiteSpace(entry.Note) ? "-" : entry.Note)}",
+            $"方向: {entry.Direction}",
+            $"Source: {entry.Source ?? "-"}",
+            $"SourcePath: {entry.SourcePath ?? "-"}",
+            $"DestinationPath: {entry.DestinationPath ?? "-"}",
+            $"DestinationFolder: {entry.DestinationFolder ?? "-"}",
+            $"FriendId: {entry.FriendId ?? "-"}",
+        ];
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string GetUserText(HistoryEntry entry)
+        => string.IsNullOrWhiteSpace(entry.FriendName) ? "自分" : entry.FriendName!;
+
+    private void HistoryDataGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (HistoryDataGrid.SelectedItem is not HistoryRow row ||
+            string.IsNullOrWhiteSpace(row.EntryId) ||
+            !_entryMap.TryGetValue(row.EntryId, out HistoryEntry? entry))
+        {
+            DetailTextBox.Text = string.Empty;
+            return;
+        }
+
+        DetailTextBox.Text = BuildDetailText(entry);
+    }
+
+    private void DeleteHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        string input = DeleteTimestampTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            MessageBoxResult confirmAll = System.Windows.MessageBox.Show(
+                "すべての履歴を削除してよいですか？",
+                Title,
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (confirmAll != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            int deletedAllCount = HistoryRepository.DeleteEntries(_channel, deleteThrough: null);
+            RefreshRows();
+            System.Windows.MessageBox.Show(
+                deletedAllCount > 0 ? $"{deletedAllCount} 件の履歴を削除しました。" : "削除対象の履歴はありませんでした。",
+                Title,
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (!DateTime.TryParseExact(
+                input,
+                TimestampFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out DateTime deleteThrough))
+        {
+            System.Windows.MessageBox.Show(
+                $"日時は {TimestampFormat} の形式で入力してください。",
+                Title,
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            DeleteTimestampTextBox.Focus();
+            DeleteTimestampTextBox.SelectAll();
+            return;
+        }
+
+        int deletedCount = HistoryRepository.DeleteEntries(_channel, deleteThrough);
+        RefreshRows();
+        string deleteThroughText = deleteThrough.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+        System.Windows.MessageBox.Show(
+            deletedCount > 0
+                ? $"{deleteThroughText} 以前の履歴を {deletedCount} 件削除しました。"
+                : $"{deleteThroughText} 以前の削除対象はありませんでした。",
+            Title,
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
 }
 
 public sealed class HistoryRow
 {
+    public string EntryId { get; init; } = string.Empty;
     public string TimeText { get; init; } = string.Empty;
-    public string FriendName { get; init; } = string.Empty;
-    public string DirectionText { get; init; } = string.Empty;
+    public string UserText { get; init; } = string.Empty;
+    public string PathText { get; init; } = string.Empty;
+    public string FileNameText { get; init; } = string.Empty;
     public string EventTypeText { get; init; } = string.Empty;
-    public string TargetName { get; init; } = string.Empty;
+    public string ContentText { get; init; } = string.Empty;
+    public string NoteText { get; init; } = string.Empty;
     public string OutcomeText { get; init; } = string.Empty;
-    public string DetailText { get; init; } = string.Empty;
 }

@@ -48,7 +48,12 @@
       "Bash(ls -la \"H:/ShareWorkin_app \\(2\\).zip\" 2>/dev/null && echo \"exists\")",
       "Read(//h//**)",
       "Bash(python3 -c ' *)",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(Get-Item \"C:\\\\MyApps\\\\ShareWorkin\\\\ShareWorkin.exe\")",
+      "Bash(Select-Object LastWriteTime)",
+      "Bash(Get-ChildItem \"H:\\\\ShareWorkin共有\\\\Win11とNECと東芝_R\")",
+      "Bash(Select-Object Name, Attributes, Length)",
+      "Bash(Get-Content \"C:\\\\MyApps\\\\ShareWorkin\\\\logs\\\\swk_2026-05-18.log\" -Tail 60)"
     ]
   }
 }

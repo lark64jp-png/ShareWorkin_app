@@ -92,6 +92,7 @@ public partial class MainWindow : Window
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<HistoryChannel, HistoryWindow> _historyWindows = [];
     private readonly HashSet<string> _friendRefreshInFlight = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTime> _friendRefreshCooldownUntil = new(StringComparer.Ordinal);
     // セッション中のアイテム別許可設定。AllowedUsers は ShopItem ごとに in-memory のため
@@ -743,7 +744,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         HistoryOutcome outcome = HistoryOutcome.Info,
         HistoryDirection direction = HistoryDirection.None,
         Friend? friend = null,
-        string? targetName = null)
+        string? targetName = null,
+        string? pathText = null,
+        string? note = null,
+        string? source = null,
+        string? sourcePath = null,
+        string? destinationPath = null,
+        string? destinationFolder = null)
     {
         HistoryRepository.Append(new HistoryEntry
         {
@@ -755,7 +762,49 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             FriendId = friend?.Id,
             FriendName = friend is null ? null : GetFriendLabel(friend),
             TargetName = targetName,
+            PathText = pathText,
+            Note = note,
+            Source = source,
+            SourcePath = sourcePath,
+            DestinationPath = destinationPath,
+            DestinationFolder = destinationFolder,
         });
+    }
+
+    private void ApplyExplorerActionResult(ExplorerActionResult result)
+    {
+        if (string.IsNullOrWhiteSpace(result.LogMessage) is false)
+        {
+            if (result.State == ExplorerActionState.Failure)
+            {
+                SwkLogger.Warn(result.LogMessage);
+            }
+            else
+            {
+                SwkLogger.Info(result.LogMessage);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(result.UserMessage) is false)
+        {
+            SetTransientStatus(result.UserMessage);
+        }
+
+        if (result.ShouldWriteHistory)
+        {
+            AppendHistory(
+                HistoryChannel.Update,
+                result.HistoryMessage!,
+                result.EventType,
+                result.HistoryOutcome,
+                targetName: result.TargetName,
+                pathText: result.PathText,
+                note: result.Note,
+                source: result.Source,
+                sourcePath: result.SourcePath,
+                destinationPath: result.DestinationPath,
+                destinationFolder: result.DestinationFolder);
+        }
     }
 
     private static string GetFriendLabel(Friend friend) =>
@@ -763,10 +812,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShowHistoryDialog(HistoryChannel channel, string title)
     {
-        IReadOnlyList<HistoryEntry> entries = HistoryRepository.GetEntries(channel, maxCount: 40);
-        if (entries.Count == 0)
+        int maxCount = channel == HistoryChannel.Update ? 200 : 40;
+        if (_historyWindows.TryGetValue(channel, out HistoryWindow? existingWindow))
         {
-            SetTransientStatus($"{title}はまだありません。");
+            if (existingWindow.WindowState == WindowState.Minimized)
+            {
+                existingWindow.WindowState = WindowState.Normal;
+            }
+
+            existingWindow.Activate();
+            existingWindow.Focus();
             return;
         }
 
@@ -776,8 +831,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             HistoryChannel.Notification => "通知対象になった出来事の履歴です。",
             _ => "自分のお店で起きた更新の履歴です。",
         };
-        HistoryWindow window = new(title, subtitle, entries) { Owner = this };
-        window.ShowDialog();
+        HistoryWindow window = new(title, subtitle, channel, maxCount) { Owner = this };
+        window.Closed += (_, _) => _historyWindows.Remove(channel);
+        _historyWindows[channel] = window;
+        window.Show();
+        window.Activate();
     }
 
     private void NotifyExternalShopChange()
@@ -1688,59 +1746,35 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         int placedCount = 0;
         string? lastPlacedName = null;
-        bool sawSameName = false;
-        List<string> placedPaths = new();
 
         foreach (string sourcePath in paths)
         {
-            string sourceName = Path.GetFileName(sourcePath);
-            string destinationPath = Path.Combine(destinationFolder, sourceName);
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+            ExplorerActionResult result = ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
             {
-                sawSameName = true;
-                continue;
-            }
-            try
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = sourcePath,
+                DestinationFolder = destinationFolder,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
+
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi &&
+                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                !string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
-                SuppressExternalChangeNotifications();
-                if (Directory.Exists(sourcePath))
-                {
-                    CopyDirectory(sourcePath, destinationPath);
-                    placedCount++;
-                    lastPlacedName = sourceName;
-                    placedPaths.Add(destinationPath);
-                }
-                else if (File.Exists(sourcePath))
-                {
-                    File.Copy(sourcePath, destinationPath);
-                    placedCount++;
-                    lastPlacedName = sourceName;
-                    placedPaths.Add(destinationPath);
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                SwkLogger.Warn($"Explorer[{_currentMode}]: Place failed: {sourceName}(外部) -> {destinationFolder}: {ex.Message}");
-                SetTransientStatus("置けませんでした。");
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+                placedCount++;
+                lastPlacedName = result.TargetName;
             }
         }
 
         if (placedCount > 0)
         {
-            string message = placedCount == 1 && lastPlacedName is not null
+            string statusMessage = placedCount == 1 && lastPlacedName is not null
                 ? $"{lastPlacedName} を置きました。"
                 : $"{placedCount} つ置きました。";
-            string placedName = placedCount == 1 && lastPlacedName is not null ? $"{lastPlacedName}(外部)" : $"{placedCount} item(s)(外部)";
-            SwkLogger.Info($"Explorer[{_currentMode}]: Place success: {placedName} -> {destinationFolder}");
-            SetTransientStatus(message);
-            AppendHistory(
-                HistoryChannel.Update,
-                message,
-                eventType: "Place",
-                outcome: HistoryOutcome.Success,
-                direction: HistoryDirection.None,
-                friend: null,
-                targetName: lastPlacedName);
+            SetTransientStatus(statusMessage);
 
             if (_currentFolder is not null &&
                 string.Equals(
@@ -1752,267 +1786,132 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 _pendingFocusName = lastPlacedName;
             }
 
-            foreach (string placedPath in placedPaths)
-            {
-                NoteFutureSharePolicyRepair(placedPath, destinationFolder, SharePolicyRepairReason.Placed);
-            }
-
             InvalidateSizeCacheUnder(destinationFolder);
             RefreshShopItems();
-        }
-        else if (sawSameName)
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Place blocked - same name in: {destinationFolder}");
-            SetTransientStatus("同じ名前があるので置けません。");
         }
     }
 
     private void MoveInternalDraggedItem(string sourcePath, string destinationFolder)
     {
-        if (string.IsNullOrWhiteSpace(sourcePath) || !Directory.Exists(destinationFolder))
+        ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - destination not found: {destinationFolder}");
-            SetTransientStatus("その場所が見つかりません。");
-            return;
-        }
+            ModeLabel = _currentMode.ToString(),
+            SourcePath = sourcePath,
+            DestinationFolder = destinationFolder,
+            IsHoldFolderPath = IsHoldFolderPath,
+            IsUnderFolder = IsUnderFolder,
+            GetShareStatus = GetItemShareStatus,
+            BeforeWrite = SuppressExternalChangeNotifications,
+        });
 
-        if (IsHoldFolderPath(sourcePath))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - hold folder: {sourcePath}");
-            SetTransientStatus("保留は移せません。");
-            return;
-        }
-
-        bool sourceIsDirectory = Directory.Exists(sourcePath);
-        bool sourceIsFile = File.Exists(sourcePath);
-        if (!sourceIsDirectory && !sourceIsFile)
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - source not found: {sourcePath}");
-            SetTransientStatus("その場所が見つかりません。");
-            return;
-        }
-
-        string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
-        if (string.Equals(
-                Path.GetFullPath(sourceParent),
-                Path.GetFullPath(destinationFolder),
-                StringComparison.OrdinalIgnoreCase))
+        if (result.State == ExplorerActionState.NoChange)
         {
             return;
         }
 
-        if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath))
+        ApplyExplorerActionResult(result);
+        if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.SourceParent) ||
+            string.IsNullOrWhiteSpace(result.DestinationFolder) ||
+            string.IsNullOrWhiteSpace(result.DestinationPath) ||
+            string.IsNullOrWhiteSpace(result.SourcePath))
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - destination is under source: {sourcePath} -> {destinationFolder}");
-            SetTransientStatus("その中へは移せません。");
             return;
         }
 
-        string destinationPath = Path.Combine(destinationFolder, Path.GetFileName(sourcePath));
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - same name: {destinationPath}");
-            SetTransientStatus("同じ名前があるので移せません。");
-            return;
-        }
-
-        string sourceName = Path.GetFileName(sourcePath);
-        string sourceStatus = GetItemShareStatus(sourcePath);
-        try
-        {
-            SuppressExternalChangeNotifications();
-            if (sourceIsDirectory)
-                Directory.Move(sourcePath, destinationPath);
-            else
-                File.Move(sourcePath, destinationPath);
-
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move success: {sourceName}({sourceStatus}) -> {destinationFolder}");
-            SetTransientStatus($"{sourceName} を移しました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{sourceName} を移しました。",
-                "Move",
-                HistoryOutcome.Success,
-                targetName: sourceName);
-            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
-            PreservePermissionOnMove(sourcePath, sourceParent, destinationPath, destinationFolder);
-            InvalidateSizeCacheUnder(sourceParent);
-            InvalidateSizeCacheUnder(destinationFolder);
-            RefreshShopItems();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SwkLogger.Warn($"Explorer[{_currentMode}]: Move failed: {sourceName}({sourceStatus}) -> {destinationFolder}: {ex.Message}");
-            SetTransientStatus("移せませんでした。");
-        }
+        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+        PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+        InvalidateSizeCacheUnder(result.SourceParent);
+        InvalidateSizeCacheUnder(result.DestinationFolder);
+        RefreshShopItems();
     }
 
     private void MoveInternalDraggedItems(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        if (!Directory.Exists(destinationFolder))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: MoveMulti blocked - destination not found: {destinationFolder}");
-            SetTransientStatus("その場所が見つかりません。");
-            return;
-        }
-
         int movedCount = 0;
-        int skippedCount = 0;
         string? lastName = null;
-        string? lastSourceParent = null;
-        List<string> movedLabels = new();
 
         foreach (string sourcePath in sourcePaths)
         {
-            if (IsHoldFolderPath(sourcePath)) { skippedCount++; continue; }
-
-            bool sourceIsDirectory = Directory.Exists(sourcePath);
-            bool sourceIsFile = File.Exists(sourcePath);
-            if (!sourceIsDirectory && !sourceIsFile) { skippedCount++; continue; }
-
-            string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
-            if (string.Equals(
-                    Path.GetFullPath(sourceParent),
-                    Path.GetFullPath(destinationFolder),
-                    StringComparison.OrdinalIgnoreCase))
-            { skippedCount++; continue; }
-
-            if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath)) { skippedCount++; continue; }
-
-            string destinationPath = Path.Combine(destinationFolder, Path.GetFileName(sourcePath));
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) { skippedCount++; continue; }
-
-            string itemStatus = GetItemShareStatus(sourcePath);
-            try
+            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
             {
-                SuppressExternalChangeNotifications();
-                if (sourceIsDirectory)
-                    Directory.Move(sourcePath, destinationPath);
-                else
-                    File.Move(sourcePath, destinationPath);
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = sourcePath,
+                DestinationFolder = destinationFolder,
+                IsHoldFolderPath = IsHoldFolderPath,
+                IsUnderFolder = IsUnderFolder,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
-                NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
-                PreservePermissionOnMove(sourcePath, sourceParent, destinationPath, destinationFolder);
-                InvalidateSizeCacheUnder(sourceParent);
-                movedCount++;
-                lastName = Path.GetFileName(sourcePath);
-                lastSourceParent = sourceParent;
-                movedLabels.Add($"{lastName}({itemStatus})");
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                continue;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi &&
+                !string.IsNullOrWhiteSpace(result.SourcePath) &&
+                !string.IsNullOrWhiteSpace(result.SourceParent) &&
+                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                !string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
-                SwkLogger.Warn($"Explorer[{_currentMode}]: MoveMulti failed: {Path.GetFileName(sourcePath)}({itemStatus}) -> {destinationFolder}: {ex.Message}");
-                skippedCount++;
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+                InvalidateSizeCacheUnder(result.SourceParent);
+                movedCount++;
+                lastName = result.TargetName;
             }
         }
 
         if (movedCount > 0)
         {
-            string message = movedCount == 1 && lastName is not null
+            string statusMessage = movedCount == 1 && lastName is not null
                 ? $"{lastName} を移しました。"
                 : $"{movedCount} つ移しました。";
-            SwkLogger.Info($"Explorer[{_currentMode}]: MoveMulti success: {string.Join(", ", movedLabels)} -> {destinationFolder}");
-            SetTransientStatus(message);
-            AppendHistory(
-                HistoryChannel.Update,
-                message,
-                "Move",
-                HistoryOutcome.Success,
-                targetName: lastName);
+            SetTransientStatus(statusMessage);
             InvalidateSizeCacheUnder(destinationFolder);
             RefreshShopItems();
-        }
-        else if (skippedCount > 0)
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: MoveMulti blocked all {skippedCount} item(s) -> {destinationFolder}");
-            SetTransientStatus("移せませんでした。");
         }
     }
 
     private void CopyInternalDraggedItem(string sourcePath, string destinationFolder)
     {
-        if (string.IsNullOrWhiteSpace(sourcePath) || !Directory.Exists(destinationFolder))
+        ExplorerActionResult result = ExplorerActionService.CopyItem(new CopyItemRequest
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - destination not found: {destinationFolder}");
-            SetTransientStatus("その場所が見つかりません。");
+            ModeLabel = _currentMode.ToString(),
+            SourcePath = sourcePath,
+            DestinationFolder = destinationFolder,
+            IsHoldFolderPath = IsHoldFolderPath,
+            IsUnderFolder = IsUnderFolder,
+            GetShareStatus = GetItemShareStatus,
+            BeforeWrite = SuppressExternalChangeNotifications,
+        });
+
+        if (result.State == ExplorerActionState.NoChange)
+        {
             return;
         }
 
-        if (IsHoldFolderPath(sourcePath))
+        ApplyExplorerActionResult(result);
+        if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.DestinationPath) ||
+            string.IsNullOrWhiteSpace(result.DestinationFolder))
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - hold folder: {sourcePath}");
-            SetTransientStatus("保留はコピーできません。");
             return;
         }
 
-        bool sourceIsDirectory = Directory.Exists(sourcePath);
-        bool sourceIsFile = File.Exists(sourcePath);
-        if (!sourceIsDirectory && !sourceIsFile)
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - source not found: {sourcePath}");
-            SetTransientStatus("その場所が見つかりません。");
-            return;
-        }
-
-        string sourceName = Path.GetFileName(sourcePath);
-        string sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+        InvalidateSizeCacheUnder(result.DestinationFolder);
         if (string.Equals(
-                Path.GetFullPath(sourceParent),
-                Path.GetFullPath(destinationFolder),
+                Path.GetFullPath(result.DestinationFolder),
+                Path.GetFullPath(_currentFolder ?? string.Empty),
                 StringComparison.OrdinalIgnoreCase))
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - same location: {sourcePath}");
-            SetTransientStatus("同じ場所にはコピーできません。");
-            return;
+            _pendingFocusName = result.TargetName;
         }
-
-        if (sourceIsDirectory && IsUnderFolder(destinationFolder, sourcePath))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - destination is under source: {sourcePath} -> {destinationFolder}");
-            SetTransientStatus("その中へはコピーできません。");
-            return;
-        }
-
-        string destinationPath = Path.Combine(destinationFolder, sourceName);
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy blocked - same name: {destinationPath}");
-            SetTransientStatus("同じ名前があるのでコピーできません。");
-            return;
-        }
-
-        try
-        {
-            SuppressExternalChangeNotifications();
-            if (sourceIsDirectory)
-                CopyDirectory(sourcePath, destinationPath);
-            else
-                File.Copy(sourcePath, destinationPath);
-
-            SwkLogger.Info($"Explorer[{_currentMode}]: Copy success: {sourceName}({GetItemShareStatus(sourcePath)}) -> {destinationFolder}");
-            SetTransientStatus($"{sourceName} をコピーしました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{sourceName} をコピーしました。",
-                "Place",
-                HistoryOutcome.Success,
-                targetName: sourceName);
-            NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Placed);
-            InvalidateSizeCacheUnder(destinationFolder);
-            if (string.Equals(
-                    Path.GetFullPath(destinationFolder),
-                    Path.GetFullPath(_currentFolder ?? string.Empty),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                _pendingFocusName = sourceName;
-            }
-            RefreshShopItems();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SwkLogger.Warn($"Explorer[{_currentMode}]: Copy failed: {sourceName}({GetItemShareStatus(sourcePath)}) -> {destinationFolder}: {ex.Message}");
-            SetTransientStatus("コピーできませんでした。");
-        }
+        RefreshShopItems();
     }
 
     private void ShopItemsContextMenu_Opened(object sender, RoutedEventArgs e)
@@ -2083,53 +1982,38 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         string newName = dialog.EnteredName.Trim();
-        if (string.IsNullOrEmpty(newName) ||
-            string.Equals(newName, item.Name, StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(newName))
         {
             return;
         }
 
-        if (newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        ExplorerActionResult result = ExplorerActionService.RenameItem(new RenameItemRequest
         {
-            SetTransientStatus("その名前には変えられません。");
+            ModeLabel = _currentMode.ToString(),
+            SourcePath = item.FullPath,
+            NewName = newName,
+            IsDirectory = item.IsDirectory,
+            GetShareStatus = GetItemShareStatus,
+            BeforeWrite = SuppressExternalChangeNotifications,
+        });
+
+        if (result.State == ExplorerActionState.NoChange)
+        {
             return;
         }
 
-        string destinationPath = Path.Combine(sourceParent, newName);
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        ApplyExplorerActionResult(result);
+        if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.DestinationPath) ||
+            string.IsNullOrWhiteSpace(result.SourceParent))
         {
-            SetTransientStatus("同じ名前があるので変えられません。");
             return;
         }
 
-        try
-        {
-            SuppressExternalChangeNotifications();
-            if (item.IsDirectory)
-            {
-                Directory.Move(item.FullPath, destinationPath);
-            }
-            else
-            {
-                File.Move(item.FullPath, destinationPath);
-            }
-
-            SetTransientStatus($"{item.Name} を {newName} に変えました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{item.Name} を {newName} に変えました。",
-                "Rename",
-                HistoryOutcome.Success,
-                targetName: newName);
-            NoteFutureSharePolicyRepair(destinationPath, sourceParent, SharePolicyRepairReason.Renamed);
-            InvalidateSizeCacheUnder(sourceParent);
-            _pendingFocusName = newName;
-            RefreshShopItems();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SetTransientStatus("名前を変えられませんでした。");
-        }
+        NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
+        InvalidateSizeCacheUnder(result.SourceParent);
+        _pendingFocusName = newName;
+        RefreshShopItems();
     }
 
     private void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
@@ -2162,57 +2046,52 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         int movedCount = 0;
-        int skipCount = 0;
-        List<string> movedLabels2 = new();
+        string? lastName = null;
 
-        SuppressExternalChangeNotifications();
         foreach (ShopItem item in items)
         {
-            string destinationPath = Path.Combine(destinationFolder, item.Name);
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
             {
-                skipCount++;
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = item.FullPath,
+                DestinationFolder = destinationFolder,
+                IsHoldFolderPath = IsHoldFolderPath,
+                IsUnderFolder = IsUnderFolder,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
+
+            if (result.State == ExplorerActionState.NoChange)
+            {
                 continue;
             }
-            try
-            {
-                if (item.IsDirectory)
-                    Directory.Move(item.FullPath, destinationPath);
-                else
-                    File.Move(item.FullPath, destinationPath);
 
-                NoteFutureSharePolicyRepair(destinationPath, destinationFolder, SharePolicyRepairReason.Moved);
-                PreservePermissionOnMove(item.FullPath, Path.GetDirectoryName(item.FullPath) ?? string.Empty, destinationPath, destinationFolder);
-                movedCount++;
-                movedLabels2.Add($"{item.Name}({item.ShareStatusText})");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi &&
+                !string.IsNullOrWhiteSpace(result.SourcePath) &&
+                !string.IsNullOrWhiteSpace(result.SourceParent) &&
+                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                !string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
-                SwkLogger.Warn($"Explorer[{_currentMode}]: MoveToFolder failed: {item.Name}({item.ShareStatusText}) -> {destinationFolder}: {ex.Message}");
-                skipCount++;
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+                InvalidateSizeCacheUnder(result.SourceParent);
+                movedCount++;
+                lastName = result.TargetName;
             }
         }
 
-        InvalidateSizeCacheUnder(sourceParent);
         InvalidateSizeCacheUnder(destinationFolder);
-
-        string msg = skipCount == 0
-            ? $"{movedCount} 件移しました。"
-            : $"{movedCount} 件移しました（{skipCount} 件スキップ）。";
 
         if (movedCount > 0)
         {
-            SwkLogger.Info($"Explorer[{_currentMode}]: MoveToFolder success: {string.Join(", ", movedLabels2)} -> {destinationFolder}");
+            string statusMessage = movedCount == 1 && lastName is not null
+                ? $"{lastName} を移しました。"
+                : $"{movedCount} つ移しました。";
+            SetTransientStatus(statusMessage);
+            RefreshShopItems();
         }
-        else
-            SwkLogger.Info($"Explorer[{_currentMode}]: MoveToFolder blocked all {skipCount} item(s) -> {destinationFolder}");
-
-        SetTransientStatus(msg);
-
-        if (movedCount > 0)
-            AppendHistory(HistoryChannel.Update, msg, "Move", HistoryOutcome.Success);
-
-        RefreshShopItems();
     }
 
     private void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
@@ -2234,24 +2113,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         foreach (ShopItem item in items)
         {
-            string destinationPath = Path.Combine(holdFolderPath, item.Name);
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) continue;
-
-            try
+            ExplorerActionResult result = ExplorerActionService.HoldItem(new HoldItemRequest
             {
-                SuppressExternalChangeNotifications();
-                if (item.IsDirectory)
-                    Directory.Move(item.FullPath, destinationPath);
-                else
-                    File.Move(item.FullPath, destinationPath);
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = item.FullPath,
+                HoldFolderPath = holdFolderPath,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
+            {
+                InvalidateSizeCacheUnder(result.SourceParent);
                 movedCount++;
-                lastName = item.Name;
-                string? sourceParent = Path.GetDirectoryName(item.FullPath);
-                if (!string.IsNullOrWhiteSpace(sourceParent))
-                    InvalidateSizeCacheUnder(sourceParent);
+                lastName = result.TargetName;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
 
         if (movedCount > 0)
@@ -2260,19 +2138,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SetTransientStatus(movedCount == 1 && lastName is not null
                 ? $"{lastName} を保留にしまいました。"
                 : $"{movedCount} つ保留にしまいました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                movedCount == 1 && lastName is not null
-                    ? $"{lastName} を保留にしまいました。"
-                    : $"{movedCount} つ保留にしまいました。",
-                "Hold",
-                HistoryOutcome.Success,
-                targetName: lastName);
             RefreshShopItems();
-        }
-        else
-        {
-            SetTransientStatus("しまえませんでした。");
         }
     }
 
@@ -2286,57 +2152,41 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string confirmMsg = items.Count == 1
             ? $"{items[0].Name} を完全に消します。よろしいですか?"
             : $"{items.Count} つのアイテムを完全に消します。よろしいですか?";
-        MessageBoxResult result = System.Windows.MessageBox.Show(
+        MessageBoxResult confirmResult = System.Windows.MessageBox.Show(
             this, confirmMsg, "削除", MessageBoxButton.OKCancel, MessageBoxImage.None);
-        if (result != MessageBoxResult.OK) return;
+        if (confirmResult != MessageBoxResult.OK) return;
 
         int deletedCount = 0;
         string? lastName = null;
 
         foreach (ShopItem item in items)
         {
-            try
+            ExplorerActionResult result = ExplorerActionService.DeleteItem(new DeleteItemRequest
             {
-                SuppressExternalChangeNotifications();
-                if (item.IsDirectory)
-                    Directory.Delete(item.FullPath, recursive: true);
-                else
-                    File.Delete(item.FullPath);
+                ModeLabel = _currentMode.ToString(),
+                ItemPath = item.FullPath,
+                IsDirectory = item.IsDirectory,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
-                deletedCount++;
-                lastName = item.Name;
-                string? sourceParent = Path.GetDirectoryName(item.FullPath);
-                if (!string.IsNullOrWhiteSpace(sourceParent))
-                    InvalidateSizeCacheUnder(sourceParent);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
             {
-                SwkLogger.Warn($"Explorer[{_currentMode}]: Delete failed: {item.Name}({item.ShareStatusText}): {ex.Message}");
+                InvalidateSizeCacheUnder(result.SourceParent);
+                deletedCount++;
+                lastName = result.TargetName;
             }
         }
 
         if (deletedCount > 0)
         {
-            string deleteMessage = deletedCount == 1 && lastName is not null
+            string statusMessage = deletedCount == 1 && lastName is not null
                 ? $"{lastName} を消しました。"
                 : $"{deletedCount} つ消しました。";
-            string deletedNames = items.Count == 1
-                ? $"{items[0].Name}({items[0].ShareStatusText})"
-                : $"{deletedCount} item(s)";
-            SwkLogger.Info($"Explorer[{_currentMode}]: Delete success: {deletedNames} in {_currentFolder}");
-            SetTransientStatus(deleteMessage);
-            AppendHistory(
-                HistoryChannel.Update,
-                deleteMessage,
-                "Delete",
-                HistoryOutcome.Success,
-                targetName: lastName);
+            SetTransientStatus(statusMessage);
             RefreshShopItems();
-        }
-        else
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Delete blocked - all items failed in {_currentFolder}");
-            SetTransientStatus("消せませんでした。");
         }
     }
 
@@ -2351,12 +2201,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string targetFolder = selected is { IsDirectory: true } folderItem
             ? folderItem.FullPath
             : _currentFolder;
-
-        if (!Directory.Exists(targetFolder))
-        {
-            SetTransientStatus("その場所が見つかりません。");
-            return;
-        }
 
         NameInputDialog dialog = new("新しいフォルダーの名前", string.Empty)
         {
@@ -2373,48 +2217,39 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (folderName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        ExplorerActionResult result = ExplorerActionService.CreateFolder(new CreateFolderRequest
         {
-            SetTransientStatus("その名前では作れません。");
+            ModeLabel = _currentMode.ToString(),
+            ParentFolder = targetFolder,
+            FolderName = folderName,
+            GetShareStatus = GetItemShareStatus,
+            BeforeWrite = SuppressExternalChangeNotifications,
+        });
+
+        if (result.State == ExplorerActionState.NoChange)
+        {
             return;
         }
 
-        string destinationPath = Path.Combine(targetFolder, folderName);
-        if (Directory.Exists(destinationPath) || File.Exists(destinationPath))
+        ApplyExplorerActionResult(result);
+
+        if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.DestinationPath) ||
+            string.IsNullOrWhiteSpace(result.DestinationFolder))
         {
-            SetTransientStatus("同じ名前があるので作れません。");
             return;
         }
 
-        try
+        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.FolderCreated);
+        InvalidateSizeCacheUnder(result.DestinationFolder);
+        if (string.Equals(
+                Path.GetFullPath(result.DestinationFolder),
+                Path.GetFullPath(_currentFolder),
+                StringComparison.OrdinalIgnoreCase))
         {
-            SuppressExternalChangeNotifications();
-            Directory.CreateDirectory(destinationPath);
-            string parentStatus = selected is { IsDirectory: true } ? selected.ShareStatusText : GetItemShareStatus(targetFolder);
-            SwkLogger.Info($"Explorer[{_currentMode}]: CreateFolder success: {folderName} in {targetFolder}(parent:{parentStatus})");
-            SetTransientStatus($"{folderName} を作りました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{folderName} を作りました。",
-                "CreateFolder",
-                HistoryOutcome.Success,
-                targetName: folderName);
-            NoteFutureSharePolicyRepair(destinationPath, targetFolder, SharePolicyRepairReason.FolderCreated);
-            InvalidateSizeCacheUnder(targetFolder);
-            if (string.Equals(
-                    Path.GetFullPath(targetFolder),
-                    Path.GetFullPath(_currentFolder),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                _pendingFocusName = folderName;
-            }
-            RefreshShopItems();
+            _pendingFocusName = result.TargetName;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SwkLogger.Warn($"Explorer[{_currentMode}]: CreateFolder failed: {folderName} in {targetFolder}: {ex.Message}");
-            SetTransientStatus("作れませんでした。");
-        }
+        RefreshShopItems();
     }
 
     // --- 選択アクションバー ---
@@ -2494,44 +2329,46 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         foreach (ShopItem item in items)
         {
-            string destinationPath = Path.Combine(_shopFolder!, item.Name);
-            if (File.Exists(destinationPath) || Directory.Exists(destinationPath)) continue;
-
-            try
+            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
             {
-                SuppressExternalChangeNotifications();
-                if (item.IsDirectory)
-                    Directory.Move(item.FullPath, destinationPath);
-                else
-                    File.Move(item.FullPath, destinationPath);
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = item.FullPath,
+                DestinationFolder = _shopFolder!,
+                IsHoldFolderPath = IsHoldFolderPath,
+                IsUnderFolder = IsUnderFolder,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
-                movedCount++;
-                lastName = item.Name;
-                string? sourceParent = Path.GetDirectoryName(item.FullPath);
-                if (!string.IsNullOrWhiteSpace(sourceParent))
-                    InvalidateSizeCacheUnder(sourceParent);
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                continue;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+            ApplyExplorerActionResult(result);
+
+            if (result.ShouldRefreshUi &&
+                !string.IsNullOrWhiteSpace(result.SourcePath) &&
+                !string.IsNullOrWhiteSpace(result.SourceParent) &&
+                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                !string.IsNullOrWhiteSpace(result.DestinationFolder))
+            {
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+                InvalidateSizeCacheUnder(result.SourceParent);
+                movedCount++;
+                lastName = result.TargetName;
+            }
         }
 
         if (movedCount > 0)
         {
             InvalidateSizeCacheUnder(_shopFolder!);
-            string msg = movedCount == 1 && lastName is not null
+            string statusMessage = movedCount == 1 && lastName is not null
                 ? $"{lastName} をお店に戻しました。"
                 : $"{movedCount} つお店に戻しました。";
-            SetTransientStatus(msg);
-            AppendHistory(
-                HistoryChannel.Update,
-                msg,
-                "Place",
-                HistoryOutcome.Success,
-                targetName: lastName);
+            SetTransientStatus(statusMessage);
             RefreshShopItems();
-        }
-        else
-        {
-            SetTransientStatus("戻せませんでした。");
         }
     }
 
@@ -2578,49 +2415,35 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string newName = textBox?.Text?.Trim() ?? string.Empty;
         item.IsRenaming = false;
 
-        if (!confirm || string.IsNullOrEmpty(newName) || newName == item.Name) return;
+        if (!confirm || string.IsNullOrEmpty(newName)) return;
 
-        if (newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        ExplorerActionResult result = ExplorerActionService.RenameItem(new RenameItemRequest
         {
-            SetTransientStatus("その名前には変えられません。");
+            ModeLabel = _currentMode.ToString(),
+            SourcePath = item.FullPath,
+            NewName = newName,
+            IsDirectory = item.IsDirectory,
+            GetShareStatus = GetItemShareStatus,
+            BeforeWrite = SuppressExternalChangeNotifications,
+        });
+
+        if (result.State == ExplorerActionState.NoChange)
+        {
             return;
         }
 
-        string sourceParent = Path.GetDirectoryName(item.FullPath) ?? string.Empty;
-        string destinationPath = Path.Combine(sourceParent, newName);
-        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        ApplyExplorerActionResult(result);
+        if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.DestinationPath) ||
+            string.IsNullOrWhiteSpace(result.SourceParent))
         {
-            SetTransientStatus("同じ名前があるので変えられません。");
             return;
         }
 
-        string oldName = item.Name;
-        try
-        {
-            SuppressExternalChangeNotifications();
-            if (item.IsDirectory)
-                Directory.Move(item.FullPath, destinationPath);
-            else
-                File.Move(item.FullPath, destinationPath);
-
-            SwkLogger.Info($"Explorer[{_currentMode}]: Rename success: {oldName}({item.ShareStatusText}) -> {newName} in {sourceParent}");
-            SetTransientStatus($"{oldName} を {newName} に変えました。");
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{oldName} を {newName} に変えました。",
-                "Rename",
-                HistoryOutcome.Success,
-                targetName: newName);
-            NoteFutureSharePolicyRepair(destinationPath, sourceParent, SharePolicyRepairReason.Renamed);
-            InvalidateSizeCacheUnder(sourceParent);
-            _pendingFocusName = newName;
-            RefreshShopItems();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            SwkLogger.Warn($"Explorer[{_currentMode}]: Rename failed: {oldName}({item.ShareStatusText}) -> {newName}: {ex.Message}");
-            SetTransientStatus("名前を変えられませんでした。");
-        }
+        NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
+        InvalidateSizeCacheUnder(result.SourceParent);
+        _pendingFocusName = newName;
+        RefreshShopItems();
     }
 
     private void InlineRenameBox_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -3112,7 +2935,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 "Receive",
                 HistoryOutcome.Success,
                 HistoryDirection.Incoming,
-                targetName: item.Name);
+                targetName: item.Name,
+                pathText: item.FolderPath,
+                destinationPath: path,
+                destinationFolder: item.FolderPath,
+                source: "Polling");
         }
 
         if (newcomers.Count > 0 || removed.Count > 0)
@@ -3154,7 +2981,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     "Receive",
                     HistoryOutcome.Success,
                     HistoryDirection.Incoming,
-                    targetName: item.Name);
+                    targetName: item.Name,
+                    pathText: item.FolderPath,
+                    destinationPath: e.FullPath,
+                    destinationFolder: item.FolderPath,
+                    source: "Watcher");
             }
 
             NotifyExternalShopChange();
@@ -3176,9 +3007,22 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             NotifyExternalShopChange();
             if (!ShouldSuppressExternalChangeNotification())
             {
+                string folder = Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty;
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{e.OldName} → {e.Name} に名前が変わりました。",
+                    "ExternalRename",
+                    HistoryOutcome.Info,
+                    targetName: e.Name,
+                    pathText: folder,
+                    note: $"旧名: {e.OldName}",
+                    sourcePath: e.OldFullPath,
+                    destinationPath: e.FullPath,
+                    destinationFolder: folder,
+                    source: "Watcher");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
-                    Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
+                    folder,
                     SharePolicyRepairReason.ExternalRenamed);
             }
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);

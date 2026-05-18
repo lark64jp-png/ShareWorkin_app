@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ShareWorkin.SMB;
 
 namespace ShareWorkin;
 
@@ -26,6 +27,7 @@ public enum HistoryOutcome
 {
     Info,
     Success,
+    Warning,
     Failure,
 }
 
@@ -55,8 +57,26 @@ public sealed class HistoryEntry
     [JsonPropertyName("targetName")]
     public string? TargetName { get; set; }
 
+    [JsonPropertyName("path")]
+    public string? PathText { get; set; }
+
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
+
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
+    [JsonPropertyName("sourcePath")]
+    public string? SourcePath { get; set; }
+
+    [JsonPropertyName("destinationPath")]
+    public string? DestinationPath { get; set; }
+
+    [JsonPropertyName("destinationFolder")]
+    public string? DestinationFolder { get; set; }
 
     [JsonPropertyName("outcome")]
     public HistoryOutcome Outcome { get; set; } = HistoryOutcome.Info;
@@ -75,9 +95,31 @@ public static class HistoryRepository
         AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         "history.json");
     private const int MaxEntries = 300;
+    public static event Action<HistoryChannel>? HistoryChanged;
 
     public static void Append(HistoryEntry entry)
     {
+        if (entry.Channel == HistoryChannel.Update)
+        {
+            SwkHistoryJournal.AppendOperation(
+                channel: entry.Channel.ToString(),
+                eventType: entry.EventType,
+                message: entry.Message,
+                outcome: entry.Outcome.ToString(),
+                direction: entry.Direction.ToString(),
+                friendId: entry.FriendId,
+                friendName: entry.FriendName,
+                targetName: entry.TargetName,
+                pathText: entry.PathText,
+                note: entry.Note,
+                sourcePath: entry.SourcePath,
+                destinationPath: entry.DestinationPath,
+                destinationFolder: entry.DestinationFolder,
+                source: string.IsNullOrWhiteSpace(entry.Source) ? "HistoryRepository.Append" : entry.Source);
+            RaiseChanged(entry.Channel);
+            return;
+        }
+
         lock (Sync)
         {
             HistoryStore store = LoadStoreCore();
@@ -88,10 +130,26 @@ public static class HistoryRepository
             }
             SaveStoreCore(store);
         }
+
+        RaiseChanged(entry.Channel);
     }
 
     public static IReadOnlyList<HistoryEntry> GetEntries(HistoryChannel channel, int maxCount = 100)
     {
+        if (channel == HistoryChannel.Update)
+        {
+            lock (Sync)
+            {
+                List<HistoryEntry> merged = LoadStoreCore().Entries
+                    .Where(e => e.Channel == HistoryChannel.Update)
+                    .Concat(ReadJournalEntries(channel))
+                    .OrderByDescending(e => e.OccurredAt)
+                    .Take(Math.Max(1, maxCount))
+                    .ToList();
+                return merged;
+            }
+        }
+
         lock (Sync)
         {
             return LoadStoreCore().Entries
@@ -115,6 +173,7 @@ public static class HistoryRepository
         lock (Sync)
         {
             IEnumerable<HistoryEntry> query = LoadStoreCore().Entries
+                .Concat(ReadJournalEntries())
                 .Where(e => string.Equals(e.FriendId, friendId, StringComparison.Ordinal))
                 .OrderByDescending(e => e.OccurredAt);
 
@@ -139,6 +198,63 @@ public static class HistoryRepository
         }
 
         return builder.ToString().TrimEnd();
+    }
+
+    public static int DeleteEntries(HistoryChannel channel, DateTime? deleteThrough = null)
+    {
+        if (channel == HistoryChannel.Update)
+        {
+            int deletedJournalCount = SwkHistoryJournal.DeleteEntries(channel.ToString(), deleteThrough);
+            int deletedLegacyCount = 0;
+
+            lock (Sync)
+            {
+                HistoryStore store = LoadStoreCore();
+                int beforeCount = store.Entries.Count;
+                store.Entries = store.Entries
+                    .Where(entry =>
+                        entry.Channel != HistoryChannel.Update ||
+                        (deleteThrough.HasValue && entry.OccurredAt > deleteThrough.Value))
+                    .ToList();
+
+                deletedLegacyCount = beforeCount - store.Entries.Count;
+                if (deletedLegacyCount > 0 || deleteThrough is null)
+                {
+                    SaveStoreCore(store);
+                }
+            }
+
+            if (deletedJournalCount > 0 || deletedLegacyCount > 0)
+            {
+                RaiseChanged(channel);
+            }
+
+            return deletedJournalCount + deletedLegacyCount;
+        }
+
+        lock (Sync)
+        {
+            HistoryStore store = LoadStoreCore();
+            int beforeCount = store.Entries.Count;
+            store.Entries = store.Entries
+                .Where(entry =>
+                    entry.Channel != channel ||
+                    (deleteThrough.HasValue && entry.OccurredAt > deleteThrough.Value))
+                .ToList();
+
+            int deletedCount = beforeCount - store.Entries.Count;
+            if (deletedCount > 0 || deleteThrough is null)
+            {
+                SaveStoreCore(store);
+            }
+
+            if (deletedCount > 0)
+            {
+                RaiseChanged(channel);
+            }
+
+            return deletedCount;
+        }
     }
 
     private static HistoryStore LoadStoreCore()
@@ -174,6 +290,84 @@ public static class HistoryRepository
         catch (Exception ex)
         {
             SMB.SwkLogger.Warn($"HistoryRepository.SaveStoreCore failed: {ex.Message}");
+        }
+    }
+
+    private static IEnumerable<HistoryEntry> ReadJournalEntries(HistoryChannel? channel = null)
+    {
+        string? channelText = channel?.ToString();
+        return SwkHistoryJournal.ReadEntries(channelText)
+            .Select(MapJournalEntry);
+    }
+
+    private static HistoryEntry MapJournalEntry(SwkHistoryJournalRecord record)
+    {
+        return new HistoryEntry
+        {
+            Id = string.IsNullOrWhiteSpace(record.Id) ? Guid.NewGuid().ToString("N") : record.Id,
+            Channel = ParseChannel(record.Channel),
+            OccurredAt = record.OccurredAt,
+            FriendId = record.FriendId,
+            FriendName = record.FriendName,
+            Direction = ParseDirection(record.Direction),
+            EventType = string.IsNullOrWhiteSpace(record.EventType) ? "Log" : record.EventType,
+            TargetName = record.TargetName,
+            PathText = record.PathText,
+            Message = BuildJournalMessage(record),
+            Note = record.Note,
+            Source = record.Source,
+            SourcePath = record.SourcePath,
+            DestinationPath = record.DestinationPath,
+            DestinationFolder = record.DestinationFolder,
+            Outcome = ParseOutcome(record.Outcome),
+        };
+    }
+
+    private static string BuildJournalMessage(SwkHistoryJournalRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.LogLevel) && string.IsNullOrWhiteSpace(record.Source))
+        {
+            return record.Message;
+        }
+
+        List<string> parts = [];
+        if (!string.IsNullOrWhiteSpace(record.LogLevel))
+        {
+            parts.Add(record.LogLevel!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(record.Source))
+        {
+            parts.Add(record.Source!);
+        }
+
+        string prefix = parts.Count == 0 ? string.Empty : $"[{string.Join(" / ", parts)}] ";
+        return prefix + record.Message;
+    }
+
+    private static HistoryChannel ParseChannel(string? channel)
+        => Enum.TryParse(channel, ignoreCase: true, out HistoryChannel parsed)
+            ? parsed
+            : HistoryChannel.Update;
+
+    private static HistoryDirection ParseDirection(string? direction)
+        => Enum.TryParse(direction, ignoreCase: true, out HistoryDirection parsed)
+            ? parsed
+            : HistoryDirection.None;
+
+    private static HistoryOutcome ParseOutcome(string? outcome)
+        => Enum.TryParse(outcome, ignoreCase: true, out HistoryOutcome parsed)
+            ? parsed
+            : HistoryOutcome.Info;
+
+    private static void RaiseChanged(HistoryChannel channel)
+    {
+        try
+        {
+            HistoryChanged?.Invoke(channel);
+        }
+        catch
+        {
         }
     }
 }

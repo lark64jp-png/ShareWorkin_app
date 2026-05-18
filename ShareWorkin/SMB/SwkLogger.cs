@@ -46,6 +46,8 @@ public static class SwkLogger
             {
                 File.AppendAllText(filePath, line, Encoding.UTF8);
             }
+
+            SwkHistoryJournal.AppendLog(level, message);
         }
         catch
         {

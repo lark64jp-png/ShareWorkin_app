@@ -13,6 +13,8 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="10" />
+            <RowDefinition Height="2*" />
+            <RowDefinition Height="10" />
             <RowDefinition Height="*" />
             <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
@@ -29,6 +31,33 @@
                        FontSize="12"
                        Foreground="#6F675C"
                        Margin="0,6,0,0" />
+            <DockPanel Margin="0,12,0,0" LastChildFill="False">
+                <StackPanel DockPanel.Dock="Left"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="削除基準日時"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#6F675C" />
+                    <TextBox x:Name="DeleteTimestampTextBox"
+                             Width="180"
+                             Height="28"
+                             Margin="8,0,0,0"
+                             VerticalContentAlignment="Center"
+                             ToolTip="yyyy/MM/dd HH:mm:ss" />
+                    <TextBlock Text="yyyy/MM/dd HH:mm:ss"
+                               Margin="8,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="#8B8376" />
+                </StackPanel>
+                <Button DockPanel.Dock="Right"
+                        x:Name="DeleteHistoryButton"
+                        Content="履歴削除"
+                        Width="110"
+                        Height="32"
+                        Click="DeleteHistoryButton_Click" />
+            </DockPanel>
         </StackPanel>
 
         <Border Grid.Row="2"
@@ -47,20 +76,52 @@
                       GridLinesVisibility="Horizontal"
                       RowHeaderWidth="0"
                       SelectionMode="Single"
-                      SelectionUnit="FullRow">
+                      SelectionUnit="FullRow"
+                      SelectionChanged="HistoryDataGrid_SelectionChanged">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="日時" Binding="{Binding TimeText}" Width="150" />
-                    <DataGridTextColumn Header="相手" Binding="{Binding FriendName}" Width="120" />
-                    <DataGridTextColumn Header="方向" Binding="{Binding DirectionText}" Width="90" />
+                    <DataGridTextColumn Header="ユーザー" Binding="{Binding UserText}" Width="120" />
+                    <DataGridTextColumn Header="パス" Binding="{Binding PathText}" Width="220" />
+                    <DataGridTextColumn Header="ファイル名" Binding="{Binding FileNameText}" Width="150" />
                     <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="110" />
-                    <DataGridTextColumn Header="対象" Binding="{Binding TargetName}" Width="180" />
+                    <DataGridTextColumn Header="内容" Binding="{Binding ContentText}" Width="*" />
+                    <DataGridTextColumn Header="備考" Binding="{Binding NoteText}" Width="180" />
                     <DataGridTextColumn Header="結果" Binding="{Binding OutcomeText}" Width="80" />
-                    <DataGridTextColumn Header="補足" Binding="{Binding DetailText}" Width="*" />
                 </DataGrid.Columns>
             </DataGrid>
         </Border>
 
-        <DockPanel Grid.Row="4" LastChildFill="False">
+        <Border Grid.Row="4"
+                BorderBrush="#D8D2C3"
+                BorderThickness="1"
+                CornerRadius="8"
+                Background="#FFFDFC"
+                Padding="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="8" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="ディティール"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           Foreground="#2F2A22" />
+
+                <TextBox Grid.Row="2"
+                         x:Name="DetailTextBox"
+                         IsReadOnly="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         Background="#FFFDFC"
+                         BorderThickness="0"
+                         FontFamily="Consolas" />
+            </Grid>
+        </Border>
+
+        <DockPanel Grid.Row="6" LastChildFill="False">
             <TextBlock DockPanel.Dock="Left"
                        x:Name="CountTextBlock"
                        VerticalAlignment="Center"

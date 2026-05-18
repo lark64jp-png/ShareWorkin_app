@@ -10,7 +10,10 @@
       "Bash(Select-Object FullName)",
       "Bash(Get-ChildItem -Path 'h:\\\\ShareWorkin_app' -Recurse -Filter \"*.cs\")",
       "Bash(Select-Object -ExpandProperty FullName)",
-      "Bash(Test-Path \"H:\\\\ShareWorkin_app\\\\ShareWorkin_v1.14_install.exe\")"
+      "Bash(Test-Path \"H:\\\\ShareWorkin_app\\\\ShareWorkin_v1.14_install.exe\")",
+      "Read(//c/MyApps/**)",
+      "Bash(Get-Content \"C:\\\\MyApps\\\\ShareWorkin\\\\logs\\\\swk_2026-05-17.log\")",
+      "Bash(Select-String -Pattern \"Move|move|移動|MoveItem|Rename|rename|ACL|acl|icacls|share|Share\")"
     ]
   }
 }
