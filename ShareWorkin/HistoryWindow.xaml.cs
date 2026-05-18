@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Data;
 using ShareWorkin.SMB;
 
 namespace ShareWorkin;
@@ -347,4 +348,13 @@ public sealed class HistoryRow
     public string ContentText { get; init; } = string.Empty;
     public string NoteText { get; init; } = string.Empty;
     public string OutcomeText { get; init; } = string.Empty;
+}
+
+public sealed class DoubleToGridLengthConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is double d ? new GridLength(d) : GridLength.Auto;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
 }

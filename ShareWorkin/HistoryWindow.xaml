@@ -1,6 +1,7 @@
 <Window x:Class="ShareWorkin.HistoryWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ShareWorkin"
         Title="履歴"
         Width="980"
         Height="560"
@@ -9,14 +10,45 @@
         WindowStartupLocation="CenterOwner"
         ResizeMode="CanResize"
         Background="#F6F1E7">
+    <Window.Resources>
+        <local:DoubleToGridLengthConverter x:Key="D2GL" />
+        <Style x:Key="FilterBoxStyle" TargetType="TextBox">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="1">
+                            <Grid>
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                              Margin="{TemplateBinding Padding}" />
+                                <TextBlock x:Name="Placeholder"
+                                           Text="{TemplateBinding Tag}"
+                                           FontSize="10"
+                                           Foreground="#AAAAAA"
+                                           Margin="3,0,0,0"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="10" />
             <RowDefinition Height="2*" />
-            <RowDefinition Height="4" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="4" />
+            <RowDefinition Height="8" />
             <RowDefinition Height="*" />
             <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
@@ -66,59 +98,84 @@
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="8"
-                Background="White"
-                Padding="8">
-            <DataGrid x:Name="HistoryDataGrid"
-                      AutoGenerateColumns="False"
-                      IsReadOnly="True"
-                      HeadersVisibility="Column"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      CanUserReorderColumns="False"
-                      GridLinesVisibility="Horizontal"
-                      RowHeaderWidth="0"
-                      SelectionMode="Single"
-                      SelectionUnit="FullRow"
-                      SelectionChanged="HistoryDataGrid_SelectionChanged"
-                      PreviewKeyDown="HistoryDataGrid_PreviewKeyDown">
-                <DataGrid.ContextMenu>
-                    <ContextMenu>
-                        <MenuItem Header="コピー" Click="CopyRowMenuItem_Click" />
-                    </ContextMenu>
-                </DataGrid.ContextMenu>
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="日時" Binding="{Binding TimeText}" Width="150" />
-                    <DataGridTextColumn Header="ユーザー" Binding="{Binding UserText}" Width="120" />
-                    <DataGridTextColumn Header="パス" Binding="{Binding PathText}" Width="220" />
-                    <DataGridTextColumn Header="ファイル名" Binding="{Binding FileNameText}" Width="150" />
-                    <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="110" />
-                    <DataGridTextColumn Header="内容" Binding="{Binding ContentText}" Width="*" />
-                    <DataGridTextColumn Header="備考" Binding="{Binding NoteText}" Width="180" />
-                    <DataGridTextColumn Header="結果" Binding="{Binding OutcomeText}" Width="80" />
-                </DataGrid.Columns>
-            </DataGrid>
+                Background="White">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <DataGrid Grid.Row="0"
+                          x:Name="HistoryDataGrid"
+                          Margin="8,8,8,0"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          HeadersVisibility="Column"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          CanUserReorderColumns="False"
+                          GridLinesVisibility="Horizontal"
+                          RowHeaderWidth="0"
+                          SelectionMode="Single"
+                          SelectionUnit="FullRow"
+                          SelectionChanged="HistoryDataGrid_SelectionChanged"
+                          PreviewKeyDown="HistoryDataGrid_PreviewKeyDown">
+                    <DataGrid.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="コピー" Click="CopyRowMenuItem_Click" />
+                        </ContextMenu>
+                    </DataGrid.ContextMenu>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="日時"       Binding="{Binding TimeText}"      Width="150" />
+                        <DataGridTextColumn Header="ユーザー"   Binding="{Binding UserText}"      Width="120" />
+                        <DataGridTextColumn Header="パス"       Binding="{Binding PathText}"      Width="220" />
+                        <DataGridTextColumn Header="ファイル名" Binding="{Binding FileNameText}"  Width="150" />
+                        <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="110" />
+                        <DataGridTextColumn Header="内容"       Binding="{Binding ContentText}"   Width="*" />
+                        <DataGridTextColumn Header="備考"       Binding="{Binding NoteText}"      Width="180" />
+                        <DataGridTextColumn Header="結果"       Binding="{Binding OutcomeText}"   Width="80" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- フィルターフッター：各列が DataGrid 列幅に追従 -->
+                <Border Grid.Row="1"
+                        BorderBrush="#D8D2C3"
+                        BorderThickness="0,1,0,0"
+                        Background="White">
+                    <!-- 外側 Grid：右端がスクロールバー右端と揃う -->
+                    <Grid Margin="8,3,8,4">
+                        <!-- フィルター列 Grid（DataGrid 列幅にバインド） -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[0].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[1].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[2].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[3].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[4].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[5].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[6].ActualWidth, Converter={StaticResource D2GL}}" />
+                                <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[7].ActualWidth, Converter={StaticResource D2GL}}" />
+                            </Grid.ColumnDefinitions>
+                            <!-- col 0: 日時 — フィルターなし -->
+                            <TextBox Grid.Column="1" x:Name="FilterUser"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ユーザー"   Tag="ユーザー"   Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <TextBox Grid.Column="2" x:Name="FilterPath"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="パス"       Tag="パス"       Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <TextBox Grid.Column="3" x:Name="FilterFileName" Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ファイル名" Tag="ファイル名" Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <TextBox Grid.Column="4" x:Name="FilterAction"  Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="アクション" Tag="アクション" Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <TextBox Grid.Column="5" x:Name="FilterContent" Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="内容"       Tag="内容"       Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <TextBox Grid.Column="6" x:Name="FilterNote"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="備考"       Tag="備考"       Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
+                            <!-- col 7: 結果 — フィルターなし -->
+                        </Grid>
+                        <!-- クリアボタン：外側 Grid の右端（スクロールバー右端）に重ね置き -->
+                        <Button x:Name="ClearFilterButton"
+                                Content="クリア" Height="16" FontSize="10" Padding="6,0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Click="ClearFilterButton_Click" />
+                    </Grid>
+                </Border>
+            </Grid>
         </Border>
 
-        <Grid Grid.Row="4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="120" />
-                <ColumnDefinition Width="220" />
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="110" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0" x:Name="FilterFileName"   Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ファイル名" Tag="ファイル名" TextChanged="FilterTextBox_TextChanged" />
-            <TextBox Grid.Column="1" x:Name="FilterUser"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ユーザー"   Tag="ユーザー"   TextChanged="FilterTextBox_TextChanged" />
-            <TextBox Grid.Column="2" x:Name="FilterPath"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="パス"       Tag="パス"       TextChanged="FilterTextBox_TextChanged" />
-            <TextBox Grid.Column="3" x:Name="FilterAction"     Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="アクション" Tag="アクション" TextChanged="FilterTextBox_TextChanged" />
-            <TextBox Grid.Column="4" x:Name="FilterContent"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="内容"       Tag="内容"       TextChanged="FilterTextBox_TextChanged" />
-            <TextBox Grid.Column="5" x:Name="FilterNote"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="備考"       Tag="備考"       TextChanged="FilterTextBox_TextChanged" />
-            <Button  Grid.Column="6" x:Name="ClearFilterButton" Content="クリア" Width="54" Height="16" FontSize="10" Padding="0" Click="ClearFilterButton_Click" />
-        </Grid>
-
-        <Border Grid.Row="6"
+        <Border Grid.Row="4"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="8"
@@ -148,7 +205,7 @@
             </Grid>
         </Border>
 
-        <DockPanel Grid.Row="8" LastChildFill="False">
+        <DockPanel Grid.Row="6" LastChildFill="False">
             <TextBlock DockPanel.Dock="Left"
                        x:Name="CountTextBlock"
                        VerticalAlignment="Center"
