@@ -158,8 +158,8 @@
                                             <Style TargetType="TextBlock">
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsFolder}" Value="True">
-                                                        <Setter Property="FontWeight" Value="Bold" />
-                                                        <Setter Property="FontSize" Value="11" />
+                                                        <Setter Property="FontWeight" Value="ExtraBold" />
+                                                        <Setter Property="FontSize" Value="10" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
