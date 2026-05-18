@@ -69,12 +69,16 @@ const
   FRIENDS_FILE = 'friends.json';
   PERMISSIONS_FILE = 'permissions.json';
   INVITES_FILE = 'invites.json';
+  HISTORY_FILE = 'history.json';
+  HISTORY_JOURNAL_FILE = 'history-journal.jsonl';
   HOLD_DIR = 'hold';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
   SECURE_BACKUP_FILE = 'ShareWorkin_secure_backup.dat';
   FRIENDS_BACKUP_FILE = 'ShareWorkin_friends_backup.json';
   PERMISSIONS_BACKUP_FILE = 'ShareWorkin_permissions_backup.json';
   INVITES_BACKUP_FILE = 'ShareWorkin_invites_backup.json';
+  HISTORY_BACKUP_FILE = 'ShareWorkin_history_backup.json';
+  HISTORY_JOURNAL_BACKUP_FILE = 'ShareWorkin_history_journal_backup.jsonl';
   HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
   RUNTIME_REG_KEY = 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
@@ -147,6 +151,16 @@ begin
   Result := ExpandConstant('{tmp}\' + INVITES_BACKUP_FILE);
 end;
 
+function HistoryBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + HISTORY_BACKUP_FILE);
+end;
+
+function HistoryJournalBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + HISTORY_JOURNAL_BACKUP_FILE);
+end;
+
 function FindExistingFile(FileName: String; var FoundPath: String): Boolean;
 begin
   Result := False;
@@ -207,6 +221,8 @@ begin
   DeleteFile(FriendsBackupPath());
   DeleteFile(PermissionsBackupPath());
   DeleteFile(InvitesBackupPath());
+  DeleteFile(HistoryBackupPath());
+  DeleteFile(HistoryJournalBackupPath());
   DelTree(HoldBackupPath(), True, True, True);
 
   if FindExistingFile(SETTINGS_FILE, Source) then
@@ -219,6 +235,10 @@ begin
     CopyFile(Source, PermissionsBackupPath(), False);
   if FindExistingFile(INVITES_FILE, Source) then
     CopyFile(Source, InvitesBackupPath(), False);
+  if FindExistingFile(HISTORY_FILE, Source) then
+    CopyFile(Source, HistoryBackupPath(), False);
+  if FindExistingFile(HISTORY_JOURNAL_FILE, Source) then
+    CopyFile(Source, HistoryJournalBackupPath(), False);
   if FindExistingDirectory(HOLD_DIR, Source) then
     CopyDirectoryContents(Source, HoldBackupPath());
 end;
@@ -253,6 +273,16 @@ begin
   begin
     CopyFile(InvitesBackupPath(), AppDir + '\' + INVITES_FILE, False);
     DeleteFile(InvitesBackupPath());
+  end;
+  if FileExists(HistoryBackupPath()) then
+  begin
+    CopyFile(HistoryBackupPath(), AppDir + '\' + HISTORY_FILE, False);
+    DeleteFile(HistoryBackupPath());
+  end;
+  if FileExists(HistoryJournalBackupPath()) then
+  begin
+    CopyFile(HistoryJournalBackupPath(), AppDir + '\' + HISTORY_JOURNAL_FILE, False);
+    DeleteFile(HistoryJournalBackupPath());
   end;
   if DirExists(HoldBackupPath()) then
   begin
