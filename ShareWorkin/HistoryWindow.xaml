@@ -160,7 +160,7 @@
                                                     <DataTrigger Binding="{Binding IsFolder}" Value="True">
                                                         <Setter Property="FontWeight" Value="ExtraBold" />
                                                         <Setter Property="FontSize" Value="10" />
-                                                        <Setter Property="Foreground" Value="#1A2B5E" />
+                                                        <Setter Property="Foreground" Value="#1A3A9F" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
