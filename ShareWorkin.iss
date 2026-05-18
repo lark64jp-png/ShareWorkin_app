@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.19"
+#define MyAppVersion "1.20"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.19_install
+OutputBaseFilename=ShareWorkin_v1.20_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -59,7 +59,7 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFil
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.18';
+  APP_VERSION = '1.20';
   APP_EXE = 'ShareWorkin.exe';
   TRAY_EXE = 'ShareWorkinTray.exe';
   STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';

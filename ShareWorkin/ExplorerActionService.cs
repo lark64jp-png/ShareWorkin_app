@@ -147,6 +147,15 @@ public static class ExplorerActionService
             };
         }
 
+        if (request.IsHoldFolderPath(request.DestinationFolder))
+        {
+            return Blocked("Move", "保留へは保留操作でしまってください。",
+                $"Explorer[{request.ModeLabel}]: Move blocked - destination is hold folder: {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
+        }
+
         if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
         {
             return Blocked("Move", "その中へは移せません。",
@@ -351,6 +360,15 @@ public static class ExplorerActionService
                 $"Explorer[{request.ModeLabel}]: Copy blocked - same location: {request.SourcePath}",
                 targetName: Path.GetFileName(request.SourcePath),
                 pathText: sourceParent);
+        }
+
+        if (request.IsHoldFolderPath(request.DestinationFolder))
+        {
+            return Blocked("Copy", "保留へは保留操作でしまってください。",
+                $"Explorer[{request.ModeLabel}]: Copy blocked - destination is hold folder: {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
         }
 
         if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))

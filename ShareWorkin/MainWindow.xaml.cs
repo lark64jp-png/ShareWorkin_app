@@ -1869,42 +1869,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void MoveInternalDraggedItems(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        int movedCount = 0;
-        string? lastName = null;
-
-        foreach (string sourcePath in sourcePaths)
-        {
-            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
-            {
-                ModeLabel = _currentMode.ToString(),
-                SourcePath = sourcePath,
-                DestinationFolder = destinationFolder,
-                IsHoldFolderPath = IsHoldFolderPath,
-                IsUnderFolder = IsUnderFolder,
-                GetShareStatus = GetItemShareStatus,
-                BeforeWrite = SuppressExternalChangeNotifications,
-            });
-
-            if (result.State == ExplorerActionState.NoChange)
-            {
-                continue;
-            }
-
-            ApplyExplorerActionResult(result);
-
-            if (result.ShouldRefreshUi &&
-                !string.IsNullOrWhiteSpace(result.SourcePath) &&
-                !string.IsNullOrWhiteSpace(result.SourceParent) &&
-                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
-                !string.IsNullOrWhiteSpace(result.DestinationFolder))
-            {
-                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
-                InvalidateSizeCacheUnder(result.SourceParent);
-                movedCount++;
-                lastName = result.TargetName;
-            }
-        }
+        int movedCount = ExecuteMoveExplorerActions(sourcePaths, destinationFolder, out string? lastName);
 
         if (movedCount > 0)
         {
@@ -2068,7 +2033,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
-        MoveDestinationDialog dialog = new(_shopFolder, GetHoldFolderPath(), items[0].FullPath)
+        MoveDestinationDialog dialog = new(_shopFolder, items[0].FullPath)
         {
             Owner = this
         };
@@ -2087,44 +2052,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        int movedCount = 0;
-        string? lastName = null;
-
-        foreach (ShopItem item in items)
-        {
-            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
-            {
-                ModeLabel = _currentMode.ToString(),
-                SourcePath = item.FullPath,
-                DestinationFolder = destinationFolder,
-                IsHoldFolderPath = IsHoldFolderPath,
-                IsUnderFolder = IsUnderFolder,
-                GetShareStatus = GetItemShareStatus,
-                BeforeWrite = SuppressExternalChangeNotifications,
-            });
-
-            if (result.State == ExplorerActionState.NoChange)
-            {
-                continue;
-            }
-
-            ApplyExplorerActionResult(result);
-
-            if (result.ShouldRefreshUi &&
-                !string.IsNullOrWhiteSpace(result.SourcePath) &&
-                !string.IsNullOrWhiteSpace(result.SourceParent) &&
-                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
-                !string.IsNullOrWhiteSpace(result.DestinationFolder))
-            {
-                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
-                InvalidateSizeCacheUnder(result.SourceParent);
-                movedCount++;
-                lastName = result.TargetName;
-            }
-        }
-
-        InvalidateSizeCacheUnder(destinationFolder);
+        int movedCount = ExecuteMoveExplorerActions(items.Select(static item => item.FullPath).ToList(), destinationFolder, out string? lastName);
 
         if (movedCount > 0)
         {
@@ -2366,16 +2294,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>().ToList();
         if (items.Count == 0) return;
 
-        int movedCount = 0;
-        string? lastName = null;
+        int movedCount = ExecuteMoveExplorerActions(items.Select(static item => item.FullPath).ToList(), _shopFolder!, out string? lastName);
 
-        foreach (ShopItem item in items)
+        if (movedCount > 0)
+        {
+            string statusMessage = movedCount == 1 && lastName is not null
+                ? $"{lastName} をお店に戻しました。"
+                : $"{movedCount} つお店に戻しました。";
+            SetTransientStatus(statusMessage);
+            RefreshShopItems();
+        }
+    }
+
+    private int ExecuteMoveExplorerActions(
+        IReadOnlyList<string> sourcePaths,
+        string destinationFolder,
+        out string? lastName)
+    {
+        int movedCount = 0;
+        lastName = null;
+
+        foreach (string sourcePath in sourcePaths)
         {
             ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
             {
                 ModeLabel = _currentMode.ToString(),
-                SourcePath = item.FullPath,
-                DestinationFolder = _shopFolder!,
+                SourcePath = sourcePath,
+                DestinationFolder = destinationFolder,
                 IsHoldFolderPath = IsHoldFolderPath,
                 IsUnderFolder = IsUnderFolder,
                 GetShareStatus = GetItemShareStatus,
@@ -2389,29 +2334,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             ApplyExplorerActionResult(result);
 
-            if (result.ShouldRefreshUi &&
-                !string.IsNullOrWhiteSpace(result.SourcePath) &&
-                !string.IsNullOrWhiteSpace(result.SourceParent) &&
-                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
-                !string.IsNullOrWhiteSpace(result.DestinationFolder))
+            if (!result.ShouldRefreshUi ||
+                string.IsNullOrWhiteSpace(result.SourcePath) ||
+                string.IsNullOrWhiteSpace(result.SourceParent) ||
+                string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
-                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-                PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
-                InvalidateSizeCacheUnder(result.SourceParent);
-                movedCount++;
-                lastName = result.TargetName;
+                continue;
             }
+
+            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+            PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+            InvalidateSizeCacheUnder(result.SourceParent);
+            movedCount++;
+            lastName = result.TargetName;
         }
 
         if (movedCount > 0)
         {
-            InvalidateSizeCacheUnder(_shopFolder!);
-            string statusMessage = movedCount == 1 && lastName is not null
-                ? $"{lastName} をお店に戻しました。"
-                : $"{movedCount} つお店に戻しました。";
-            SetTransientStatus(statusMessage);
-            RefreshShopItems();
+            InvalidateSizeCacheUnder(destinationFolder);
         }
+
+        return movedCount;
     }
 
     // --- インラインリネーム ---

@@ -125,13 +125,10 @@
                           PreviewKeyDown="HistoryDataGrid_PreviewKeyDown">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
+                            <Setter Property="Background" Value="{Binding RowBackground}" />
+                            <Setter Property="Foreground" Value="{Binding RowForeground}" />
+                            <Setter Property="ToolTip" Value="{Binding AttentionText}" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding OutcomeText}" Value="警告">
-                                    <Setter Property="Background" Value="#FFF2EC" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding OutcomeText}" Value="失敗">
-                                    <Setter Property="Background" Value="#FFE4E4" />
-                                </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </DataGrid.RowStyle>

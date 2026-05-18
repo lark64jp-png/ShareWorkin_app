@@ -9,10 +9,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ShareWorkin</AssemblyName>
     <RootNamespace>ShareWorkin</RootNamespace>
-    <Version>1.19.0</Version>
-    <FileVersion>1.19.0.0</FileVersion>
-    <AssemblyVersion>1.19.0.0</AssemblyVersion>
-    <InformationalVersion>1.19</InformationalVersion>
+    <Version>1.20.0</Version>
+    <FileVersion>1.20.0.0</FileVersion>
+    <AssemblyVersion>1.20.0.0</AssemblyVersion>
+    <InformationalVersion>1.20</InformationalVersion>
     <Company>ShareWorkin</Company>
     <Product>ShareWorkin</Product>
     <Copyright>Copyright (c) 2026 ShareWorkin</Copyright>

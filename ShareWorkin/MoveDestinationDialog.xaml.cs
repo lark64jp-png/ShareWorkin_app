@@ -8,19 +8,17 @@ namespace ShareWorkin;
 public partial class MoveDestinationDialog : Window
 {
     private readonly string? _shopFolder;
-    private readonly string _holdFolder;
     private readonly string _sourcePath;
     private readonly string _sourceParent;
     private readonly string _sourceFullPath;
 
     public string? SelectedFolderPath { get; private set; }
 
-    public MoveDestinationDialog(string? shopFolder, string holdFolder, string sourcePath)
+    public MoveDestinationDialog(string? shopFolder, string sourcePath)
     {
         InitializeComponent();
 
         _shopFolder = shopFolder;
-        _holdFolder = holdFolder;
         _sourcePath = sourcePath;
         _sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
         _sourceFullPath = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -43,12 +41,6 @@ public partial class MoveDestinationDialog : Window
             DestinationTreeView.Items.Add(shopRoot);
         }
 
-        if (Directory.Exists(_holdFolder))
-        {
-            TreeViewItem holdRoot = CreateNode(_holdFolder, "保留");
-            holdRoot.IsExpanded = true;
-            DestinationTreeView.Items.Add(holdRoot);
-        }
     }
 
     private TreeViewItem CreateNode(string folderPath, string label)

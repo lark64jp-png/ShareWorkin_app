@@ -6,6 +6,10 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Data;
+using MediaBrush = System.Windows.Media.Brush;
+using MediaBrushes = System.Windows.Media.Brushes;
+using MediaColor = System.Windows.Media.Color;
+using MediaSolidColorBrush = System.Windows.Media.SolidColorBrush;
 using ShareWorkin.SMB;
 
 namespace ShareWorkin;
@@ -53,6 +57,9 @@ public partial class HistoryWindow : Window
             ContentText = e.Message,
             NoteText = string.IsNullOrWhiteSpace(e.Note) ? BuildFallbackNote(e) : e.Note,
             OutcomeText = GetOutcomeText(e.Outcome),
+            AttentionText = BuildAttentionText(e),
+            RowBackground = GetRowBackground(e),
+            RowForeground = MediaBrushes.Black,
         }).ToList();
 
         _entryMap.Clear();
@@ -185,6 +192,87 @@ public partial class HistoryWindow : Window
 
     private static string BuildFallbackNote(HistoryEntry entry) => "-";
 
+    private static string BuildAttentionText(HistoryEntry entry)
+    {
+        if (entry.Outcome == HistoryOutcome.Failure)
+        {
+            return "変更できなかったため、先に確認してほしい行です。";
+        }
+
+        if (entry.Outcome == HistoryOutcome.Warning)
+        {
+            return "危険回避や条件不一致で止めた行です。理由を確認してほしい行です。";
+        }
+
+        if (string.Equals(entry.EventType, "PermissionCascade", StringComparison.OrdinalIgnoreCase))
+        {
+            return "配下の共有設定見直しが発生した行です。大量変更の確認起点になる行です。";
+        }
+
+        if (string.Equals(entry.EventType, "PermissionChanged", StringComparison.OrdinalIgnoreCase))
+        {
+            return "共有設定の変化を示す行です。移動や配置の結果確認に向いています。";
+        }
+
+        if (IsExternalObservation(entry))
+        {
+            return "外部変化または観測由来の行です。利用者操作と区別して確認できます。";
+        }
+
+        return "変更結果の確認用行です。";
+    }
+
+    private static MediaBrush GetRowBackground(HistoryEntry entry)
+    {
+        if (entry.Outcome == HistoryOutcome.Failure)
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 228, 228));
+        }
+
+        if (entry.Outcome == HistoryOutcome.Warning)
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 242, 236));
+        }
+
+        if (string.Equals(entry.EventType, "PermissionCascade", StringComparison.OrdinalIgnoreCase))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 248, 222));
+        }
+
+        if (string.Equals(entry.EventType, "PermissionChanged", StringComparison.OrdinalIgnoreCase))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 250, 232));
+        }
+
+        if (IsExternalObservation(entry))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(238, 245, 252));
+        }
+
+        if (entry.Outcome == HistoryOutcome.Success)
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(243, 249, 240));
+        }
+
+        return MediaBrushes.White;
+    }
+
+    private static bool IsExternalObservation(HistoryEntry entry)
+    {
+        if (string.Equals(entry.EventType, "ExternalRename", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(entry.Source, "Watcher", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(entry.Source, "Polling", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static string BuildDetailLeft(HistoryEntry entry) =>
         string.Join(Environment.NewLine,
         [
@@ -202,6 +290,7 @@ public partial class HistoryWindow : Window
         [
             $"ユーザー: {GetUserText(entry)}",
             $"方向: {entry.Direction}",
+            $"注目理由: {BuildAttentionText(entry)}",
             $"Source: {entry.Source ?? "-"}",
             $"SourcePath: {entry.SourcePath ?? "-"}",
             $"DestinationPath: {entry.DestinationPath ?? "-"}",
@@ -348,6 +437,9 @@ public sealed class HistoryRow
     public string ContentText { get; init; } = string.Empty;
     public string NoteText { get; init; } = string.Empty;
     public string OutcomeText { get; init; } = string.Empty;
+    public string AttentionText { get; init; } = string.Empty;
+    public MediaBrush RowBackground { get; init; } = MediaBrushes.White;
+    public MediaBrush RowForeground { get; init; } = MediaBrushes.Black;
 }
 
 public sealed class DoubleToGridLengthConverter : IValueConverter
