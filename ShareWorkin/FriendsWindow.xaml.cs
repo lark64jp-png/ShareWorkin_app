@@ -310,7 +310,8 @@ public partial class FriendsWindow : Window
         string eventType,
         HistoryDirection direction,
         HistoryOutcome outcome = HistoryOutcome.Info,
-        string? targetName = null)
+        string? targetName = null,
+        string? pathText = null)
     {
         HistoryRepository.Append(new HistoryEntry
         {
@@ -322,6 +323,8 @@ public partial class FriendsWindow : Window
             Direction = direction,
             Outcome = outcome,
             TargetName = targetName,
+            PathText = pathText,
+            Source = "FriendsWindow",
         });
     }
 
@@ -787,7 +790,8 @@ public partial class FriendsWindow : Window
                 "Switch",
                 HistoryDirection.Outgoing,
                 HistoryOutcome.Success,
-                target.ShareName);
+                target.ShareName,
+                pathText: $@"\\{target.HostMachineName}\{target.ShareName}");
             CompleteDialog(true);
         }
         catch (OperationCanceledException)
@@ -868,7 +872,8 @@ public partial class FriendsWindow : Window
                 "RefreshFriend",
                 HistoryDirection.Outgoing,
                 HistoryOutcome.Success,
-                target.ShareName);
+                target.ShareName,
+                pathText: $@"\\{target.HostMachineName}\{target.ShareName}");
             CompleteDialog(true);
         }
         catch (OperationCanceledException)
@@ -951,7 +956,8 @@ public partial class FriendsWindow : Window
                 "Register",
                 HistoryDirection.Outgoing,
                 HistoryOutcome.Success,
-                friend.ShareName);
+                friend.ShareName,
+                pathText: $@"\\{friend.HostMachineName}\{friend.ShareName}");
             CompleteDialog(true);
         }
         catch (OperationCanceledException)
@@ -1008,7 +1014,8 @@ public partial class FriendsWindow : Window
             "UpdateFriend",
             HistoryDirection.Outgoing,
             HistoryOutcome.Success,
-            target.ShareName);
+            target.ShareName,
+            pathText: $@"\\{target.HostMachineName}\{target.ShareName}");
         CompleteDialog(true);
     }
 
@@ -1361,10 +1368,19 @@ public partial class FriendsWindow : Window
             MessageBoxResult.No);
         if (result != MessageBoxResult.Yes) return;
 
+        Friend deleted = _activeFriend;
         List<Friend> all = FriendsRepository.LoadAll().ToList();
         all.RemoveAll(f => string.Equals(f.Id, _activeFriend.Id, StringComparison.Ordinal));
         FriendsRepository.SaveAll(all);
         SwkLogger.Debug($"FriendsWindow.DeleteButton_Click: deleted, remaining={all.Count}");
+        AppendFriendHistory(
+            deleted,
+            $"{GetFriendLabel(deleted)} を削除しました。",
+            "Delete",
+            HistoryDirection.None,
+            HistoryOutcome.Success,
+            targetName: GetFriendLabel(deleted),
+            pathText: string.IsNullOrWhiteSpace(deleted.UncPath) ? null : deleted.UncPath);
         CompleteDialog(true);
     }
 

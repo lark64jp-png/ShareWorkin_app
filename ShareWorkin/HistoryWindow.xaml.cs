@@ -95,7 +95,8 @@ public partial class HistoryWindow : Window
         }
         else
         {
-            DetailTextBox.Text = string.Empty;
+            DetailLeft.Text = string.Empty;
+            DetailRight.Text = string.Empty;
         }
     }
 
@@ -156,6 +157,8 @@ public partial class HistoryWindow : Window
         "Switch" => "接続先変更",
         "Place" => "配置",
         "PermissionChanged" => "共有設定変更",
+        "PermissionCascade" => "共有設定変更（連動）",
+        "Copy" => "コピー",
         "Log" => "記録",
         _ => eventType
     };
@@ -180,38 +183,31 @@ public partial class HistoryWindow : Window
         return "-";
     }
 
-    private static string BuildFallbackNote(HistoryEntry entry)
-    {
-        if (!string.IsNullOrWhiteSpace(entry.Source))
-        {
-            return entry.Source!;
-        }
+    private static string BuildFallbackNote(HistoryEntry entry) => "-";
 
-        return "-";
-    }
-
-    private static string BuildDetailText(HistoryEntry entry)
-    {
-        List<string> lines =
+    private static string BuildDetailLeft(HistoryEntry entry) =>
+        string.Join(Environment.NewLine,
         [
             $"日時: {entry.OccurredAt:yyyy/MM/dd HH:mm:ss}",
-            $"ユーザー: {GetUserText(entry)}",
             $"アクション: {GetEventTypeText(entry.EventType)}",
             $"結果: {GetOutcomeText(entry.Outcome)}",
             $"パス: {BuildPathText(entry)}",
             $"ファイル名: {entry.TargetName ?? "-"}",
             $"内容: {entry.Message}",
             $"備考: {(string.IsNullOrWhiteSpace(entry.Note) ? "-" : entry.Note)}",
+        ]);
+
+    private static string BuildDetailRight(HistoryEntry entry) =>
+        string.Join(Environment.NewLine,
+        [
+            $"ユーザー: {GetUserText(entry)}",
             $"方向: {entry.Direction}",
             $"Source: {entry.Source ?? "-"}",
             $"SourcePath: {entry.SourcePath ?? "-"}",
             $"DestinationPath: {entry.DestinationPath ?? "-"}",
             $"DestinationFolder: {entry.DestinationFolder ?? "-"}",
             $"FriendId: {entry.FriendId ?? "-"}",
-        ];
-
-        return string.Join(Environment.NewLine, lines);
-    }
+        ]);
 
     private static string GetUserText(HistoryEntry entry)
         => string.IsNullOrWhiteSpace(entry.FriendName) ? "自分" : entry.FriendName!;
@@ -260,7 +256,9 @@ public partial class HistoryWindow : Window
             "内容"       => row.ContentText,
             "備考"       => row.NoteText,
             "結果"       => row.OutcomeText,
-            _            => _entryMap.TryGetValue(row.EntryId, out HistoryEntry? e) ? BuildDetailText(e) : string.Empty,
+            _            => _entryMap.TryGetValue(row.EntryId, out HistoryEntry? e)
+                               ? BuildDetailLeft(e) + Environment.NewLine + BuildDetailRight(e)
+                               : string.Empty,
         };
 
         if (!string.IsNullOrEmpty(value))
@@ -275,11 +273,13 @@ public partial class HistoryWindow : Window
             string.IsNullOrWhiteSpace(row.EntryId) ||
             !_entryMap.TryGetValue(row.EntryId, out HistoryEntry? entry))
         {
-            DetailTextBox.Text = string.Empty;
+            DetailLeft.Text = string.Empty;
+            DetailRight.Text = string.Empty;
             return;
         }
 
-        DetailTextBox.Text = BuildDetailText(entry);
+        DetailLeft.Text = BuildDetailLeft(entry);
+        DetailRight.Text = BuildDetailRight(entry);
     }
 
     private void DeleteHistoryButton_Click(object sender, RoutedEventArgs e)

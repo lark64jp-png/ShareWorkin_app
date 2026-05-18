@@ -442,6 +442,8 @@ public partial class UserListWindow : Window
                     Message = $"{(string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName)} の接続情報を再取得できませんでした。",
                     Outcome = HistoryOutcome.Failure,
                     TargetName = liveShop.ShareName,
+                    PathText = $@"\\{target.HostMachineName}\{liveShop.ShareName}",
+                    Source = "UserListWindow",
                 });
                 BuildUiFromCache();
                 StatusTextBlock.Text = "接続情報を再取得できませんでした。";
@@ -478,6 +480,8 @@ public partial class UserListWindow : Window
                     : $"{(string.IsNullOrWhiteSpace(target.DisplayName) ? target.HostMachineName : target.DisplayName)} の接続情報を再取得しました。",
                 Outcome = verified ? HistoryOutcome.Success : HistoryOutcome.Info,
                 TargetName = liveShop.ShareName,
+                PathText = $@"\\{target.HostMachineName}\{liveShop.ShareName}",
+                Source = "UserListWindow",
             });
             BuildUiFromCache();
             StatusTextBlock.Text = verified

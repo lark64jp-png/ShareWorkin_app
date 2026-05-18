@@ -15,8 +15,10 @@
 - [SID境界は同意UX](feedback_sid_boundary.md) — SID違い=別人と機械的に弾かない。デュアルブート等は明示的同意UXで救う
 - [コンポーネント分割却下→直しミス](feedback_component_split_proposal.md) — 重複ロジック統一の提案却下が後の修正漏れバグにつながった事例
 - [インストーラー時はクリーンビルド＋SHA検証](feedback_installer_build_workflow.md) — 増分ビルドの罠を避ける毎回固定の手順
+- [**更新履歴の記録方針**](feedback_history_recording_philosophy.md) — 網羅性・密度の2軸。「全部出す」と「大量を避ける」は矛盾しない。機械的適用禁止
 
 ## Project
 - [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
 - [アイコン機能 v1.08](project_icon_feature_v108.md) — ユーザー情報の構造変更とアイコン実装。残宿題3点（一覧反映・削除掃除・微調整）
 - [v1.17 cert診断・userlist-state追加](project_v1.17_cert_diagnosis.md) — cert persistence全台失敗判明・診断用state snapshot実装(2026-05-14)
+- [**v1.19 履歴強化セッション**](project_v1.19_history_session.md) — 記録漏れ修正・選択色統一・PermissionCascade再帰化。インストーラー未生成

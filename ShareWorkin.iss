@@ -906,6 +906,7 @@ begin
         '/Create /TN "ShareWorkin\ShareWorkinTray" /TR "\"' +
         ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec(ExpandConstant('{app}\' + TRAY_EXE), '', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
       MsgBox(APP_NAME + ' のインストールが完了しました。', mbInformation, MB_OK);
       Exec(ExpandConstant('{app}\' + APP_EXE), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
     end;

@@ -3,10 +3,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ShareWorkin"
         Title="履歴"
-        Width="980"
-        Height="560"
-        MinWidth="860"
-        MinHeight="420"
+        Width="1100"
+        Height="660"
+        MinWidth="960"
+        MinHeight="520"
         WindowStartupLocation="CenterOwner"
         ResizeMode="CanResize"
         Background="#F6F1E7">
@@ -59,7 +59,8 @@
                        Text="履歴"
                        FontSize="24"
                        FontWeight="SemiBold"
-                       Foreground="#2F2A22" />
+                       Foreground="#2F2A22"
+                       TextAlignment="Center" />
             <TextBlock x:Name="SubtitleTextBlock"
                        Text="最近の履歴を表で表示します。"
                        FontSize="12"
@@ -107,6 +108,8 @@
 
                 <DataGrid Grid.Row="0"
                           x:Name="HistoryDataGrid"
+                          RowBackground="White"
+                          AlternatingRowBackground="#FAF8F3"
                           Margin="8,8,8,0"
                           AutoGenerateColumns="False"
                           IsReadOnly="True"
@@ -120,20 +123,38 @@
                           SelectionUnit="FullRow"
                           SelectionChanged="HistoryDataGrid_SelectionChanged"
                           PreviewKeyDown="HistoryDataGrid_PreviewKeyDown">
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding OutcomeText}" Value="警告">
+                                    <Setter Property="Background" Value="#FFF2EC" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding OutcomeText}" Value="失敗">
+                                    <Setter Property="Background" Value="#FFE4E4" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <DataGrid.Resources>
+                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#C8D8F0" />
+                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#2F2A22" />
+                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#C8D8F0" />
+                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#2F2A22" />
+                    </DataGrid.Resources>
                     <DataGrid.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="コピー" Click="CopyRowMenuItem_Click" />
                         </ContextMenu>
                     </DataGrid.ContextMenu>
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="日時"       Binding="{Binding TimeText}"      Width="150" />
-                        <DataGridTextColumn Header="ユーザー"   Binding="{Binding UserText}"      Width="120" />
+                        <DataGridTextColumn Header="日時"       Binding="{Binding TimeText}"      Width="140" />
+                        <DataGridTextColumn Header="ユーザー"   Binding="{Binding UserText}"      Width="76" />
                         <DataGridTextColumn Header="パス"       Binding="{Binding PathText}"      Width="220" />
                         <DataGridTextColumn Header="ファイル名" Binding="{Binding FileNameText}"  Width="150" />
-                        <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="110" />
+                        <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="90" />
                         <DataGridTextColumn Header="内容"       Binding="{Binding ContentText}"   Width="*" />
                         <DataGridTextColumn Header="備考"       Binding="{Binding NoteText}"      Width="180" />
-                        <DataGridTextColumn Header="結果"       Binding="{Binding OutcomeText}"   Width="80" />
+                        <DataGridTextColumn Header="結果"       Binding="{Binding OutcomeText}"   Width="50" />
                     </DataGrid.Columns>
                 </DataGrid>
 
@@ -156,7 +177,10 @@
                                 <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[6].ActualWidth, Converter={StaticResource D2GL}}" />
                                 <ColumnDefinition Width="{Binding ElementName=HistoryDataGrid, Path=Columns[7].ActualWidth, Converter={StaticResource D2GL}}" />
                             </Grid.ColumnDefinitions>
-                            <!-- col 0: 日時 — フィルターなし -->
+                                    <!-- col 0: 日時 — 件数表示 -->
+                            <TextBlock Grid.Column="0" x:Name="CountTextBlock"
+                                       VerticalAlignment="Center" FontSize="10"
+                                       Foreground="#6F675C" Text="0 件" />
                             <TextBox Grid.Column="1" x:Name="FilterUser"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ユーザー"   Tag="ユーザー"   Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
                             <TextBox Grid.Column="2" x:Name="FilterPath"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="パス"       Tag="パス"       Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
                             <TextBox Grid.Column="3" x:Name="FilterFileName" Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ファイル名" Tag="ファイル名" Style="{StaticResource FilterBoxStyle}" TextChanged="FilterTextBox_TextChanged" />
@@ -188,35 +212,44 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <TextBlock Text="ディティール"
-                           FontSize="14"
+                <TextBlock Text="詳細"
+                           FontSize="11"
                            FontWeight="SemiBold"
                            Foreground="#2F2A22" />
 
-                <TextBox Grid.Row="2"
-                         x:Name="DetailTextBox"
-                         IsReadOnly="True"
-                         TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto"
-                         Background="#FFFDFC"
-                         BorderThickness="0"
-                         FontFamily="Consolas" />
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0"
+                             x:Name="DetailLeft"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Background="#FFFDFC"
+                             BorderThickness="0"
+                             FontFamily="Consolas"
+                             FontSize="11" />
+                    <TextBox Grid.Column="2"
+                             x:Name="DetailRight"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Background="#FFFDFC"
+                             BorderThickness="0"
+                             FontFamily="Consolas"
+                             FontSize="11" />
+                </Grid>
             </Grid>
         </Border>
 
-        <DockPanel Grid.Row="6" LastChildFill="False">
-            <TextBlock DockPanel.Dock="Left"
-                       x:Name="CountTextBlock"
-                       VerticalAlignment="Center"
-                       FontSize="12"
-                       Foreground="#6F675C"
-                       Text="0 件" />
-            <Button DockPanel.Dock="Right"
-                    Content="閉じる"
-                    Width="100"
-                    Height="32"
-                    IsCancel="True" />
-        </DockPanel>
+        <Button Grid.Row="6"
+                Content="閉じる"
+                Width="100"
+                Height="32"
+                IsCancel="True"
+                HorizontalAlignment="Right" />
     </Grid>
 </Window>

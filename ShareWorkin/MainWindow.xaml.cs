@@ -311,12 +311,13 @@ public partial class MainWindow : Window
             return true;
 
         bool trayAlreadyRunning = Process.GetProcessesByName("ShareWorkinTray").Length > 0;
-        if (!trayAlreadyRunning && !StartTrayProcess())
-            return false;
+        if (!trayAlreadyRunning)
+            StartTrayProcess(); // 失敗しても待機は続ける（ログオン直後・スケジュールタスク起動中など）
 
         // Tray のコールドスタート(JIT・Defender スキャン・WPF 初期化)で
-        // パイプ受け入れまで数秒かかる場合がある。100ms 間隔で最大 ~5秒待つ。
-        for (int i = 0; i < 25; i++)
+        // パイプ受け入れまで数秒かかる場合がある。時間ベースで最大 10 秒待つ。
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
             if (_pipeClient.Connect(timeoutMs: 100))
@@ -1172,17 +1173,42 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 item.RefreshShareStatus();
 
                 string afterStatus = item.ShareStatusText;
-                string? permNote = afterStatus.StartsWith("指定", StringComparison.Ordinal) && item.AllowedUsers.Count > 0
+                string permNote = afterStatus.StartsWith("指定", StringComparison.Ordinal) && item.AllowedUsers.Count > 0
                     ? $"対象: {string.Join("、", item.AllowedUsers)}"
-                    : null;
+                    : afterStatus;
                 AppendHistory(
                     HistoryChannel.Update,
                     $"{item.Name} の共有設定を変更しました。（{beforeStatus} → {afterStatus}）",
                     eventType: "PermissionChanged",
+                    outcome: HistoryOutcome.Success,
                     targetName: item.Name,
                     pathText: Path.GetDirectoryName(item.FullPath) ?? string.Empty,
+                    sourcePath: item.FullPath,
                     note: permNote,
                     source: "MainWindow");
+
+                if (item.IsDirectory && Directory.Exists(item.FullPath))
+                {
+                    string cascadeFolder = item.Name;
+                    string cascadePath = item.FullPath;
+                    string cascadeNote = $"上位フォルダー: {cascadeFolder}（{afterStatus}）";
+                    foreach (string childPath in Directory.EnumerateFileSystemEntries(
+                        cascadePath, "*", SearchOption.AllDirectories))
+                    {
+                        string childName = Path.GetFileName(childPath);
+                        string childParent = Path.GetDirectoryName(childPath) ?? cascadePath;
+                        AppendHistory(
+                            HistoryChannel.Update,
+                            $"{childName} の共有設定が上位フォルダー「{cascadeFolder}」の変更により影響を受けました。",
+                            eventType: "PermissionCascade",
+                            outcome: HistoryOutcome.Info,
+                            targetName: childName,
+                            pathText: childParent,
+                            sourcePath: childPath,
+                            note: cascadeNote,
+                            source: "MainWindow.cascade");
+                    }
+                }
 
                 if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
                 {
@@ -1778,6 +1804,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 !string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
                 NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+                MaybeAppendPermissionInheritedOnArrival(result.DestinationPath!, result.DestinationFolder!, "MainWindow.place");
                 placedCount++;
                 lastPlacedName = result.TargetName;
             }
@@ -1917,6 +1944,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+        MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
         InvalidateSizeCacheUnder(result.DestinationFolder);
         if (string.Equals(
                 Path.GetFullPath(result.DestinationFolder),
@@ -4107,6 +4135,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (effectiveSource == null)
         {
             if (changed) SavePermissionMap();
+            var destPermForNull = FindEffectiveAncestorPermission(destinationFolder);
+            if (destPermForNull != null)
+                AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, null, destPermForNull.Value);
             return;
         }
 
@@ -4115,6 +4146,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (PermissionLevel(effectiveDest) >= PermissionLevel(effectiveSource))
         {
             if (changed) SavePermissionMap();
+            if (effectiveDest != null)
+                AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value);
             return;
         }
 
@@ -4123,6 +4156,59 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string capturedDest = destinationPath;
         var capturedPerm = effectiveSource.Value;
         _ = Task.Run(() => SmbNtfsManager.SetSubfolderPermission(capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
+    }
+
+    private void AppendPermissionChangedByMoveHistory(
+        string sourcePath,
+        string destinationPath,
+        string destinationFolder,
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? beforePerm,
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff) afterPerm)
+    {
+        string fileName = Path.GetFileName(destinationPath);
+        string beforeStatus = PermissionToStatusText(beforePerm);
+        string afterStatus = PermissionToStatusText(afterPerm);
+        string destFolderName = Path.GetFileName(destinationFolder.TrimEnd(Path.DirectorySeparatorChar)) ?? destinationFolder;
+        AppendHistory(
+            HistoryChannel.Update,
+            $"{fileName} の共有設定が移動先のフォルダー設定を引き継ぎました。（{beforeStatus} → {afterStatus}）",
+            eventType: "PermissionChanged",
+            outcome: HistoryOutcome.Info,
+            targetName: fileName,
+            pathText: destinationFolder,
+            sourcePath: sourcePath,
+            destinationPath: destinationPath,
+            note: $"移動先: {destFolderName}（{afterStatus}）",
+            source: "MainWindow.move");
+    }
+
+    private void MaybeAppendPermissionInheritedOnArrival(string destinationPath, string destinationFolder, string source)
+    {
+        var destPerm = FindEffectiveAncestorPermission(destinationFolder);
+        if (destPerm == null) return;
+        string fileName = Path.GetFileName(destinationPath);
+        string afterStatus = PermissionToStatusText(destPerm);
+        string destFolderName = Path.GetFileName(destinationFolder.TrimEnd(Path.DirectorySeparatorChar)) ?? destinationFolder;
+        AppendHistory(
+            HistoryChannel.Update,
+            $"{fileName} の共有設定が配置先のフォルダー設定を引き継ぎました。（全員 → {afterStatus}）",
+            eventType: "PermissionChanged",
+            outcome: HistoryOutcome.Info,
+            targetName: fileName,
+            pathText: destinationFolder,
+            sourcePath: destinationPath,
+            destinationPath: destinationPath,
+            note: $"配置先: {destFolderName}（{afterStatus}）",
+            source: source);
+    }
+
+    private static string PermissionToStatusText((List<string> Users, bool IsReadOnly, bool IsSharedOff)? perm)
+    {
+        if (perm == null) return "全員";
+        var (users, isReadOnly, isSharedOff) = perm.Value;
+        if (isSharedOff) return "OFF";
+        if (isReadOnly) return users.Count > 0 ? "指定R" : "全員R";
+        return users.Count > 0 ? "指定" : "全員";
     }
 
     private void UpdateBreadcrumb()
@@ -4497,7 +4583,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 HistoryOutcome.Failure,
                 HistoryDirection.Outgoing,
                 friend,
-                targetName: label);
+                targetName: label,
+                pathText: string.Join(", ", uncCandidates),
+                source: "MainWindow");
             SetTransientStatus("接続できません");
             return;
         }
@@ -4521,7 +4609,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             HistoryOutcome.Success,
             HistoryDirection.Outgoing,
             friend,
-            targetName: liveShop.ShareName);
+            targetName: liveShop.ShareName,
+            pathText: accessiblePath,
+            source: "MainWindow");
         await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
     }
 

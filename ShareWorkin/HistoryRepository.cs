@@ -115,7 +115,7 @@ public static class HistoryRepository
                 sourcePath: entry.SourcePath,
                 destinationPath: entry.DestinationPath,
                 destinationFolder: entry.DestinationFolder,
-                source: string.IsNullOrWhiteSpace(entry.Source) ? "HistoryRepository.Append" : entry.Source);
+                source: string.IsNullOrWhiteSpace(entry.Source) ? null : entry.Source);
             RaiseChanged(entry.Channel);
             return;
         }
@@ -325,24 +325,12 @@ public static class HistoryRepository
 
     private static string BuildJournalMessage(SwkHistoryJournalRecord record)
     {
-        if (string.IsNullOrWhiteSpace(record.LogLevel) && string.IsNullOrWhiteSpace(record.Source))
+        if (string.IsNullOrWhiteSpace(record.LogLevel))
         {
             return record.Message;
         }
 
-        List<string> parts = [];
-        if (!string.IsNullOrWhiteSpace(record.LogLevel))
-        {
-            parts.Add(record.LogLevel!);
-        }
-
-        if (!string.IsNullOrWhiteSpace(record.Source))
-        {
-            parts.Add(record.Source!);
-        }
-
-        string prefix = parts.Count == 0 ? string.Empty : $"[{string.Join(" / ", parts)}] ";
-        return prefix + record.Message;
+        return $"[{record.LogLevel}] {record.Message}";
     }
 
     private static HistoryChannel ParseChannel(string? channel)
