@@ -1172,12 +1172,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 item.RefreshShareStatus();
 
                 string afterStatus = item.ShareStatusText;
+                string? permNote = afterStatus.StartsWith("指定", StringComparison.Ordinal) && item.AllowedUsers.Count > 0
+                    ? $"対象: {string.Join("、", item.AllowedUsers)}"
+                    : null;
                 AppendHistory(
                     HistoryChannel.Update,
                     $"{item.Name} の共有設定を変更しました。（{beforeStatus} → {afterStatus}）",
                     eventType: "PermissionChanged",
                     targetName: item.Name,
-                    pathText: Path.GetDirectoryName(item.FullPath) ?? string.Empty);
+                    pathText: Path.GetDirectoryName(item.FullPath) ?? string.Empty,
+                    note: permNote,
+                    source: "MainWindow");
 
                 if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
                 {
