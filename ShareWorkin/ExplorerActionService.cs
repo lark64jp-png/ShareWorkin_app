@@ -108,13 +108,16 @@ public static class ExplorerActionService
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Move", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - destination not found: {request.DestinationFolder}");
+                $"Explorer[{request.ModeLabel}]: Move blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath));
         }
 
         if (request.IsHoldFolderPath(request.SourcePath))
         {
             return Blocked("Move", "保留は移せません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - hold folder: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Move blocked - hold folder: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
         }
 
         bool sourceIsDirectory = Directory.Exists(request.SourcePath);
@@ -122,7 +125,9 @@ public static class ExplorerActionService
         if (!sourceIsDirectory && !sourceIsFile)
         {
             return Blocked("Move", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - source not found: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Move blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
         }
 
         string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
@@ -145,7 +150,10 @@ public static class ExplorerActionService
         if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
         {
             return Blocked("Move", "その中へは移せません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}");
+                $"Explorer[{request.ModeLabel}]: Move blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);
@@ -153,7 +161,10 @@ public static class ExplorerActionService
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
         {
             return Blocked("Move", "同じ名前があるので移せません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: Move blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
         }
 
         string sourceStatus = request.GetShareStatus(request.SourcePath);
@@ -237,14 +248,20 @@ public static class ExplorerActionService
         if (newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
             return Blocked("Rename", "その名前には変えられません。",
-                $"Explorer[{request.ModeLabel}]: Rename blocked - invalid name: {oldName} -> {newName}");
+                $"Explorer[{request.ModeLabel}]: Rename blocked - invalid name: {oldName} -> {newName}",
+                targetName: newName,
+                pathText: sourceParent,
+                note: $"旧名: {oldName}");
         }
 
         string destinationPath = Path.Combine(sourceParent, newName);
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
         {
             return Blocked("Rename", "同じ名前があるので変えられません。",
-                $"Explorer[{request.ModeLabel}]: Rename blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: Rename blocked - same name: {destinationPath}",
+                targetName: newName,
+                pathText: sourceParent,
+                note: $"旧名: {oldName}");
         }
 
         string sourceStatus = request.GetShareStatus(request.SourcePath);
@@ -302,13 +319,16 @@ public static class ExplorerActionService
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Copy", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - destination not found: {request.DestinationFolder}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath));
         }
 
         if (request.IsHoldFolderPath(request.SourcePath))
         {
             return Blocked("Copy", "保留はコピーできません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - hold folder: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - hold folder: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
         }
 
         bool sourceIsDirectory = Directory.Exists(request.SourcePath);
@@ -316,7 +336,9 @@ public static class ExplorerActionService
         if (!sourceIsDirectory && !sourceIsFile)
         {
             return Blocked("Copy", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - source not found: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
         }
 
         string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
@@ -326,13 +348,18 @@ public static class ExplorerActionService
                 StringComparison.OrdinalIgnoreCase))
         {
             return Blocked("Copy", "同じ場所にはコピーできません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - same location: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - same location: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: sourceParent);
         }
 
         if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
         {
             return Blocked("Copy", "その中へはコピーできません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);
@@ -340,7 +367,10 @@ public static class ExplorerActionService
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
         {
             return Blocked("Copy", "同じ名前があるのでコピーできません。",
-                $"Explorer[{request.ModeLabel}]: Copy blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: Copy blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
         }
 
         string sourceStatus = request.GetShareStatus(request.SourcePath);
@@ -398,7 +428,9 @@ public static class ExplorerActionService
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Place", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Place blocked - destination not found: {request.DestinationFolder}");
+                $"Explorer[{request.ModeLabel}]: Place blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder);
         }
 
         bool sourceIsDirectory = Directory.Exists(request.SourcePath);
@@ -406,7 +438,9 @@ public static class ExplorerActionService
         if (!sourceIsDirectory && !sourceIsFile)
         {
             return Blocked("Place", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Place blocked - source not found: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Place blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder);
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);
@@ -414,7 +448,10 @@ public static class ExplorerActionService
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
         {
             return Blocked("Place", $"{sourceName} は同じ名前があるので置けません。",
-                $"Explorer[{request.ModeLabel}]: Place blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: Place blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"配置元: {request.SourcePath}");
         }
 
         try
@@ -477,7 +514,9 @@ public static class ExplorerActionService
         if (!sourceIsDirectory && !sourceIsFile)
         {
             return Blocked("Hold", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Hold blocked - source not found: {request.SourcePath}");
+                $"Explorer[{request.ModeLabel}]: Hold blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);
@@ -486,7 +525,10 @@ public static class ExplorerActionService
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
         {
             return Blocked("Hold", $"{sourceName} は同じ名前があるので保留にできません。",
-                $"Explorer[{request.ModeLabel}]: Hold blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: Hold blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.HoldFolderPath,
+                note: $"保留前: {sourceParent}");
         }
 
         string sourceStatus = request.GetShareStatus(request.SourcePath);
@@ -551,7 +593,9 @@ public static class ExplorerActionService
         if (!exists)
         {
             return Blocked("Delete", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: Delete blocked - not found: {request.ItemPath}");
+                $"Explorer[{request.ModeLabel}]: Delete blocked - not found: {request.ItemPath}",
+                targetName: Path.GetFileName(request.ItemPath),
+                pathText: Path.GetDirectoryName(request.ItemPath));
         }
 
         string itemName = Path.GetFileName(request.ItemPath);
@@ -618,20 +662,26 @@ public static class ExplorerActionService
         if (!Directory.Exists(request.ParentFolder))
         {
             return Blocked("CreateFolder", "その場所が見つかりません。",
-                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - parent not found: {request.ParentFolder}");
+                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - parent not found: {request.ParentFolder}",
+                targetName: request.FolderName,
+                pathText: request.ParentFolder);
         }
 
         if (request.FolderName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
             return Blocked("CreateFolder", "その名前では作れません。",
-                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - invalid name: {request.FolderName}");
+                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - invalid name: {request.FolderName}",
+                targetName: request.FolderName,
+                pathText: request.ParentFolder);
         }
 
         string destinationPath = Path.Combine(request.ParentFolder, request.FolderName);
         if (Directory.Exists(destinationPath) || File.Exists(destinationPath))
         {
             return Blocked("CreateFolder", "同じ名前があるので作れません。",
-                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - same name: {destinationPath}");
+                $"Explorer[{request.ModeLabel}]: CreateFolder blocked - same name: {destinationPath}",
+                targetName: request.FolderName,
+                pathText: request.ParentFolder);
         }
 
         string parentStatus = request.GetShareStatus(request.ParentFolder);
@@ -676,7 +726,8 @@ public static class ExplorerActionService
         }
     }
 
-    private static ExplorerActionResult Blocked(string eventType, string userMessage, string logMessage)
+    private static ExplorerActionResult Blocked(string eventType, string userMessage, string logMessage,
+        string? targetName = null, string? pathText = null, string? note = null)
         => new()
         {
             State = ExplorerActionState.Blocked,
@@ -686,6 +737,9 @@ public static class ExplorerActionService
             HistoryMessage = userMessage,
             HistoryOutcome = HistoryOutcome.Warning,
             Source = "ExplorerActionService",
+            TargetName = targetName,
+            PathText = pathText,
+            Note = note,
         };
 
     private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
