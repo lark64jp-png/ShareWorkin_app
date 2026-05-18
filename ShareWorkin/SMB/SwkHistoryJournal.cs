@@ -107,11 +107,11 @@ public static class SwkHistoryJournal
         });
     }
 
-    public static void AppendLog(SwkLogLevel level, string message, string? source = null)
+    public static void AppendLog(SwkLogLevel level, string message, string? source = null, string? targetName = null, string? pathText = null)
     {
         Append(new SwkHistoryJournalRecord
         {
-            Channel = "Update",
+            Channel = "Log",
             EventType = "Log",
             Message = message,
             Outcome = level switch
@@ -123,7 +123,8 @@ public static class SwkHistoryJournal
             Direction = "None",
             Source = source ?? "SwkLogger",
             LogLevel = level.ToString(),
-            TargetName = level.ToString(),
+            TargetName = targetName,
+            PathText = pathText,
         });
     }
 

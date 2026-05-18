@@ -23,7 +23,8 @@ public static class SwkLogger
 
     // 開発期間中の観測用。完成時は SwkLogger.Debug(...) 呼び出しを grep で
     // 機械的に削除できるよう、デバッグ専用ログはこの経路のみに統一する。
-    public static void Debug(string message) => Write(SwkLogLevel.Debug, message);
+    public static void Debug(string message, string? targetName = null, string? pathText = null)
+        => Write(SwkLogLevel.Debug, message, targetName, pathText);
 
     public static void Info(string message) => Write(SwkLogLevel.Info, message);
 
@@ -34,7 +35,7 @@ public static class SwkLogger
     public static void Error(string message, Exception ex)
         => Write(SwkLogLevel.Error, $"{message} :: {ex}");
 
-    private static void Write(SwkLogLevel level, string message)
+    private static void Write(SwkLogLevel level, string message, string? targetName = null, string? pathText = null)
     {
         try
         {
@@ -47,7 +48,7 @@ public static class SwkLogger
                 File.AppendAllText(filePath, line, Encoding.UTF8);
             }
 
-            SwkHistoryJournal.AppendLog(level, message);
+            SwkHistoryJournal.AppendLog(level, message, targetName: targetName, pathText: pathText);
         }
         catch
         {

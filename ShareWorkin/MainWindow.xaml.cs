@@ -3419,7 +3419,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
                     item.IsSharedOff = _effectiveParentPerm.Value.IsSharedOff;
                 }
-                SwkLogger.Debug($"Display[{_currentMode}]: item={item.Name}({item.ShareStatusText})");
+                SwkLogger.Debug($"Display[{_currentMode}]: item={item.Name}({item.ShareStatusText})", targetName: item.Name, pathText: _currentFolder);
             }
 
             if (_currentMode == DisplayMode.FriendShop)
