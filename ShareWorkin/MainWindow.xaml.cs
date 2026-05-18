@@ -4061,6 +4061,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return 0;
     }
 
+    // item の権限が dest フォルダーの範囲内（同じか制限が強い）なら true。
+    // ユーザー範囲とアクセス種別の両方で判定する。
+    // true  → そのまま維持  /  false → 移動先フォルダーに揃える
+    private static bool IsWithinRange(
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff) item,
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? dest)
+    {
+        if (dest == null) return true;
+        var (destUsers, destReadOnly, destOff) = dest.Value;
+        var (itemUsers, itemReadOnly, itemOff) = item;
+        if (itemOff) return true;
+        if (destOff) return false;
+        if (!itemReadOnly && destReadOnly) return false;
+        if (destUsers.Count > 0 && itemUsers.Count == 0) return false;
+        return true;
+    }
+
     private void PreservePermissionOnMove(
         string sourcePath,
         string sourceParent,
@@ -4087,7 +4104,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         var effectiveDest = FindEffectiveAncestorPermission(destinationFolder);
 
-        if (PermissionLevel(effectiveDest) >= PermissionLevel(effectiveSource))
+        if (!IsWithinRange(effectiveSource.Value, effectiveDest))
         {
             if (changed) SavePermissionMap();
             if (effectiveDest != null)
