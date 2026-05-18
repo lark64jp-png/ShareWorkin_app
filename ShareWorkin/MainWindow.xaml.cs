@@ -1163,12 +1163,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         try
         {
+            string beforeStatus = item.ShareStatusText;
             PermissionWindow window = new(item) { Owner = this };
             if (window.ShowDialog() == true)
             {
                 StorePermission(item);
                 SavePermissionMap();
                 item.RefreshShareStatus();
+
+                string afterStatus = item.ShareStatusText;
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{item.Name} の共有設定を変更しました。（{beforeStatus} → {afterStatus}）",
+                    eventType: "PermissionChanged",
+                    targetName: item.Name,
+                    pathText: Path.GetDirectoryName(item.FullPath) ?? string.Empty);
 
                 if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
                 {
@@ -4482,7 +4491,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 "Connect",
                 HistoryOutcome.Failure,
                 HistoryDirection.Outgoing,
-                friend);
+                friend,
+                targetName: label);
             SetTransientStatus("接続できません");
             return;
         }

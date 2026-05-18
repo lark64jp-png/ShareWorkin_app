@@ -104,6 +104,7 @@ public static class ExplorerActionService
 {
     public static ExplorerActionResult MoveItem(MoveItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Move attempt: {request.SourcePath} -> {request.DestinationFolder}");
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Move", "その場所が見つかりません。",
@@ -206,6 +207,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult RenameItem(RenameItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Rename attempt: {request.SourcePath} -> {request.NewName}");
         string newName = request.NewName.Trim();
         if (string.IsNullOrWhiteSpace(newName))
         {
@@ -296,6 +298,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult CopyItem(CopyItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Copy attempt: {request.SourcePath} -> {request.DestinationFolder}");
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Copy", "その場所が見つかりません。",
@@ -391,6 +394,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult PlaceExternalItem(PlaceExternalItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Place attempt: {request.SourcePath} -> {request.DestinationFolder}");
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
         {
             return Blocked("Place", "その場所が見つかりません。",
@@ -461,6 +465,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult HoldItem(HoldItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Hold attempt: {request.SourcePath}");
         if (string.IsNullOrWhiteSpace(request.SourcePath))
         {
             return Blocked("Hold", "その場所が見つかりません。",
@@ -535,6 +540,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult DeleteItem(DeleteItemRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: Delete attempt: {request.ItemPath}");
         if (string.IsNullOrWhiteSpace(request.ItemPath))
         {
             return Blocked("Delete", "その場所が見つかりません。",
@@ -598,6 +604,7 @@ public static class ExplorerActionService
 
     public static ExplorerActionResult CreateFolder(CreateFolderRequest request)
     {
+        SwkLogger.Info($"Explorer[{request.ModeLabel}]: CreateFolder attempt: {request.FolderName} in {request.ParentFolder}");
         if (string.IsNullOrWhiteSpace(request.FolderName))
         {
             return new ExplorerActionResult

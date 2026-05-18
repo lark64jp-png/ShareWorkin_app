@@ -15,6 +15,7 @@ public partial class HistoryWindow : Window
     private readonly int _maxCount;
     private readonly ObservableCollection<HistoryRow> _rows = [];
     private readonly Dictionary<string, HistoryEntry> _entryMap = [];
+    private List<HistoryRow> _allRows = [];
     private const string TimestampFormat = "yyyy/MM/dd HH:mm:ss";
 
     public HistoryWindow(string title, string subtitle, HistoryChannel channel, int maxCount)
@@ -36,35 +37,46 @@ public partial class HistoryWindow : Window
 
     private void RefreshRows()
     {
-        List<HistoryRow> rows = HistoryRepository.GetEntries(_channel, _maxCount)
+        List<HistoryEntry> entries = HistoryRepository.GetEntries(_channel, _maxCount)
             .OrderByDescending(e => e.OccurredAt)
-            .Select(static e => new HistoryRow
-            {
-                EntryId = e.Id,
-                TimeText = e.OccurredAt.ToString("yyyy/MM/dd HH:mm:ss"),
-                UserText = string.IsNullOrWhiteSpace(e.FriendName) ? "自分" : e.FriendName,
-                PathText = BuildPathText(e),
-                EventTypeText = GetEventTypeText(e.EventType),
-                FileNameText = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
-                ContentText = e.Message,
-                NoteText = string.IsNullOrWhiteSpace(e.Note) ? BuildFallbackNote(e) : e.Note,
-                OutcomeText = GetOutcomeText(e.Outcome),
-            })
             .ToList();
 
+        _allRows = entries.Select(static e => new HistoryRow
+        {
+            EntryId = e.Id,
+            TimeText = e.OccurredAt.ToString("yyyy/MM/dd HH:mm:ss"),
+            UserText = string.IsNullOrWhiteSpace(e.FriendName) ? "自分" : e.FriendName,
+            PathText = BuildPathText(e),
+            EventTypeText = GetEventTypeText(e.EventType),
+            FileNameText = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
+            ContentText = e.Message,
+            NoteText = string.IsNullOrWhiteSpace(e.Note) ? BuildFallbackNote(e) : e.Note,
+            OutcomeText = GetOutcomeText(e.Outcome),
+        }).ToList();
+
         _entryMap.Clear();
-        foreach (HistoryEntry entry in HistoryRepository.GetEntries(_channel, _maxCount))
+        foreach (HistoryEntry entry in entries)
         {
             _entryMap[entry.Id] = entry;
         }
 
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        string filter = FilterTextBox?.Text?.Trim() ?? string.Empty;
+        List<HistoryRow> filtered = string.IsNullOrEmpty(filter)
+            ? _allRows
+            : _allRows.Where(r => MatchesFilter(r, filter)).ToList();
+
         _rows.Clear();
-        foreach (HistoryRow row in rows)
+        foreach (HistoryRow row in filtered)
         {
             _rows.Add(row);
         }
 
-        CountTextBlock.Text = $"{rows.Count} 件";
+        CountTextBlock.Text = $"{filtered.Count} 件";
         if (_rows.Count > 0)
         {
             HistoryDataGrid.SelectedIndex = 0;
@@ -74,6 +86,18 @@ public partial class HistoryWindow : Window
             DetailTextBox.Text = string.Empty;
         }
     }
+
+    private static bool MatchesFilter(HistoryRow row, string filter)
+    {
+        return Contains(row.FileNameText, filter)
+            || Contains(row.EventTypeText, filter)
+            || Contains(row.ContentText, filter)
+            || Contains(row.PathText, filter)
+            || Contains(row.UserText, filter);
+    }
+
+    private static bool Contains(string? value, string filter)
+        => value?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
 
     private void HistoryRepository_HistoryChanged(HistoryChannel channel)
     {
@@ -118,6 +142,7 @@ public partial class HistoryWindow : Window
         "Resume" => "再開",
         "Move" => "移動",
         "Rename" => "名前変更",
+        "ExternalRename" => "名前変更（外部）",
         "Delete" => "削除",
         "Hold" => "保留",
         "CreateFolder" => "フォルダー作成",
@@ -127,6 +152,7 @@ public partial class HistoryWindow : Window
         "UpdateFriend" => "内容更新",
         "Switch" => "接続先変更",
         "Place" => "配置",
+        "PermissionChanged" => "共有設定変更",
         "Log" => "記録",
         _ => eventType
     };
@@ -186,6 +212,23 @@ public partial class HistoryWindow : Window
 
     private static string GetUserText(HistoryEntry entry)
         => string.IsNullOrWhiteSpace(entry.FriendName) ? "自分" : entry.FriendName!;
+
+    private void FilterTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        => ApplyFilter();
+
+    private void ClearFilterButton_Click(object sender, RoutedEventArgs e)
+        => FilterTextBox.Clear();
+
+    private void CopyRowMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (HistoryDataGrid.SelectedItem is not HistoryRow row ||
+            !_entryMap.TryGetValue(row.EntryId, out HistoryEntry? entry))
+        {
+            return;
+        }
+
+        System.Windows.Clipboard.SetText(BuildDetailText(entry));
+    }
 
     private void HistoryDataGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {

@@ -14,7 +14,9 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="10" />
             <RowDefinition Height="2*" />
-            <RowDefinition Height="10" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="8" />
             <RowDefinition Height="*" />
             <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
@@ -78,6 +80,11 @@
                       SelectionMode="Single"
                       SelectionUnit="FullRow"
                       SelectionChanged="HistoryDataGrid_SelectionChanged">
+                <DataGrid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="コピー" Click="CopyRowMenuItem_Click" />
+                    </ContextMenu>
+                </DataGrid.ContextMenu>
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="日時" Binding="{Binding TimeText}" Width="150" />
                     <DataGridTextColumn Header="ユーザー" Binding="{Binding UserText}" Width="120" />
@@ -91,7 +98,27 @@
             </DataGrid>
         </Border>
 
-        <Border Grid.Row="4"
+        <DockPanel Grid.Row="4" LastChildFill="True">
+            <TextBlock DockPanel.Dock="Left"
+                       Text="絞り込み"
+                       VerticalAlignment="Center"
+                       FontSize="12"
+                       Foreground="#6F675C"
+                       Margin="0,0,8,0" />
+            <Button DockPanel.Dock="Right"
+                    x:Name="ClearFilterButton"
+                    Content="クリア"
+                    Width="70"
+                    Height="28"
+                    Margin="8,0,0,0"
+                    Click="ClearFilterButton_Click" />
+            <TextBox x:Name="FilterTextBox"
+                     Height="28"
+                     VerticalContentAlignment="Center"
+                     TextChanged="FilterTextBox_TextChanged" />
+        </DockPanel>
+
+        <Border Grid.Row="6"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="8"
@@ -121,7 +148,7 @@
             </Grid>
         </Border>
 
-        <DockPanel Grid.Row="6" LastChildFill="False">
+        <DockPanel Grid.Row="8" LastChildFill="False">
             <TextBlock DockPanel.Dock="Left"
                        x:Name="CountTextBlock"
                        VerticalAlignment="Center"
