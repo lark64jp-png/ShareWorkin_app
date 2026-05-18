@@ -54,6 +54,9 @@ public partial class HistoryWindow : Window
             PathText = BuildPathText(e),
             EventTypeText = GetEventTypeText(e.EventType),
             FileNameText = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
+            IsFolder = !string.IsNullOrWhiteSpace(e.TargetName)
+                    && (string.Equals(e.EventType, "CreateFolder", StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrEmpty(Path.GetExtension(e.TargetName))),
             ContentText = e.Message,
             NoteText = string.IsNullOrWhiteSpace(e.Note) ? BuildFallbackNote(e) : e.Note,
             OutcomeText = GetOutcomeText(e.Outcome),
@@ -433,6 +436,7 @@ public sealed class HistoryRow
     public string UserText { get; init; } = string.Empty;
     public string PathText { get; init; } = string.Empty;
     public string FileNameText { get; init; } = string.Empty;
+    public bool IsFolder { get; init; }
     public string EventTypeText { get; init; } = string.Empty;
     public string ContentText { get; init; } = string.Empty;
     public string NoteText { get; init; } = string.Empty;

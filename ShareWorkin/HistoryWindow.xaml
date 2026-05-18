@@ -147,7 +147,27 @@
                         <DataGridTextColumn Header="日時"       Binding="{Binding TimeText}"      Width="140" />
                         <DataGridTextColumn Header="ユーザー"   Binding="{Binding UserText}"      Width="76" />
                         <DataGridTextColumn Header="パス"       Binding="{Binding PathText}"      Width="220" />
-                        <DataGridTextColumn Header="ファイル名" Binding="{Binding FileNameText}"  Width="150" />
+                        <DataGridTemplateColumn SortMemberPath="FileNameText" Width="150">
+                            <DataGridTemplateColumn.Header>
+                                <TextBlock><Run Text="ファイル/" /><Run Text="フォルダー名" FontWeight="Bold" FontSize="10" /></TextBlock>
+                            </DataGridTemplateColumn.Header>
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding FileNameText}" Margin="2,0" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsFolder}" Value="True">
+                                                        <Setter Property="FontWeight" Value="Bold" />
+                                                        <Setter Property="FontSize" Value="11" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                         <DataGridTextColumn Header="アクション" Binding="{Binding EventTypeText}" Width="90" />
                         <DataGridTextColumn Header="内容"       Binding="{Binding ContentText}"   Width="*" />
                         <DataGridTextColumn Header="備考"       Binding="{Binding NoteText}"      Width="180" />
