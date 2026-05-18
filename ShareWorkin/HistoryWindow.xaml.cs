@@ -65,10 +65,21 @@ public partial class HistoryWindow : Window
 
     private void ApplyFilter()
     {
-        string filter = FilterTextBox?.Text?.Trim() ?? string.Empty;
-        List<HistoryRow> filtered = string.IsNullOrEmpty(filter)
-            ? _allRows
-            : _allRows.Where(r => MatchesFilter(r, filter)).ToList();
+        string fFileName = FilterFileName?.Text?.Trim() ?? string.Empty;
+        string fUser     = FilterUser?.Text?.Trim()     ?? string.Empty;
+        string fPath     = FilterPath?.Text?.Trim()     ?? string.Empty;
+        string fAction   = FilterAction?.Text?.Trim()   ?? string.Empty;
+        string fContent  = FilterContent?.Text?.Trim()  ?? string.Empty;
+        string fNote     = FilterNote?.Text?.Trim()     ?? string.Empty;
+
+        List<HistoryRow> filtered = _allRows.Where(r =>
+            Contains(r.FileNameText,  fFileName) &&
+            Contains(r.UserText,      fUser)     &&
+            Contains(r.PathText,      fPath)     &&
+            Contains(r.EventTypeText, fAction)   &&
+            Contains(r.ContentText,   fContent)  &&
+            Contains(r.NoteText,      fNote)
+        ).ToList();
 
         _rows.Clear();
         foreach (HistoryRow row in filtered)
@@ -87,17 +98,8 @@ public partial class HistoryWindow : Window
         }
     }
 
-    private static bool MatchesFilter(HistoryRow row, string filter)
-    {
-        return Contains(row.FileNameText, filter)
-            || Contains(row.EventTypeText, filter)
-            || Contains(row.ContentText, filter)
-            || Contains(row.PathText, filter)
-            || Contains(row.UserText, filter);
-    }
-
     private static bool Contains(string? value, string filter)
-        => value?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
+        => string.IsNullOrEmpty(filter) || value?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
 
     private void HistoryRepository_HistoryChanged(HistoryChannel channel)
     {
@@ -217,17 +219,53 @@ public partial class HistoryWindow : Window
         => ApplyFilter();
 
     private void ClearFilterButton_Click(object sender, RoutedEventArgs e)
-        => FilterTextBox.Clear();
+    {
+        FilterFileName.Clear();
+        FilterUser.Clear();
+        FilterPath.Clear();
+        FilterAction.Clear();
+        FilterContent.Clear();
+        FilterNote.Clear();
+    }
 
     private void CopyRowMenuItem_Click(object sender, RoutedEventArgs e)
+        => CopySelectedRow();
+
+    private void HistoryDataGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (HistoryDataGrid.SelectedItem is not HistoryRow row ||
-            !_entryMap.TryGetValue(row.EntryId, out HistoryEntry? entry))
+        if (e.Key == System.Windows.Input.Key.C &&
+            System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control)
+        {
+            CopySelectedRow();
+            e.Handled = true;
+        }
+    }
+
+    private void CopySelectedRow()
+    {
+        if (HistoryDataGrid.SelectedItem is not HistoryRow row)
         {
             return;
         }
 
-        System.Windows.Clipboard.SetText(BuildDetailText(entry));
+        string? header = (HistoryDataGrid.CurrentColumn?.Header as string);
+        string value = header switch
+        {
+            "日時"       => row.TimeText,
+            "ユーザー"   => row.UserText,
+            "パス"       => row.PathText,
+            "ファイル名" => row.FileNameText,
+            "アクション" => row.EventTypeText,
+            "内容"       => row.ContentText,
+            "備考"       => row.NoteText,
+            "結果"       => row.OutcomeText,
+            _            => _entryMap.TryGetValue(row.EntryId, out HistoryEntry? e) ? BuildDetailText(e) : string.Empty,
+        };
+
+        if (!string.IsNullOrEmpty(value))
+        {
+            System.Windows.Clipboard.SetText(value);
+        }
     }
 
     private void HistoryDataGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

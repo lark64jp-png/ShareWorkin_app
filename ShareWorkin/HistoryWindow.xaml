@@ -14,9 +14,9 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="10" />
             <RowDefinition Height="2*" />
-            <RowDefinition Height="8" />
+            <RowDefinition Height="4" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="8" />
+            <RowDefinition Height="4" />
             <RowDefinition Height="*" />
             <RowDefinition Height="10" />
             <RowDefinition Height="Auto" />
@@ -79,7 +79,8 @@
                       RowHeaderWidth="0"
                       SelectionMode="Single"
                       SelectionUnit="FullRow"
-                      SelectionChanged="HistoryDataGrid_SelectionChanged">
+                      SelectionChanged="HistoryDataGrid_SelectionChanged"
+                      PreviewKeyDown="HistoryDataGrid_PreviewKeyDown">
                 <DataGrid.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="コピー" Click="CopyRowMenuItem_Click" />
@@ -98,25 +99,24 @@
             </DataGrid>
         </Border>
 
-        <DockPanel Grid.Row="4" LastChildFill="True">
-            <TextBlock DockPanel.Dock="Left"
-                       Text="絞り込み"
-                       VerticalAlignment="Center"
-                       FontSize="12"
-                       Foreground="#6F675C"
-                       Margin="0,0,8,0" />
-            <Button DockPanel.Dock="Right"
-                    x:Name="ClearFilterButton"
-                    Content="クリア"
-                    Width="70"
-                    Height="28"
-                    Margin="8,0,0,0"
-                    Click="ClearFilterButton_Click" />
-            <TextBox x:Name="FilterTextBox"
-                     Height="28"
-                     VerticalContentAlignment="Center"
-                     TextChanged="FilterTextBox_TextChanged" />
-        </DockPanel>
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="120" />
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="110" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" x:Name="FilterFileName"   Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ファイル名" Tag="ファイル名" TextChanged="FilterTextBox_TextChanged" />
+            <TextBox Grid.Column="1" x:Name="FilterUser"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="ユーザー"   Tag="ユーザー"   TextChanged="FilterTextBox_TextChanged" />
+            <TextBox Grid.Column="2" x:Name="FilterPath"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="パス"       Tag="パス"       TextChanged="FilterTextBox_TextChanged" />
+            <TextBox Grid.Column="3" x:Name="FilterAction"     Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="アクション" Tag="アクション" TextChanged="FilterTextBox_TextChanged" />
+            <TextBox Grid.Column="4" x:Name="FilterContent"    Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="内容"       Tag="内容"       TextChanged="FilterTextBox_TextChanged" />
+            <TextBox Grid.Column="5" x:Name="FilterNote"       Height="16" Margin="0,0,2,0" Padding="2,0" FontSize="10" VerticalContentAlignment="Center" ToolTip="備考"       Tag="備考"       TextChanged="FilterTextBox_TextChanged" />
+            <Button  Grid.Column="6" x:Name="ClearFilterButton" Content="クリア" Width="54" Height="16" FontSize="10" Padding="0" Click="ClearFilterButton_Click" />
+        </Grid>
 
         <Border Grid.Row="6"
                 BorderBrush="#D8D2C3"
