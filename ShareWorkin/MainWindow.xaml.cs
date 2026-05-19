@@ -4091,11 +4091,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? ownPerm
             : FindEffectiveAncestorPermission(sourceParent);
 
-        bool changed = hasOwnEntry && _permissionMap.Remove(sourcePath);
-
         if (effectiveSource == null)
         {
-            if (changed) SavePermissionMap();
             var destPermForNull = FindEffectiveAncestorPermission(destinationFolder);
             if (destPermForNull != null)
                 AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, null, destPermForNull.Value);
@@ -4103,6 +4100,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         var effectiveDest = FindEffectiveAncestorPermission(destinationFolder);
+
+        if (IsWithinRange(effectiveSource.Value, effectiveDest))
+        {
+            if (!hasOwnEntry)
+            {
+                return;
+            }
+
+            _permissionMap.Remove(sourcePath);
+            _permissionMap[destinationPath] = effectiveSource.Value;
+            SavePermissionMap();
+            return;
+        }
+
+        bool changed = hasOwnEntry && _permissionMap.Remove(sourcePath);
 
         if (!IsWithinRange(effectiveSource.Value, effectiveDest))
         {
