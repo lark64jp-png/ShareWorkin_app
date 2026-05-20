@@ -1538,7 +1538,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ApplyPermissionAccessLevelUiState();
 
         PermissionPopup.PlacementTarget = anchor;
-        PermissionPopup.Placement = PlacementMode.Bottom;
         PermissionPopup.IsOpen = false;
         PermissionPopup.IsOpen = true;
     }

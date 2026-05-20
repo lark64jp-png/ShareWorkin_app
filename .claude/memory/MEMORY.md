@@ -16,6 +16,7 @@
 - [コンポーネント分割却下→直しミス](feedback_component_split_proposal.md) — 重複ロジック統一の提案却下が後の修正漏れバグにつながった事例
 - [インストーラー時はクリーンビルド＋SHA検証](feedback_installer_build_workflow.md) — 増分ビルドの罠を避ける毎回固定の手順
 - [**更新履歴の記録方針**](feedback_history_recording_philosophy.md) — 網羅性・密度の2軸。「全部出す」と「大量を避ける」は矛盾しない。機械的適用禁止
+- [**UIテキストはヒエラルキーで段階的に小さく**](feedback_ui_text_hierarchy.md) — 親画面→ポップアップ→ボタンと1段ずつ。毎回聞くべき原則ではなく身体化する
 
 ## Project
 - [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
