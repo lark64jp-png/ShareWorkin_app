@@ -53,7 +53,9 @@
       "Bash(Select-Object LastWriteTime)",
       "Bash(Get-ChildItem \"H:\\\\ShareWorkin共有\\\\Win11とNECと東芝_R\")",
       "Bash(Select-Object Name, Attributes, Length)",
-      "Bash(Get-Content \"C:\\\\MyApps\\\\ShareWorkin\\\\logs\\\\swk_2026-05-18.log\" -Tail 60)"
+      "Bash(Get-Content \"C:\\\\MyApps\\\\ShareWorkin\\\\logs\\\\swk_2026-05-18.log\" -Tail 60)",
+      "Bash(dir \"H:\\\\ShareWorkin_app\\\\ShareWorkin.SMB\" /b /s)",
+      "Bash(Get-ChildItem -Path \"h:\\\\ShareWorkin_app\" -Recurse -File)"
     ]
   }
 }

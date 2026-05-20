@@ -79,9 +79,11 @@
                     <Setter Property="Foreground" Value="#1F2D28" />
                 </Trigger>
                 <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
-                    <Setter Property="Background" Value="#FFF6E2" />
-                    <Setter Property="BorderBrush" Value="#F4D898" />
+                    <Setter Property="Background" Value="#E4F6EC" />
+                    <Setter Property="BorderBrush" Value="#4C9E7E" />
+                    <Setter Property="BorderThickness" Value="2" />
                     <Setter Property="Foreground" Value="#111827" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -363,6 +365,9 @@
                                     <MenuItem x:Name="DeleteShopItemMenuItem"
                                               Header="削除"
                                               Click="DeleteShopItemMenuItem_Click" />
+                                    <MenuItem x:Name="PasteFromWindowsMenuItem"
+                                              Header="Windows から貼り付け"
+                                              Click="PasteFromWindowsMenuItem_Click" />
                                     <Separator x:Name="AddFolderSeparator" />
                                     <MenuItem x:Name="AddFolderMenuItem"
                                               Header="フォルダー追加"
@@ -588,9 +593,16 @@
                         </Border>
                     </Grid>
 
-                    <DockPanel Grid.Row="3"
-                               Margin="0,8,2,0"
-                               LastChildFill="False">
+                    <StackPanel Grid.Row="3" Margin="0,8,2,0">
+                        <ProgressBar x:Name="ProcessingBar"
+                                     Height="3"
+                                     IsIndeterminate="True"
+                                     Foreground="#C8DED2"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Visibility="Collapsed"
+                                     Margin="0,0,0,6" />
+                    <DockPanel LastChildFill="False">
                         <CheckBox x:Name="SizeCalcCheckBox"
                                   DockPanel.Dock="Right"
                                   Content="容量計算"
@@ -615,6 +627,7 @@
                                      KeyDown="SearchTextBox_KeyDown" />
                         </StackPanel>
                     </DockPanel>
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -732,5 +745,212 @@
                 </StackPanel>
             </Grid>
         </Border>
+
+        <Popup x:Name="PermissionPopup"
+               Placement="Mouse"
+               StaysOpen="False"
+               AllowsTransparency="True"
+               PopupAnimation="Fade"
+               Closed="PermissionPopup_Closed">
+            <Border Background="#FFFEFA"
+                    BorderBrush="#A6BCB3"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="10,8"
+                    Margin="6">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.18" BlurRadius="10" ShadowDepth="2" />
+                </Border.Effect>
+                <Grid Width="360">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="6" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="8" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="利用ユーザー"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#2F2A22"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2"
+                                   Text="全員"
+                                   FontSize="11"
+                                   Foreground="#6F675C"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="3"
+                                x:Name="PermissionClearButton"
+                                Content="クリア"
+                                FontSize="11"
+                                Padding="6,1"
+                                Margin="4,0"
+                                Background="Transparent"
+                                BorderBrush="#C8C2B5"
+                                BorderThickness="1"
+                                Cursor="Hand"
+                                Click="PermissionClearButton_Click"
+                                ToolTip="左の指定を空にして「全員」に戻す" />
+                        <TextBlock Grid.Column="4"
+                                   Text="非ユーザー"
+                                   FontSize="11"
+                                   Foreground="#6F675C"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="5"
+                                x:Name="PermissionCloseButton"
+                                Content="✕"
+                                FontSize="11"
+                                Width="20"
+                                Height="20"
+                                Margin="6,0,0,0"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                Foreground="#7A746A"
+                                Cursor="Hand"
+                                Click="PermissionCloseButton_Click"
+                                ToolTip="閉じる" />
+                    </Grid>
+
+                    <Grid Grid.Row="2" Height="120">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="34" x:Name="PermissionMoveColumn" />
+                            <ColumnDefinition Width="*" x:Name="PermissionUnsetColumn" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                BorderBrush="#D8D2C3"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Background="White">
+                            <Grid>
+                                <ListBox x:Name="PermissionAllowedListBox"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         FontSize="12"
+                                         SelectionMode="Extended"
+                                         MouseDoubleClick="PermissionAllowedListBox_MouseDoubleClick">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" FontSize="12" Padding="4,2" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock x:Name="PermissionEveryoneOverlay"
+                                           Text="全員"
+                                           FontSize="22"
+                                           FontWeight="SemiBold"
+                                           Foreground="#D3CDC0"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+
+                        <StackPanel Grid.Column="1"
+                                    x:Name="PermissionMoveStack"
+                                    VerticalAlignment="Center"
+                                    HorizontalAlignment="Center">
+                            <Button x:Name="PermissionMoveLeftButton"
+                                    Content="←"
+                                    Width="26"
+                                    Height="24"
+                                    Margin="0,2"
+                                    FontSize="12"
+                                    Click="PermissionMoveLeftButton_Click"
+                                    ToolTip="未設定 → 許可" />
+                            <Button x:Name="PermissionMoveRightButton"
+                                    Content="→"
+                                    Width="26"
+                                    Height="24"
+                                    Margin="0,2"
+                                    FontSize="12"
+                                    Click="PermissionMoveRightButton_Click"
+                                    ToolTip="許可 → 未設定" />
+                        </StackPanel>
+
+                        <Border Grid.Column="2"
+                                x:Name="PermissionUnsetBorder"
+                                BorderBrush="#D8D2C3"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Background="White">
+                            <Grid>
+                                <ListBox x:Name="PermissionUnsetListBox"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         FontSize="12"
+                                         SelectionMode="Extended"
+                                         MouseDoubleClick="PermissionUnsetListBox_MouseDoubleClick">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" FontSize="12" Padding="4,2" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock x:Name="PermissionUnsetOverlay"
+                                           Text="全員を設定済み"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Foreground="#C8C2B5"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <Grid Grid.Row="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <WrapPanel Grid.Column="0" VerticalAlignment="Center">
+                            <RadioButton x:Name="PermissionReadWriteRadio"
+                                         Content="読み書き"
+                                         GroupName="PermissionAccessLevel"
+                                         FontSize="12"
+                                         Foreground="#3F3A32"
+                                         Margin="0,0,10,0"
+                                         Checked="PermissionAccessLevelRadio_Checked" />
+                            <RadioButton x:Name="PermissionReadOnlyRadio"
+                                         Content="読みのみ"
+                                         GroupName="PermissionAccessLevel"
+                                         FontSize="12"
+                                         Foreground="#3F3A32"
+                                         Margin="0,0,10,0"
+                                         Checked="PermissionAccessLevelRadio_Checked" />
+                            <RadioButton x:Name="PermissionSharedOffRadio"
+                                         Content="共有OFF"
+                                         GroupName="PermissionAccessLevel"
+                                         FontSize="12"
+                                         Foreground="#3F3A32"
+                                         Checked="PermissionAccessLevelRadio_Checked" />
+                        </WrapPanel>
+                        <Button Grid.Column="1"
+                                x:Name="PermissionOkButton"
+                                Content="確定"
+                                Width="64"
+                                Height="26"
+                                FontSize="12"
+                                Click="PermissionOkButton_Click"
+                                IsDefault="True" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Popup>
     </Grid>
 </Window>

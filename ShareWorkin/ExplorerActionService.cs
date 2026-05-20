@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Microsoft.VisualBasic.FileIO;
 using ShareWorkin.SMB;
 
 namespace ShareWorkin;
@@ -624,9 +625,9 @@ public static class ExplorerActionService
         {
             request.BeforeWrite();
             if (request.IsDirectory)
-                Directory.Delete(request.ItemPath, recursive: true);
+                FileSystem.DeleteDirectory(request.ItemPath, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
             else
-                File.Delete(request.ItemPath);
+                FileSystem.DeleteFile(request.ItemPath, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
 
             return new ExplorerActionResult
             {
@@ -644,7 +645,7 @@ public static class ExplorerActionService
                 SourceParent = itemParent,
             };
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             return new ExplorerActionResult
             {

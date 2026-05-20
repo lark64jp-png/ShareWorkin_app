@@ -28,6 +28,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="System.IO.Pipes.AccessControl">
+      <HintPath>C:\Program Files\dotnet\packs\Microsoft.NETCore.App.Ref\8.0.24\ref\net8.0\System.IO.Pipes.AccessControl.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../ShareWorkin.SMB/ShareWorkin.SMB.csproj" />
   </ItemGroup>
 

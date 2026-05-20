@@ -132,7 +132,7 @@
                      x:Name="LoadingBar"
                      Height="3"
                      IsIndeterminate="True"
-                     Foreground="#76A88A"
+                     Foreground="#C8DED2"
                      Background="Transparent"
                      BorderThickness="0"
                      Visibility="Collapsed" />

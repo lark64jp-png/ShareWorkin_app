@@ -50,8 +50,9 @@ public sealed class UiPipeClient : IDisposable
             _ = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            SwkLogger.Warn($"UiPipeClient.Connect failed: {ex.GetType().Name}: {ex.Message}");
             Disconnect();
             return false;
         }
@@ -138,9 +139,66 @@ public sealed class UiPipeClient : IDisposable
         FireAndForget(JsonSerializer.Serialize(new { cmd = "SHOW_BALLOON", title, text, folder }));
     }
 
+    public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
+    {
+        var json = SendCommand(JsonSerializer.Serialize(new
+        {
+            cmd = "SET_SUBFOLDER_PERMISSION",
+            path,
+            isSharedOff,
+            isReadOnly
+        }), timeoutMs: 30000);
+        return ReadOk(json);
+    }
+
+    public bool ResetPathToInherited(string path)
+    {
+        var json = SendCommand(JsonSerializer.Serialize(new
+        {
+            cmd = "RESET_PATH_TO_INHERITED",
+            path
+        }), timeoutMs: 30000);
+        return ReadOk(json);
+    }
+
+    public bool MarkActionAftercare(
+        string shopRootPath,
+        string affectedPath,
+        string policySourceFolder,
+        SharePolicyRepairReason reason)
+    {
+        var json = SendCommand(JsonSerializer.Serialize(new
+        {
+            cmd = "MARK_ACTION_AFTERCARE",
+            shopRootPath,
+            affectedPath,
+            policySourceFolder,
+            reason = reason.ToString()
+        }), timeoutMs: 30000);
+        return ReadOk(json);
+    }
+
     public void SendExitApp() => FireAndForget("{\"cmd\":\"EXIT_APP\"}");
 
     public void Dispose() => Disconnect();
+
+    private static bool ReadOk(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean();
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private string? SendCommand(string json, int timeoutMs = 15000)
     {

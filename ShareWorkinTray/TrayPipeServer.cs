@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -40,8 +42,7 @@ public sealed class TrayPipeServer
         {
             try
             {
-                var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                var pipe = CreatePipeServer();
                 await pipe.WaitForConnectionAsync(ct);
                 var session = new TrayPipeSession(pipe, _tray);
                 var prev = _activeSession;
@@ -63,6 +64,35 @@ public sealed class TrayPipeServer
                 try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { break; }
             }
         }
+    }
+
+    private static NamedPipeServerStream CreatePipeServer()
+    {
+        PipeSecurity security = BuildPipeSecurity();
+        return NamedPipeServerStreamAcl.Create(
+            PipeName,
+            PipeDirection.InOut,
+            NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0,
+            0,
+            security,
+            HandleInheritability.None);
+    }
+
+    private static PipeSecurity BuildPipeSecurity()
+    {
+        var security = new PipeSecurity();
+        var adminsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        var authUsersSid = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
+
+        security.AddAccessRule(new PipeAccessRule(adminsSid, PipeAccessRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(authUsersSid,
+            PipeAccessRights.ReadWrite,
+            AccessControlType.Allow));
+
+        return security;
     }
 
     public Task PushMessageAsync(string json)
@@ -183,6 +213,36 @@ internal sealed class TrayPipeSession : IDisposable
                 case "RELOAD_SETTINGS":
                     _tray.LoadSettings();
                     break;
+
+                case "SET_SUBFOLDER_PERMISSION":
+                {
+                    string path = root.TryGetProperty("path", out var p) ? p.GetString() ?? string.Empty : string.Empty;
+                    bool isSharedOff = root.TryGetProperty("isSharedOff", out var off) && off.GetBoolean();
+                    bool isReadOnly = root.TryGetProperty("isReadOnly", out var ro) && ro.GetBoolean();
+                    bool ok = _tray.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+                    await SendAsync($"{{\"type\":\"SET_SUBFOLDER_PERMISSION_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
+                    break;
+                }
+
+                case "RESET_PATH_TO_INHERITED":
+                {
+                    string path = root.TryGetProperty("path", out var p) ? p.GetString() ?? string.Empty : string.Empty;
+                    bool ok = _tray.ResetPathToInherited(path);
+                    await SendAsync($"{{\"type\":\"RESET_PATH_TO_INHERITED_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
+                    break;
+                }
+
+                case "MARK_ACTION_AFTERCARE":
+                {
+                    string shopRootPath = root.TryGetProperty("shopRootPath", out var sr) ? sr.GetString() ?? string.Empty : string.Empty;
+                    string affectedPath = root.TryGetProperty("affectedPath", out var ap) ? ap.GetString() ?? string.Empty : string.Empty;
+                    string policySourceFolder = root.TryGetProperty("policySourceFolder", out var ps) ? ps.GetString() ?? string.Empty : string.Empty;
+                    string reasonText = root.TryGetProperty("reason", out var rs) ? rs.GetString() ?? string.Empty : string.Empty;
+                    bool parsed = Enum.TryParse(reasonText, ignoreCase: true, out SharePolicyRepairReason reason);
+                    bool ok = parsed && _tray.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason);
+                    await SendAsync($"{{\"type\":\"MARK_ACTION_AFTERCARE_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
+                    break;
+                }
 
                 case "PING":
                     await SendAsync("{\"type\":\"PONG\"}");

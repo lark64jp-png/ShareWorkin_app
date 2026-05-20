@@ -164,6 +164,22 @@ public sealed class TrayApp : IDisposable
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
 
+    public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
+        => SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+
+    public bool ResetPathToInherited(string path)
+        => SmbNtfsManager.ResetPathToInherited(path);
+
+    public bool MarkActionAftercare(
+        string shopRootPath,
+        string affectedPath,
+        string policySourceFolder,
+        SharePolicyRepairReason reason)
+    {
+        SharePolicyRepair.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason);
+        return true;
+    }
+
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
     {
         _ = PipeServer.PushMessageAsync(JsonSerializer.Serialize(new
@@ -209,7 +225,7 @@ public sealed class TrayApp : IDisposable
             if (exeDir == null) return;
             string uiExe = Path.Combine(exeDir, "ShareWorkin.exe");
             if (!File.Exists(uiExe)) return;
-            Process.Start(new ProcessStartInfo(uiExe) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{uiExe}\"") { UseShellExecute = true });
         }
         catch (Exception ex) { SwkLogger.Warn($"OpenUiProcess error: {ex.Message}"); }
     }

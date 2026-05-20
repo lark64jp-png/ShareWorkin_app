@@ -53,8 +53,8 @@ Source: ".\ご利用にあたって.txt"; DestDir: "{app}"; Flags: ignoreversion
 Name: "desktopicon"; Description: "デスクトップにショートカットを作る"; GroupDescription: "追加アイコン:"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "ShareWorkin.MediaHouse"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "ShareWorkin.MediaHouse"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "ShareWorkin.MediaHouse"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "ShareWorkin.MediaHouse"
 
 [Code]
 const
@@ -907,8 +907,9 @@ begin
         ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec(ExpandConstant('{app}\' + TRAY_EXE), '', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
-      MsgBox(APP_NAME + ' のインストールが完了しました。', mbInformation, MB_OK);
-      Exec(ExpandConstant('{app}\' + APP_EXE), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
+      MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
+        '数秒待ってから、デスクトップまたはスタートメニューの ShareWorkin を開いてください。',
+        mbInformation, MB_OK);
     end;
   end;
 end;

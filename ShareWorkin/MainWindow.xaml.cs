@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -16,6 +17,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using Microsoft.Win32.SafeHandles;
@@ -34,9 +36,10 @@ public partial class MainWindow : Window
     private const string HoldFolderName = "保留";
     private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
     private const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
+    private static readonly bool EnableExplorerOleDropTarget = false;
+    private static readonly bool EnableExternalDragDiagnostics = false;
 
-    // UIPI: requireAdministrator マニフェストのため、非昇格プロセス（デスクトップ等）からの
-    // DragDrop がシステムに遮断される。ChangeWindowMessageFilterEx でメッセージを通す。
+    // Explorer からのドロップを受けやすくするため、WM_DROPFILES 系メッセージも許可しておく。
     [DllImport("user32.dll")] private static extern bool ChangeWindowMessageFilterEx(
         IntPtr hwnd, uint message, uint action, ref CHANGEFILTERSTRUCT pChangeFilterStruct);
     [StructLayout(LayoutKind.Sequential)]
@@ -54,6 +57,16 @@ public partial class MainWindow : Window
     private static extern void DragFinish(IntPtr hDrop);
     [DllImport("ole32.dll")]
     private static extern int RevokeDragDrop(IntPtr hwnd);
+    [DllImport("ole32.dll")]
+    private static extern int RegisterDragDrop(IntPtr hwnd, IOleDropTarget pDropTarget);
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
 
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
@@ -99,6 +112,9 @@ public partial class MainWindow : Window
     // ナビゲーションで再生成されるたびに消えるのを防ぐ。キー = FullPath。
     private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> _permissionMap
         = new(StringComparer.OrdinalIgnoreCase);
+    // 保留中は実権限を OFF に固定しつつ、移動前に見えていた共有設定を表示・復帰判定用に保持する。
+    private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> _holdDisplayPermissionMap
+        = new(StringComparer.OrdinalIgnoreCase);
     // 現在フォルダーを基点に祖先を遡って得た有効な許可設定（継承用）。
     private (List<string> Users, bool IsReadOnly, bool IsSharedOff)? _effectiveParentPerm;
     private FileSystemWatcher? _arrivalSensor;
@@ -112,6 +128,8 @@ public partial class MainWindow : Window
     private ShopItem? _dropTargetItem;
     private Popup? _dragPreviewPopup;
     private TextBlock? _dragPreviewTextBlock;
+    private ExplorerOleDropTarget? _explorerOleDropTarget;
+    private bool _externalDragDropInitialized;
     private System.Windows.Point _dragStartPoint;
     private ShopItem? _dragStartItem;
     private bool _isRubberBanding;
@@ -138,6 +156,15 @@ public partial class MainWindow : Window
     private bool _itemWasSelectedAtPress;
     private ShopSortField _sortField = ShopSortField.Name;
     private ListSortDirection _sortDirection = ListSortDirection.Ascending;
+    private ShopItem? _permissionPopupTarget;
+    private System.Windows.Controls.Button? _permissionPopupAnchor;
+    private bool _permissionPopupReadOnly;
+    private string _permissionPopupBeforeStatus = string.Empty;
+    private bool _permissionPopupInitializing;
+    private bool _permissionPopupBound;
+    private readonly ObservableCollection<string> _permissionAllowed = new();
+    private readonly ObservableCollection<string> _permissionUnset = new();
+    private int _processingDepth;
 
     public ObservableCollection<ArrivedItem> ArrivedItems { get; } = [];
 
@@ -147,16 +174,6 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        if (!IsRunningAsAdmin())
-        {
-            System.Windows.MessageBox.Show(
-                "ShareWorkin は管理者権限で動く必要があります。\nインストールし直すか、Windows の設定をご確認ください。",
-                "ShareWorkin",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            Environment.Exit(0);
-        }
-
         InitializeComponent();
         DataContext = this;
 
@@ -194,6 +211,9 @@ public partial class MainWindow : Window
                 typeof(MainWindow).Assembly))
             ?.InformationalVersion;
         AppVersionTextBlock.Text = FormatVersionLabel(ver);
+        AllowDrop = true;
+        RegisterExternalDragDiagnostics();
+        SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
     }
 
@@ -211,6 +231,103 @@ public partial class MainWindow : Window
         if (sha.Length > 7) sha = sha[..7];
         if (string.IsNullOrEmpty(sha)) return $"v{baseVer}";
         return dirty ? $"v{baseVer}+{sha}-dirty" : $"v{baseVer}+{sha}";
+    }
+
+    private void MainWindow_SourceInitialized(object? sender, EventArgs e)
+    {
+        if (EnableExternalDragDiagnostics)
+        {
+            LogDragDropEnvironment();
+        }
+        InitializeExternalDragDrop();
+    }
+
+    private void LogDragDropEnvironment()
+    {
+        try
+        {
+            string processPath = Environment.ProcessPath ?? string.Empty;
+            int processId = Environment.ProcessId;
+            bool isAdmin = IsRunningAsAdmin();
+            SwkLogger.Info(
+                $"DragDrop environment: pid={processId}, isAdmin={isAdmin}, " +
+                $"allowDrop={AllowDrop}, exe={processPath}");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"LogDragDropEnvironment failed: {ex.Message}");
+        }
+    }
+
+    private void InitializeExternalDragDrop()
+    {
+        if (_externalDragDropInitialized)
+        {
+            return;
+        }
+
+        AllowExternalDragDrop();
+        if (EnableExplorerOleDropTarget)
+        {
+            RegisterExplorerOleDropTarget();
+        }
+        _externalDragDropInitialized = true;
+    }
+
+    private void RegisterExternalDragDiagnostics()
+    {
+        if (!EnableExternalDragDiagnostics)
+        {
+            return;
+        }
+
+        AddHandler(System.Windows.DragDrop.PreviewDragEnterEvent,
+            new System.Windows.DragEventHandler(Window_PreviewDragEnter), handledEventsToo: true);
+        AddHandler(System.Windows.DragDrop.PreviewDragOverEvent,
+            new System.Windows.DragEventHandler(Window_PreviewDragOver), handledEventsToo: true);
+        AddHandler(System.Windows.DragDrop.PreviewDropEvent,
+            new System.Windows.DragEventHandler(Window_PreviewDrop), handledEventsToo: true);
+    }
+
+    private void Window_PreviewDragEnter(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!EnableExternalDragDiagnostics)
+        {
+            return;
+        }
+
+        SwkLogger.Info(
+            $"Window PreviewDragEnter: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
+            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
+            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, handled={e.Handled}");
+    }
+
+    private void Window_PreviewDragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!EnableExternalDragDiagnostics)
+        {
+            return;
+        }
+
+        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        SwkLogger.Info(
+            $"Window PreviewDragOver: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
+            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
+            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, dest={destination}, handled={e.Handled}");
+    }
+
+    private void Window_PreviewDrop(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!EnableExternalDragDiagnostics)
+        {
+            return;
+        }
+
+        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        SwkLogger.Info(
+            $"Window PreviewDrop: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
+            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
+            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, dest={destination}, handled={e.Handled}");
     }
 
     private void AllowExternalDragDrop()
@@ -251,12 +368,168 @@ public partial class MainWindow : Window
 
         if (paths.Count == 0 || string.IsNullOrWhiteSpace(_currentFolder)) return;
         string destination = _currentFolder!;
-        _ = Dispatcher.InvokeAsync(() => PlaceExternalFiles(paths, destination));
+        try
+        {
+            if (GetCursorPos(out POINT cursorPos))
+            {
+                destination = ResolveExternalDropDestinationFromScreenPoint(
+                    new System.Windows.Point(cursorPos.X, cursorPos.Y)) ?? destination;
+            }
+        }
+        catch
+        {
+        }
+
+        string capturedDestination = destination;
+        SwkLogger.Info($"WM_DROPFILES accepted: count={paths.Count} -> {capturedDestination}");
+        _ = Dispatcher.InvokeAsync(() => PlaceExternalFiles(paths, capturedDestination));
+    }
+
+    private void RegisterExplorerOleDropTarget()
+    {
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            RevokeDragDrop(handle);
+        }
+        catch
+        {
+        }
+
+        _explorerOleDropTarget = new ExplorerOleDropTarget(this);
+        int hr = RegisterDragDrop(handle, _explorerOleDropTarget);
+        if (hr != 0)
+        {
+            SwkLogger.Warn($"RegisterDragDrop failed: hr=0x{hr:X8}");
+        }
+        else
+        {
+            SwkLogger.Info("RegisterDragDrop ok");
+        }
+    }
+
+    internal string? ResolveExternalDropDestinationFromScreenPoint(System.Windows.Point screenPoint)
+    {
+        if (string.IsNullOrWhiteSpace(_currentFolder))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!ShopItemsListView.IsVisible)
+            {
+                return _currentFolder;
+            }
+
+            System.Windows.Point localPoint = ShopItemsListView.PointFromScreen(screenPoint);
+            if (double.IsNaN(localPoint.X) || double.IsNaN(localPoint.Y))
+            {
+                return _currentFolder;
+            }
+
+            HitTestResult? hit = VisualTreeHelper.HitTest(ShopItemsListView, localPoint);
+            ShopItem? item = GetShopItemFromSource(hit?.VisualHit as DependencyObject);
+            if (item is not null && item.IsDirectory)
+            {
+                return item.FullPath;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            SwkLogger.Debug($"ResolveExternalDropDestinationFromScreenPoint failed: {ex.Message}");
+        }
+
+        return _currentFolder;
+    }
+
+    internal int GetOleDropEffect(Forms.IDataObject data, DragDropKeyStates keyStates, string destinationFolder)
+    {
+        if (string.IsNullOrWhiteSpace(destinationFolder))
+        {
+            return (int)System.Windows.DragDropEffects.None;
+        }
+
+        if (data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat))
+        {
+            if (IsHoldFolderPath(destinationFolder))
+            {
+                return (int)System.Windows.DragDropEffects.Move;
+            }
+
+            return (keyStates & DragDropKeyStates.ControlKey) != 0
+                ? (int)System.Windows.DragDropEffects.Copy
+                : (int)System.Windows.DragDropEffects.Move;
+        }
+
+        return data.GetDataPresent(Forms.DataFormats.FileDrop)
+            ? (int)System.Windows.DragDropEffects.Copy
+            : (int)System.Windows.DragDropEffects.None;
+    }
+
+    internal void HandleOleDrop(Forms.IDataObject data, DragDropKeyStates keyStates, System.Windows.Point screenPoint)
+    {
+        string destinationFolder = ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? _currentFolder ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(destinationFolder))
+        {
+            return;
+        }
+
+        if (data.GetDataPresent(InternalDragPathFormat))
+        {
+            string sourcePath = data.GetData(InternalDragPathFormat) as string ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return;
+            }
+
+            if (IsHoldFolderPath(destinationFolder))
+                HoldInternalDraggedItems([sourcePath]);
+            else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                CopyInternalDraggedItem(sourcePath, destinationFolder);
+            else
+                MoveInternalDraggedItem(sourcePath, destinationFolder);
+            return;
+        }
+
+        if (data.GetDataPresent(InternalDragPathsFormat))
+        {
+            string[] sourcePaths = data.GetData(InternalDragPathsFormat) as string[] ?? [];
+            if (sourcePaths.Length == 0)
+            {
+                return;
+            }
+
+            if (IsHoldFolderPath(destinationFolder))
+                HoldInternalDraggedItems(sourcePaths);
+            else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                PlaceExternalFiles(sourcePaths, destinationFolder);
+            else
+                MoveInternalDraggedItems(sourcePaths, destinationFolder);
+            return;
+        }
+
+        if (data.GetDataPresent(Forms.DataFormats.FileDrop))
+        {
+            string[] paths = data.GetData(Forms.DataFormats.FileDrop) as string[] ?? [];
+            if (paths.Length == 0)
+            {
+                return;
+            }
+
+            SwkLogger.Info($"OLE drop accepted: count={paths.Length} -> {destinationFolder}");
+            PlaceExternalFiles(paths, destinationFolder);
+        }
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        AllowExternalDragDrop();
+        InitializeExternalDragDrop();
 
         if (_startupHandled)
         {
@@ -753,6 +1026,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? destinationPath = null,
         string? destinationFolder = null)
     {
+        string? normalizedTargetName = NormalizeHistoryTargetName(targetName, destinationPath, sourcePath);
         HistoryRepository.Append(new HistoryEntry
         {
             Channel = channel,
@@ -762,7 +1036,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Direction = direction,
             FriendId = friend?.Id,
             FriendName = friend is null ? null : GetFriendLabel(friend),
-            TargetName = targetName,
+            TargetName = normalizedTargetName,
             PathText = pathText,
             Note = note,
             Source = source,
@@ -770,6 +1044,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             DestinationPath = destinationPath,
             DestinationFolder = destinationFolder,
         });
+    }
+
+    private static string? NormalizeHistoryTargetName(
+        string? targetName,
+        string? destinationPath,
+        string? sourcePath)
+    {
+        string? candidate = targetName;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            candidate = !string.IsNullOrWhiteSpace(destinationPath)
+                ? destinationPath
+                : sourcePath;
+        }
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return candidate;
+        }
+
+        string trimmed = candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string fileName = Path.GetFileName(trimmed);
+        return string.IsNullOrWhiteSpace(fileName) ? candidate : fileName;
     }
 
     private void ApplyExplorerActionResult(ExplorerActionResult result)
@@ -1134,7 +1431,34 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private async void ShareStatusButton_Click(object sender, RoutedEventArgs e)
+    private void BeginProcessing()
+    {
+        if (_processingDepth++ == 0)
+        {
+            ProcessingBar.Visibility = Visibility.Visible;
+            Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        }
+    }
+
+    private void EndProcessing()
+    {
+        if (--_processingDepth <= 0)
+        {
+            _processingDepth = 0;
+            ProcessingBar.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private IDisposable Processing() => new ProcessingScope(this);
+
+    private sealed class ProcessingScope : IDisposable
+    {
+        private readonly MainWindow _owner;
+        public ProcessingScope(MainWindow owner) { _owner = owner; _owner.BeginProcessing(); }
+        public void Dispose() => _owner.EndProcessing();
+    }
+
+    private void ShareStatusButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button button || button.Tag is not ShopItem item)
         {
@@ -1146,29 +1470,197 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (_currentMode == DisplayMode.FriendShop)
+        bool readOnly = _currentMode == DisplayMode.FriendShop;
+        OpenPermissionPopup(item, button, readOnly);
+    }
+
+    private void OpenPermissionPopup(ShopItem item, System.Windows.Controls.Button anchor, bool readOnly)
+    {
+        EnsurePermissionPopupBindings();
+        _permissionPopupInitializing = true;
+        _permissionPopupTarget = item;
+        _permissionPopupAnchor = anchor;
+        _permissionPopupReadOnly = readOnly;
+        _permissionPopupBeforeStatus = item.ShareStatusText;
+
+        _permissionAllowed.Clear();
+        if (readOnly && _currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
         {
-            string? stateText = item.ShareStatusText switch
+            string ownerLabel = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
+                ? _activeFriendShop.HostMachineName
+                : _activeFriendShop.DisplayName;
+            if (!string.IsNullOrWhiteSpace(ownerLabel))
             {
-                "指定"  => BuildFriendShareStatusMessage(item, readOnly: false),
-                "指定R" => BuildFriendShareStatusMessage(item, readOnly: true),
-                _       => null
-            };
-            if (!string.IsNullOrWhiteSpace(stateText))
-            {
-                System.Windows.MessageBox.Show(stateText, $"{item.Name} の共有設定",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                _permissionAllowed.Add(ownerLabel);
             }
-            return;
         }
+        foreach (string user in item.AllowedUsers
+                     .Where(u => !string.IsNullOrWhiteSpace(u))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!_permissionAllowed.Contains(user, StringComparer.OrdinalIgnoreCase))
+            {
+                _permissionAllowed.Add(user);
+            }
+        }
+
+        ReloadPermissionUnset();
+
+        PermissionReadWriteRadio.IsChecked = !item.IsReadOnly && !item.IsSharedOff;
+        PermissionReadOnlyRadio.IsChecked = item.IsReadOnly && !item.IsSharedOff;
+        PermissionSharedOffRadio.IsChecked = item.IsSharedOff;
+
+        Visibility editVis = readOnly ? Visibility.Collapsed : Visibility.Visible;
+        PermissionOkButton.Visibility = editVis;
+        PermissionClearButton.Visibility = editVis;
+        PermissionMoveStack.Visibility = editVis;
+        PermissionMoveColumn.Width = readOnly ? new GridLength(0) : new GridLength(34);
+        PermissionUnsetBorder.Visibility = editVis;
+        PermissionUnsetColumn.Width = readOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+
+        bool enabled = !readOnly;
+        PermissionAllowedListBox.IsEnabled = enabled;
+        PermissionUnsetListBox.IsEnabled = enabled;
+        PermissionReadWriteRadio.IsEnabled = enabled;
+        PermissionReadOnlyRadio.IsEnabled = enabled;
+        PermissionSharedOffRadio.IsEnabled = enabled;
+
+        UpdatePermissionOverlay();
+        UpdatePermissionUnsetOverlay();
+
+        _permissionPopupInitializing = false;
+        ApplyPermissionAccessLevelUiState();
+
+        PermissionPopup.PlacementTarget = anchor;
+        PermissionPopup.Placement = PlacementMode.Bottom;
+        PermissionPopup.IsOpen = false;
+        PermissionPopup.IsOpen = true;
+    }
+
+    private void EnsurePermissionPopupBindings()
+    {
+        if (_permissionPopupBound) return;
+        PermissionAllowedListBox.ItemsSource = _permissionAllowed;
+        PermissionUnsetListBox.ItemsSource = _permissionUnset;
+        _permissionAllowed.CollectionChanged += (_, _) => UpdatePermissionOverlay();
+        _permissionUnset.CollectionChanged += (_, _) => UpdatePermissionUnsetOverlay();
+        _permissionPopupBound = true;
+    }
+
+    private void ReloadPermissionUnset()
+    {
+        _permissionUnset.Clear();
+        HashSet<string> already = new(_permissionAllowed, StringComparer.OrdinalIgnoreCase);
+        foreach (Friend f in FriendsRepository.LoadAll())
+        {
+            string name = string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName;
+            if (string.IsNullOrWhiteSpace(name) || already.Contains(name)) continue;
+            _permissionUnset.Add(name);
+        }
+    }
+
+    private void UpdatePermissionOverlay() =>
+        PermissionEveryoneOverlay.Visibility = _permissionAllowed.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void UpdatePermissionUnsetOverlay() =>
+        PermissionUnsetOverlay.Visibility = _permissionUnset.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void ApplyPermissionAccessLevelUiState()
+    {
+        if (_permissionPopupReadOnly) return;
+        bool canSpecifyUsers = PermissionSharedOffRadio.IsChecked != true;
+        PermissionAllowedListBox.IsEnabled = canSpecifyUsers;
+        PermissionUnsetListBox.IsEnabled = canSpecifyUsers;
+        PermissionMoveLeftButton.IsEnabled = canSpecifyUsers;
+        PermissionMoveRightButton.IsEnabled = canSpecifyUsers;
+        PermissionClearButton.IsEnabled = canSpecifyUsers;
+    }
+
+    private void PermissionAccessLevelRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_permissionPopupInitializing || _permissionPopupReadOnly) return;
+        if (PermissionSharedOffRadio.IsChecked == true)
+        {
+            _permissionAllowed.Clear();
+            ReloadPermissionUnset();
+        }
+        ApplyPermissionAccessLevelUiState();
+    }
+
+    private void PermissionClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_permissionPopupReadOnly) return;
+        _permissionAllowed.Clear();
+        ReloadPermissionUnset();
+    }
+
+    private void PermissionMoveLeftButton_Click(object sender, RoutedEventArgs e) => MovePermissionUnsetToAllowed();
+    private void PermissionMoveRightButton_Click(object sender, RoutedEventArgs e) => MovePermissionAllowedToUnset();
+    private void PermissionAllowedListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MovePermissionAllowedToUnset();
+    private void PermissionUnsetListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MovePermissionUnsetToAllowed();
+
+    private void MovePermissionUnsetToAllowed()
+    {
+        if (_permissionPopupReadOnly) return;
+        List<string> picked = PermissionUnsetListBox.SelectedItems.Cast<string>().ToList();
+        foreach (string name in picked)
+        {
+            _permissionUnset.Remove(name);
+            if (!_permissionAllowed.Contains(name, StringComparer.OrdinalIgnoreCase))
+                _permissionAllowed.Add(name);
+        }
+    }
+
+    private void MovePermissionAllowedToUnset()
+    {
+        if (_permissionPopupReadOnly) return;
+        List<string> picked = PermissionAllowedListBox.SelectedItems.Cast<string>().ToList();
+        foreach (string name in picked)
+        {
+            _permissionAllowed.Remove(name);
+            if (!_permissionUnset.Contains(name, StringComparer.OrdinalIgnoreCase))
+                _permissionUnset.Add(name);
+        }
+    }
+
+    private void PermissionCloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        PermissionPopup.IsOpen = false;
+    }
+
+    private void PermissionPopup_Closed(object? sender, EventArgs e)
+    {
+        _permissionPopupTarget = null;
+        _permissionPopupAnchor = null;
+        _permissionPopupBeforeStatus = string.Empty;
+    }
+
+    private async void PermissionOkButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_permissionPopupReadOnly) return;
+        ShopItem? item = _permissionPopupTarget;
+        System.Windows.Controls.Button? button = _permissionPopupAnchor;
+        string beforeStatus = _permissionPopupBeforeStatus;
+        if (item is null) { PermissionPopup.IsOpen = false; return; }
 
         try
         {
-            string beforeStatus = item.ShareStatusText;
-            PermissionWindow window = new(item) { Owner = this };
-            if (window.ShowDialog() == true)
+            item.IsSharedOff = PermissionSharedOffRadio.IsChecked == true;
+            item.IsReadOnly = PermissionReadOnlyRadio.IsChecked == true;
+            item.AllowedUsers.Clear();
+            foreach (string name in _permissionAllowed)
             {
+                item.AllowedUsers.Add(name);
+            }
+
+            PermissionPopup.IsOpen = false;
+            {
+                bool isHeldItem = IsHeldItemPath(item.FullPath);
                 StorePermission(item);
+                if (item.IsDirectory && Directory.Exists(item.FullPath))
+                {
+                    ClearDescendantPermissionOverrides(item.FullPath);
+                }
                 SavePermissionMap();
                 item.RefreshShareStatus();
 
@@ -1213,14 +1705,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder)
                 {
                     string path = item.FullPath;
-                    bool isSharedOff = item.IsSharedOff;
-                    bool isReadOnly = item.IsReadOnly;
+                    bool isSharedOff = isHeldItem || item.IsSharedOff;
+                    bool isReadOnly = isHeldItem ? false : item.IsReadOnly;
 
-                    button.IsEnabled = false;
+                    if (button is not null) button.IsEnabled = false;
                     Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
                     try
                     {
-                        bool ok = await Task.Run(() => SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly));
+                        bool ok = await Task.Run(() => _pipeClient.SetSubfolderPermission(path, isSharedOff, isReadOnly));
                         if (!ok)
                             SetTransientStatus("権限の設定に失敗しました。");
                         else
@@ -1229,7 +1721,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     finally
                     {
                         Mouse.OverrideCursor = null;
-                        button.IsEnabled = true;
+                        if (button is not null) button.IsEnabled = true;
                     }
                 }
             }
@@ -1248,6 +1740,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        if (IsHeldItemPath(item.FullPath))
+        {
+            _holdDisplayPermissionMap[item.FullPath] = (users, item.IsReadOnly, item.IsSharedOff);
+            _permissionMap[item.FullPath] = ([], false, true);
+            return;
+        }
+
         if (users.Count == 0 && !item.IsReadOnly && !item.IsSharedOff)
         {
             _permissionMap.Remove(item.FullPath);
@@ -1255,6 +1754,82 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         _permissionMap[item.FullPath] = (users, item.IsReadOnly, item.IsSharedOff);
+    }
+
+    private bool IsHeldItemPath(string path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        !IsHoldFolderPath(path) &&
+        IsUnderFolder(path, GetHoldFolderPath());
+
+    private static void ApplyPermissionToItem(
+        ShopItem item,
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff) perm)
+    {
+        item.AllowedUsers.Clear();
+        foreach (string user in perm.Users.Where(user => !string.IsNullOrWhiteSpace(user)))
+        {
+            item.AllowedUsers.Add(user);
+        }
+
+        item.IsReadOnly = perm.IsReadOnly;
+        item.IsSharedOff = perm.IsSharedOff;
+    }
+
+    private (List<string> Users, bool IsReadOnly, bool IsSharedOff)? GetDisplayedPermissionForPath(
+        string sourcePath,
+        string sourceParent)
+    {
+        if (IsHeldItemPath(sourcePath) &&
+            _holdDisplayPermissionMap.TryGetValue(sourcePath, out var holdDisplay))
+        {
+            return holdDisplay;
+        }
+
+        bool hasOwnEntry = _permissionMap.TryGetValue(sourcePath, out var ownPerm)
+            && (ownPerm.Users.Count > 0 || ownPerm.IsReadOnly || ownPerm.IsSharedOff);
+
+        return hasOwnEntry
+            ? ownPerm
+            : FindEffectiveAncestorPermission(sourceParent);
+    }
+
+    private void MoveHoldDisplayPermission(string sourcePath, string destinationPath)
+    {
+        if (!_holdDisplayPermissionMap.Remove(sourcePath, out var displayPerm))
+        {
+            return;
+        }
+
+        if (IsHeldItemPath(destinationPath))
+        {
+            _holdDisplayPermissionMap[destinationPath] = displayPerm;
+        }
+    }
+
+    private void ClearDescendantPermissionOverrides(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return;
+        }
+
+        List<string> permissionPaths = _permissionMap.Keys
+            .Where(path => IsUnderFolder(path, folderPath) &&
+                           !string.Equals(path, folderPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (string path in permissionPaths)
+        {
+            _permissionMap.Remove(path);
+        }
+
+        List<string> holdDisplayPaths = _holdDisplayPermissionMap.Keys
+            .Where(path => IsUnderFolder(path, folderPath) &&
+                           !string.Equals(path, folderPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (string path in holdDisplayPaths)
+        {
+            _holdDisplayPermissionMap.Remove(path);
+        }
     }
 
     private void UpdateSidebar(bool isOpen)
@@ -1528,6 +2103,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.V)
+        {
+            PasteExternalFilesFromClipboard();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key != Key.C || Keyboard.Modifiers != ModifierKeys.Control)
         {
             return;
@@ -1548,6 +2130,49 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         e.Handled = true;
+    }
+
+    private void PasteFromWindowsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        PasteExternalFilesFromClipboard();
+    }
+
+    private void PasteExternalFilesFromClipboard()
+    {
+        if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
+        {
+            SetTransientStatus("コピー先のフォルダーが見つかりません。");
+            return;
+        }
+
+        StringCollection? fileDropList;
+        try
+        {
+            if (!System.Windows.Clipboard.ContainsFileDropList())
+            {
+                SetTransientStatus("Windows のコピー内容がありません。");
+                return;
+            }
+
+            fileDropList = System.Windows.Clipboard.GetFileDropList();
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
+        {
+            SwkLogger.Warn($"PasteExternalFilesFromClipboard failed: {ex.Message}");
+            SetTransientStatus("Windows のコピー内容を読み取れませんでした。");
+            return;
+        }
+
+        List<string> paths = fileDropList.Cast<string>()
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToList();
+        if (paths.Count == 0)
+        {
+            SetTransientStatus("Windows のコピー内容がありません。");
+            return;
+        }
+
+        PlaceExternalFiles(paths, _currentFolder);
     }
 
     private void UpdateRubberBand(System.Windows.Point current)
@@ -1678,15 +2303,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
+        if (EnableExternalDragDiagnostics)
+        {
+            SwkLogger.Info(
+                $"WPF DragEnter: current={_currentFolder}, exists={Directory.Exists(_currentFolder ?? string.Empty)}, " +
+                $"mode={_currentMode}, fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
+                $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
+                $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, key={e.KeyStates}");
+        }
+
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
+        string? dragDestinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        bool droppingToHold = !string.IsNullOrWhiteSpace(dragDestinationFolder) && IsHoldFolderPath(dragDestinationFolder);
 
         if (e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat))
         {
             bool isCopy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
-            DragHintTextBlock.Text = isCopy
-                ? "Ctrl を押しています — フォルダーに重ねて離すとコピーします"
-                : "移動先のフォルダーに重ねて離すと移動します";
+            DragHintTextBlock.Text = droppingToHold
+                ? "ここに離すと保留にしまいます"
+                : isCopy
+                    ? "Ctrl を押しています — フォルダーに重ねて離すとコピーします"
+                    : "移動先のフォルダーに重ねて離すと移動します";
             if (e.Data.GetDataPresent(InternalDragPathFormat))
             {
                 ShowDragHint(Path.GetFileName((string)e.Data.GetData(InternalDragPathFormat)));
@@ -1699,8 +2337,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else if (e.Effects != System.Windows.DragDropEffects.None)
         {
-            DragHintTextBlock.Text = "ここに離すとこのフォルダーにコピーします";
-            ShowDragHint();
+            DragHintTextBlock.Text = "フォルダーに重ねて離すとコピーします";
+            ShowDragHint(GetExternalDragHintLabel(e));
         }
 
         e.Handled = true;
@@ -1715,6 +2353,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragLeave(object sender, System.Windows.DragEventArgs e)
     {
+        if (EnableExternalDragDiagnostics)
+        {
+            SwkLogger.Info($"WPF DragLeave: mouseOver={ShopItemsListView.IsMouseOver}, handled={e.Handled}");
+        }
+
         if (!ShopItemsListView.IsMouseOver)
         {
             ClearDropTargetHighlight();
@@ -1724,6 +2367,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
     {
+        if (EnableExternalDragDiagnostics)
+        {
+            SwkLogger.Info(
+                $"WPF Drop: current={_currentFolder}, mode={_currentMode}, " +
+                $"fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
+                $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
+                $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, key={e.KeyStates}");
+        }
+
         // DragOver で特定済みのフォルダを Drop 前にキャプチャ（ClearDropTargetHighlight で消える前に）
         ShopItem? highlightedFolder = _dropTargetItem;
         ClearDropTargetHighlight();
@@ -1735,6 +2387,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        using var _processing = Processing();
+
         // 視覚ツリーウォークを試み、失敗なら DragOver で特定済みのフォルダをフォールバックに使う
         string destinationFolder = GetDropDestinationFolder(e)
             ?? highlightedFolder?.FullPath
@@ -1742,7 +2396,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (e.Data.GetDataPresent(InternalDragPathFormat))
         {
             string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
-            if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+            if (IsHoldFolderPath(destinationFolder))
+                HoldInternalDraggedItems([sourcePath]);
+            else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
                 CopyInternalDraggedItem(sourcePath, destinationFolder);
             else
                 MoveInternalDraggedItem(sourcePath, destinationFolder);
@@ -1753,7 +2409,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (e.Data.GetDataPresent(InternalDragPathsFormat))
         {
             string[] sourcePaths = (string[])e.Data.GetData(InternalDragPathsFormat);
-            if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+            if (IsHoldFolderPath(destinationFolder))
+                HoldInternalDraggedItems(sourcePaths);
+            else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
                 PlaceExternalFiles(sourcePaths, destinationFolder);
             else
                 MoveInternalDraggedItems(sourcePaths, destinationFolder);
@@ -1860,8 +2518,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-        PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+        bool preserved = PreservePermissionOnArrival(
+            result.SourcePath,
+            result.SourceParent,
+            result.DestinationPath,
+            result.DestinationFolder,
+            removeSourceEntry: true,
+            historySource: "MainWindow.move");
+        if (!preserved)
+        {
+            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+        }
         InvalidateSizeCacheUnder(result.SourceParent);
         InvalidateSizeCacheUnder(result.DestinationFolder);
         RefreshShopItems();
@@ -1908,8 +2575,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
-        MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
+        bool preserved = PreservePermissionOnArrival(
+            result.SourcePath!,
+            result.SourceParent!,
+            result.DestinationPath,
+            result.DestinationFolder,
+            removeSourceEntry: false,
+            historySource: "MainWindow.copy");
+        if (!preserved)
+        {
+            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+            MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
+        }
         InvalidateSizeCacheUnder(result.DestinationFolder);
         if (string.Equals(
                 Path.GetFullPath(result.DestinationFolder),
@@ -2017,6 +2694,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        MoveHoldDisplayPermission(item.FullPath, result.DestinationPath);
+        SavePermissionMap();
         NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
         InvalidateSizeCacheUnder(result.SourceParent);
         _pendingFocusName = newName;
@@ -2071,6 +2750,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
+        HoldInternalDraggedItems(items.Select(static item => item.FullPath).ToList());
+    }
+
+    private void HoldInternalDraggedItems(IReadOnlyList<string> sourcePaths)
+    {
+        if (sourcePaths.Count == 0)
+        {
+            return;
+        }
+
         if (!TryEnsureHoldFolder())
         {
             SetTransientStatus("保留を準備できません。");
@@ -2081,8 +2770,22 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         int movedCount = 0;
         string? lastName = null;
 
-        foreach (ShopItem item in items)
+        foreach (string sourcePath in sourcePaths)
         {
+            ShopItem? item = ShopItems.FirstOrDefault(i => string.Equals(i.FullPath, sourcePath, StringComparison.OrdinalIgnoreCase));
+            if (item is null || item.IsHoldFolder)
+            {
+                continue;
+            }
+
+            var displayPermBeforeHold = (
+                item.AllowedUsers
+                    .Where(user => !string.IsNullOrWhiteSpace(user))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                item.IsReadOnly,
+                item.IsSharedOff);
+
             ExplorerActionResult result = ExplorerActionService.HoldItem(new HoldItemRequest
             {
                 ModeLabel = _currentMode.ToString(),
@@ -2096,6 +2799,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
             {
+                if (!string.IsNullOrWhiteSpace(result.SourcePath) &&
+                    !string.IsNullOrWhiteSpace(result.DestinationPath))
+                {
+                    _permissionMap.Remove(result.SourcePath);
+                    _permissionMap[result.DestinationPath] = ([], false, true);
+                    _holdDisplayPermissionMap[result.DestinationPath] = displayPermBeforeHold;
+                    SavePermissionMap();
+                    _ = Task.Run(() => _pipeClient.SetSubfolderPermission(result.DestinationPath, true, false));
+                }
+
                 InvalidateSizeCacheUnder(result.SourceParent);
                 movedCount++;
                 lastName = result.TargetName;
@@ -2275,17 +2988,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void ActionBarRenameButton_Click(object sender, RoutedEventArgs e) =>
         RenameShopItemMenuItem_Click(sender, e);
 
-    private void ActionBarMoveButton_Click(object sender, RoutedEventArgs e) =>
+    private void ActionBarMoveButton_Click(object sender, RoutedEventArgs e)
+    {
+        using var _ = Processing();
         MoveSelectedItemsToFolder();
+    }
 
-    private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e) =>
+    private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e)
+    {
+        using var _ = Processing();
         HoldShopItemMenuItem_Click(sender, e);
+    }
 
-    private void ActionBarDeleteButton_Click(object sender, RoutedEventArgs e) =>
+    private void ActionBarDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        using var _ = Processing();
         DeleteShopItemMenuItem_Click(sender, e);
+    }
 
-    private void ActionBarPlaceButton_Click(object sender, RoutedEventArgs e) =>
+    private void ActionBarPlaceButton_Click(object sender, RoutedEventArgs e)
+    {
+        using var _ = Processing();
         PlaceBackSelectedItems();
+    }
 
     private void PlaceBackSelectedItems()
     {
@@ -2343,8 +3068,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 continue;
             }
 
-            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-            PreservePermissionOnMove(result.SourcePath, result.SourceParent, result.DestinationPath, result.DestinationFolder);
+            bool preserved = PreservePermissionOnArrival(
+                result.SourcePath,
+                result.SourceParent,
+                result.DestinationPath,
+                result.DestinationFolder,
+                removeSourceEntry: true,
+                historySource: "MainWindow.move");
+            if (!preserved)
+            {
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+            }
             InvalidateSizeCacheUnder(result.SourceParent);
             movedCount++;
             lastName = result.TargetName;
@@ -2426,6 +3160,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        MoveHoldDisplayPermission(item.FullPath, result.DestinationPath);
+        SavePermissionMap();
         NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
         InvalidateSizeCacheUnder(result.SourceParent);
         _pendingFocusName = newName;
@@ -2737,7 +3473,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             foreach (var (path, (_, isReadOnly, isSharedOff)) in snapshot)
             {
                 if (!Directory.Exists(path)) continue;
-                SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+                _pipeClient.SetSubfolderPermission(path, isSharedOff, isReadOnly);
             }
             // permissionMap に未登録のトップレベルフォルダは継承リセット
             // （旧セッションで全員R が設定され permissionMap に残らなかった場合の修復）
@@ -2745,7 +3481,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 if (snapshot.ContainsKey(dir)) continue;
                 if (string.Equals(Path.GetFileName(dir), HoldFolderName, StringComparison.OrdinalIgnoreCase)) continue;
-                SmbNtfsManager.ResetPathToInherited(dir);
+                _pipeClient.ResetPathToInherited(dir);
             }
             if (Dispatcher.CheckAccess())
                 PublishPermissionManifest();
@@ -3368,33 +4104,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     }
                     ApplyFriendPermissionManifest(item, friendPermissionManifest);
                 }
+                else if (IsHeldItemPath(item.FullPath) &&
+                         _holdDisplayPermissionMap.TryGetValue(item.FullPath, out var holdDisplayPerm))
+                {
+                    ApplyPermissionToItem(item, holdDisplayPerm);
+                }
                 else if (_permissionMap.TryGetValue(item.FullPath, out var perm))
                 {
-                    // parent always overrides — child's own setting only takes effect when inside that child.
-                    // isInsideSubfolder: we're NOT at the shop root, so parent context applies.
-                    bool isInsideSubfolder = !string.IsNullOrWhiteSpace(_shopFolder) &&
-                        !string.Equals(
-                            Path.GetFullPath(_currentFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                            Path.GetFullPath(_shopFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                            StringComparison.OrdinalIgnoreCase);
-                    if (!item.IsHoldFolder && isInsideSubfolder && _effectiveParentPerm.HasValue)
+                    if (!item.IsHoldFolder &&
+                        _effectiveParentPerm.HasValue &&
+                        !IsWithinRange(perm, _effectiveParentPerm))
                     {
-                        foreach (string user in _effectiveParentPerm.Value.Users) item.AllowedUsers.Add(user);
-                        item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
-                        item.IsSharedOff = _effectiveParentPerm.Value.IsSharedOff;
+                        ApplyPermissionToItem(item, _effectiveParentPerm.Value);
                     }
                     else
                     {
-                        foreach (string user in perm.Users) item.AllowedUsers.Add(user);
-                        item.IsReadOnly = perm.IsReadOnly;
-                        item.IsSharedOff = perm.IsSharedOff;
+                        ApplyPermissionToItem(item, perm);
                     }
                 }
                 else if (!item.IsHoldFolder && _effectiveParentPerm.HasValue)
                 {
-                    foreach (string user in _effectiveParentPerm.Value.Users) item.AllowedUsers.Add(user);
-                    item.IsReadOnly = _effectiveParentPerm.Value.IsReadOnly;
-                    item.IsSharedOff = _effectiveParentPerm.Value.IsSharedOff;
+                    ApplyPermissionToItem(item, _effectiveParentPerm.Value);
                 }
                 SwkLogger.Debug($"Display[{_currentMode}]: item={item.Name}({item.ShareStatusText})", targetName: item.Name, pathText: _currentFolder);
             }
@@ -4005,7 +4735,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        SharePolicyRepair.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
+        _pipeClient.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
     }
 
     private void ContentsSensor_Error(object sender, ErrorEventArgs e)
@@ -4074,61 +4804,67 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (itemOff) return true;
         if (destOff) return false;
         if (!itemReadOnly && destReadOnly) return false;
-        if (destUsers.Count > 0 && itemUsers.Count == 0) return false;
-        return true;
+        if (destUsers.Count == 0) return true;
+        if (itemUsers.Count == 0) return false;
+
+        var destUserSet = new HashSet<string>(destUsers, StringComparer.OrdinalIgnoreCase);
+        return itemUsers.All(destUserSet.Contains);
     }
 
-    private void PreservePermissionOnMove(
+    private bool PreservePermissionOnArrival(
         string sourcePath,
         string sourceParent,
         string destinationPath,
-        string destinationFolder)
+        string destinationFolder,
+        bool removeSourceEntry,
+        string historySource)
     {
         bool hasOwnEntry = _permissionMap.TryGetValue(sourcePath, out var ownPerm)
             && (ownPerm.Users.Count > 0 || ownPerm.IsReadOnly || ownPerm.IsSharedOff);
 
-        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? effectiveSource = hasOwnEntry
-            ? ownPerm
-            : FindEffectiveAncestorPermission(sourceParent);
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? effectiveSource =
+            GetDisplayedPermissionForPath(sourcePath, sourceParent);
 
         if (effectiveSource == null)
         {
             var destPermForNull = FindEffectiveAncestorPermission(destinationFolder);
             if (destPermForNull != null)
-                AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, null, destPermForNull.Value);
-            return;
+                AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, null, destPermForNull.Value, historySource);
+            if (removeSourceEntry && hasOwnEntry && _permissionMap.Remove(sourcePath))
+            {
+                MoveHoldDisplayPermission(sourcePath, destinationPath);
+                SavePermissionMap();
+            }
+            return false;
         }
 
         var effectiveDest = FindEffectiveAncestorPermission(destinationFolder);
 
         if (IsWithinRange(effectiveSource.Value, effectiveDest))
         {
-            if (!hasOwnEntry)
+            if (removeSourceEntry)
             {
-                return;
+                _permissionMap.Remove(sourcePath);
+                MoveHoldDisplayPermission(sourcePath, destinationPath);
             }
 
-            _permissionMap.Remove(sourcePath);
             _permissionMap[destinationPath] = effectiveSource.Value;
             SavePermissionMap();
-            return;
+            string capturedDest = destinationPath;
+            var capturedPerm = effectiveSource.Value;
+            _ = Task.Run(() => _pipeClient.SetSubfolderPermission(capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
+            return true;
         }
 
-        bool changed = hasOwnEntry && _permissionMap.Remove(sourcePath);
-
-        if (!IsWithinRange(effectiveSource.Value, effectiveDest))
+        if (removeSourceEntry && hasOwnEntry)
         {
-            if (changed) SavePermissionMap();
-            if (effectiveDest != null)
-                AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value);
-            return;
+            _permissionMap.Remove(sourcePath);
+            MoveHoldDisplayPermission(sourcePath, destinationPath);
+            SavePermissionMap();
         }
-
-        _permissionMap[destinationPath] = effectiveSource.Value;
-        SavePermissionMap();
-        string capturedDest = destinationPath;
-        var capturedPerm = effectiveSource.Value;
-        _ = Task.Run(() => SmbNtfsManager.SetSubfolderPermission(capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
+        if (effectiveDest != null)
+            AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value, historySource);
+        return false;
     }
 
     private void AppendPermissionChangedByMoveHistory(
@@ -4136,7 +4872,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string destinationPath,
         string destinationFolder,
         (List<string> Users, bool IsReadOnly, bool IsSharedOff)? beforePerm,
-        (List<string> Users, bool IsReadOnly, bool IsSharedOff) afterPerm)
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff) afterPerm,
+        string source)
     {
         string fileName = Path.GetFileName(destinationPath);
         string beforeStatus = PermissionToStatusText(beforePerm);
@@ -4152,7 +4889,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             sourcePath: sourcePath,
             destinationPath: destinationPath,
             note: $"移動先: {destFolderName}（{afterStatus}）",
-            source: "MainWindow.move");
+            source: source);
     }
 
     private void MaybeAppendPermissionInheritedOnArrival(string destinationPath, string destinationFolder, string source)
@@ -4909,50 +5646,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         UpdateShopState(_isShopOpen);
     }
 
-    private string BuildFriendShareStatusMessage(ShopItem item, bool readOnly)
-    {
-        string accessText = readOnly ? "読取専用" : "読み書き可";
-        List<string> users = item.AllowedUsers
-            .Where(user => !string.IsNullOrWhiteSpace(user))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (_currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
-        {
-            string ownerLabel = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
-                ? _activeFriendShop.HostMachineName
-                : _activeFriendShop.DisplayName;
-            if (!string.IsNullOrWhiteSpace(ownerLabel) &&
-                !users.Contains(ownerLabel, StringComparer.OrdinalIgnoreCase))
-            {
-                users.Insert(0, ownerLabel);
-            }
-        }
-
-        if (users.Count == 0)
-        {
-            return $"指定されたユーザーに公開されています（{accessText}）";
-        }
-
-        return $"指定されたユーザーに公開されています（{accessText}）\n対象: {string.Join("、", users)}";
-    }
-
     private bool CanAcceptDrop(System.Windows.DragEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
+            if (EnableExternalDragDiagnostics)
+            {
+                SwkLogger.Info($"CanAcceptDrop: reject - current folder missing: {_currentFolder}");
+            }
             return false;
         }
 
-        if (_currentMode == DisplayMode.FriendShop)
+        bool hasSupportedData =
+            e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ||
+            e.Data.GetDataPresent(InternalDragPathFormat) ||
+            e.Data.GetDataPresent(InternalDragPathsFormat);
+
+        if (!hasSupportedData)
         {
-            return e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) &&
-                   IsDirectoryWritable(_currentFolder);
+            if (EnableExternalDragDiagnostics)
+            {
+                SwkLogger.Info("CanAcceptDrop: reject - unsupported data formats");
+            }
+            return false;
         }
 
-        return e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ||
-               e.Data.GetDataPresent(InternalDragPathFormat) ||
-               e.Data.GetDataPresent(InternalDragPathsFormat);
+        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        if (string.IsNullOrWhiteSpace(destination) || !Directory.Exists(destination))
+        {
+            if (EnableExternalDragDiagnostics)
+            {
+                SwkLogger.Info($"CanAcceptDrop: reject - destination missing: {destination}");
+            }
+            return false;
+        }
+
+        if (_currentMode == DisplayMode.FriendShop &&
+            e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+        {
+            bool writable = IsDirectoryWritable(destination);
+            if (EnableExternalDragDiagnostics)
+            {
+                SwkLogger.Info($"CanAcceptDrop: FriendShop destination={destination}, writable={writable}");
+            }
+            return writable;
+        }
+
+        if (EnableExternalDragDiagnostics)
+        {
+            SwkLogger.Info($"CanAcceptDrop: accept - destination={destination}, mode={_currentMode}");
+        }
+
+        return true;
     }
 
     private System.Windows.DragDropEffects GetDropEffect(System.Windows.DragEventArgs e)
@@ -4960,6 +5705,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!CanAcceptDrop(e))
         {
             return System.Windows.DragDropEffects.None;
+        }
+
+        string? destinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        if (!string.IsNullOrWhiteSpace(destinationFolder) && IsHoldFolderPath(destinationFolder))
+        {
+            return System.Windows.DragDropEffects.Move;
         }
 
         if (e.Data.GetDataPresent(InternalDragPathFormat) ||
@@ -5021,7 +5772,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void UpdateDropTargetHighlight(System.Windows.DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(InternalDragPathFormat) &&
-            !e.Data.GetDataPresent(InternalDragPathsFormat))
+            !e.Data.GetDataPresent(InternalDragPathsFormat) &&
+            !e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
         {
             ClearDropTargetHighlight();
             return;
@@ -5087,6 +5839,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             _dragPreviewPopup.IsOpen = false;
         }
+    }
+
+    private static string? GetExternalDragHintLabel(System.Windows.DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
+        {
+            return null;
+        }
+
+        if (e.Data.GetData(System.Windows.DataFormats.FileDrop) is not string[] paths || paths.Length == 0)
+        {
+            return null;
+        }
+
+        if (paths.Length == 1)
+        {
+            return Path.GetFileName(paths[0]);
+        }
+
+        return $"{paths.Length} 個の項目";
     }
 
     private TextBlock DragPreviewTextBlock
@@ -5269,7 +6041,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     Path = kv.Key,
                     Users = kv.Value.Users,
                     IsReadOnly = kv.Value.IsReadOnly,
-                    IsSharedOff = kv.Value.IsSharedOff
+                    IsSharedOff = kv.Value.IsSharedOff,
+                    HasHoldDisplayPermission = _holdDisplayPermissionMap.ContainsKey(kv.Key),
+                    HoldDisplayUsers = _holdDisplayPermissionMap.TryGetValue(kv.Key, out var holdDisplayPerm)
+                        ? holdDisplayPerm.Users
+                        : [],
+                    HoldDisplayReadOnly = _holdDisplayPermissionMap.TryGetValue(kv.Key, out holdDisplayPerm)
+                        && holdDisplayPerm.IsReadOnly,
+                    HoldDisplaySharedOff = _holdDisplayPermissionMap.TryGetValue(kv.Key, out holdDisplayPerm)
+                        && holdDisplayPerm.IsSharedOff
                 }).ToList();
             File.WriteAllText(PermissionsPath, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
             PublishPermissionManifest();
@@ -5388,6 +6168,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void LoadPermissionMap()
     {
         _permissionMap.Clear();
+        _holdDisplayPermissionMap.Clear();
         if (!File.Exists(PermissionsPath)) return;
         try
         {
@@ -5403,6 +6184,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                         continue;
                     }
                     _permissionMap[e.Path] = (users, e.IsReadOnly, e.IsSharedOff);
+                    if (e.HasHoldDisplayPermission)
+                    {
+                        _holdDisplayPermissionMap[e.Path] = (e.HoldDisplayUsers ?? [], e.HoldDisplayReadOnly, e.HoldDisplaySharedOff);
+                    }
                 }
             }
         }
@@ -5721,6 +6506,10 @@ public sealed class PermissionEntry
     [JsonPropertyName("users")] public List<string> Users { get; set; } = [];
     [JsonPropertyName("readOnly")] public bool IsReadOnly { get; set; }
     [JsonPropertyName("sharedOff")] public bool IsSharedOff { get; set; }
+    [JsonPropertyName("hasHoldDisplayPermission")] public bool HasHoldDisplayPermission { get; set; }
+    [JsonPropertyName("holdDisplayUsers")] public List<string> HoldDisplayUsers { get; set; } = [];
+    [JsonPropertyName("holdDisplayReadOnly")] public bool HoldDisplayReadOnly { get; set; }
+    [JsonPropertyName("holdDisplaySharedOff")] public bool HoldDisplaySharedOff { get; set; }
 }
 
 public sealed class AppSettings
@@ -5762,3 +6551,116 @@ public sealed record ExplorerTarget(
     string Label,
     Friend? Friend,
     SwkNotificationListener.ShopInfo? ShopInfo);
+
+[ComVisible(true)]
+internal sealed class ExplorerOleDropTarget : IOleDropTarget
+{
+    private readonly MainWindow _owner;
+    private Forms.IDataObject? _currentData;
+    private int _lastEffect = (int)System.Windows.DragDropEffects.None;
+
+    public ExplorerOleDropTarget(MainWindow owner)
+    {
+        _owner = owner;
+    }
+
+    public int DragEnter(
+        System.Runtime.InteropServices.ComTypes.IDataObject pDataObj,
+        int grfKeyState,
+        POINTL pt,
+        ref int pdwEffect)
+    {
+        _currentData = new Forms.DataObject(pDataObj);
+        pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
+        _lastEffect = pdwEffect;
+        return 0;
+    }
+
+    public int DragOver(int grfKeyState, POINTL pt, ref int pdwEffect)
+    {
+        pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
+        _lastEffect = pdwEffect;
+        return 0;
+    }
+
+    public int DragLeave()
+    {
+        _currentData = null;
+        _lastEffect = (int)System.Windows.DragDropEffects.None;
+        return 0;
+    }
+
+    public int Drop(
+        System.Runtime.InteropServices.ComTypes.IDataObject pDataObj,
+        int grfKeyState,
+        POINTL pt,
+        ref int pdwEffect)
+    {
+        var data = new Forms.DataObject(pDataObj);
+        DragDropKeyStates keyStates = (DragDropKeyStates)grfKeyState;
+        pdwEffect = ResolveEffect(data, keyStates, pt);
+        _lastEffect = pdwEffect;
+        _ = _owner.Dispatcher.InvokeAsync(() =>
+            _owner.HandleOleDrop(data, keyStates, new System.Windows.Point(pt.x, pt.y)));
+        _currentData = null;
+        return 0;
+    }
+
+    private int ResolveEffect(
+        Forms.IDataObject? data,
+        DragDropKeyStates keyStates,
+        POINTL pt)
+    {
+        try
+        {
+            if (data is null)
+            {
+                return _lastEffect;
+            }
+
+            string destinationFolder = _owner.ResolveExternalDropDestinationFromScreenPoint(
+                                           new System.Windows.Point(pt.x, pt.y))
+                                       ?? string.Empty;
+            return _owner.GetOleDropEffect(data, keyStates, destinationFolder);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"ExplorerOleDropTarget.ResolveEffect failed: {ex.Message}");
+            return (int)System.Windows.DragDropEffects.None;
+        }
+    }
+
+}
+
+[ComImport]
+[Guid("00000122-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IOleDropTarget
+{
+    [PreserveSig]
+    int DragEnter(
+        System.Runtime.InteropServices.ComTypes.IDataObject pDataObj,
+        int grfKeyState,
+        POINTL pt,
+        ref int pdwEffect);
+
+    [PreserveSig]
+    int DragOver(int grfKeyState, POINTL pt, ref int pdwEffect);
+
+    [PreserveSig]
+    int DragLeave();
+
+    [PreserveSig]
+    int Drop(
+        System.Runtime.InteropServices.ComTypes.IDataObject pDataObj,
+        int grfKeyState,
+        POINTL pt,
+        ref int pdwEffect);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct POINTL
+{
+    public int x;
+    public int y;
+}
