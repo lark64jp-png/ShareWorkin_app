@@ -1510,15 +1510,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionReadOnlyRadio.IsChecked = item.IsReadOnly && !item.IsSharedOff;
         PermissionSharedOffRadio.IsChecked = item.IsSharedOff;
 
-        PermissionTitleLabel.Text = readOnly ? "共有内容" : "共有許可";
-        PermissionTargetName.Text = readOnly ? $"{item.Name}（相手のフォルダー）" : item.Name;
-
         Visibility editVis = readOnly ? Visibility.Collapsed : Visibility.Visible;
         PermissionOkButton.Visibility = editVis;
         PermissionClearButton.Visibility = editVis;
-        PermissionMoveStack.Visibility = editVis;
-        PermissionMoveColumn.Width = readOnly ? new GridLength(0) : new GridLength(34);
-        PermissionHeaderMoveColumn.Width = readOnly ? new GridLength(0) : new GridLength(34);
         PermissionUnsetBorder.Visibility = editVis;
         PermissionUnsetHeader.Visibility = editVis;
         PermissionUnsetColumn.Width = readOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
@@ -1591,8 +1585,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool canSpecifyUsers = PermissionSharedOffRadio.IsChecked != true;
         PermissionAllowedListBox.IsEnabled = canSpecifyUsers;
         PermissionUnsetListBox.IsEnabled = canSpecifyUsers;
-        PermissionMoveLeftButton.IsEnabled = canSpecifyUsers;
-        PermissionMoveRightButton.IsEnabled = canSpecifyUsers;
         PermissionEveryoneChip.IsEnabled = canSpecifyUsers;
         UpdateEveryoneChipState();
     }
@@ -1624,8 +1616,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ReloadPermissionUnset();
     }
 
-    private void PermissionMoveLeftButton_Click(object sender, RoutedEventArgs e) => MovePermissionUnsetToAllowed();
-    private void PermissionMoveRightButton_Click(object sender, RoutedEventArgs e) => MovePermissionAllowedToUnset();
     private void PermissionAllowedListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MovePermissionAllowedToUnset();
     private void PermissionUnsetListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MovePermissionUnsetToAllowed();
 

@@ -773,63 +773,19 @@
                         Padding="8,6"><Grid Width="280">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="6" />
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="4" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="8" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <!-- タイトル行: 対象名 + 目立つ閉じる -->
+                    <!-- ヘッダー: 利用ユーザー [全員] [クリア]   非ユーザー   ✕ -->
                     <Grid Grid.Row="0">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="6" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0"
-                                   x:Name="PermissionTitleLabel"
-                                   Text="共有許可"
-                                   FontSize="11"
-                                   FontWeight="SemiBold"
-                                   Foreground="#2F2A22"
-                                   VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2"
-                                   x:Name="PermissionTargetName"
-                                   Text=""
-                                   FontSize="11"
-                                   Foreground="#1F4438"
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
-                        <Border Grid.Column="3"
-                                x:Name="PermissionCloseBorder"
-                                Width="18" Height="18"
-                                CornerRadius="9"
-                                Background="#F1EDE4"
-                                BorderBrush="#9E8C6B"
-                                BorderThickness="1"
-                                Cursor="Hand"
-                                MouseLeftButtonUp="PermissionCloseButton_Click"
-                                ToolTip="閉じる">
-                            <TextBlock Text="✕"
-                                       FontSize="10"
-                                       FontWeight="Bold"
-                                       Foreground="#7A5C2E"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" />
-                        </Border>
-                    </Grid>
-
-                    <!-- サブヘッダー: 利用ユーザー [全員チップ] [クリア]  非ユーザー -->
-                    <Grid Grid.Row="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="28" x:Name="PermissionHeaderMoveColumn" />
                             <ColumnDefinition Width="*" x:Name="PermissionHeaderUnsetColumn" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="利用ユーザー"
@@ -872,13 +828,31 @@
                                    FontSize="11"
                                    Foreground="#7A746A"
                                    VerticalAlignment="Center" />
+                        <Border Grid.Column="3"
+                                x:Name="PermissionCloseBorder"
+                                Width="18" Height="18"
+                                Margin="6,0,0,0"
+                                CornerRadius="9"
+                                Background="#F1EDE4"
+                                BorderBrush="#9E8C6B"
+                                BorderThickness="1"
+                                Cursor="Hand"
+                                MouseLeftButtonUp="PermissionCloseButton_Click"
+                                ToolTip="閉じる">
+                            <TextBlock Text="✕"
+                                       FontSize="10"
+                                       FontWeight="Bold"
+                                       Foreground="#7A5C2E"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Border>
                     </Grid>
 
-                    <!-- リスト本体 (左右対称) -->
-                    <Grid Grid.Row="4" Height="92">
+                    <!-- リスト本体 (左右対称、移動はダブルクリック) 4行ぴったり -->
+                    <Grid Grid.Row="2" Height="62">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="28" x:Name="PermissionMoveColumn" />
+                            <ColumnDefinition Width="6" />
                             <ColumnDefinition Width="*" x:Name="PermissionUnsetColumn" />
                         </Grid.ColumnDefinitions>
 
@@ -886,7 +860,8 @@
                                 BorderBrush="#D8D2C3"
                                 BorderThickness="1"
                                 CornerRadius="3"
-                                Background="White">
+                                Background="White"
+                                ToolTip="ダブルクリックで右へ移す">
                             <ListBox x:Name="PermissionAllowedListBox"
                                      BorderThickness="0"
                                      Background="Transparent"
@@ -907,36 +882,13 @@
                             </ListBox>
                         </Border>
 
-                        <StackPanel Grid.Column="1"
-                                    x:Name="PermissionMoveStack"
-                                    VerticalAlignment="Center"
-                                    HorizontalAlignment="Center">
-                            <Button x:Name="PermissionMoveLeftButton"
-                                    Content="←"
-                                    Width="20"
-                                    Height="16"
-                                    Margin="0,1"
-                                    FontSize="9"
-                                    Padding="0"
-                                    Click="PermissionMoveLeftButton_Click"
-                                    ToolTip="非ユーザー → 利用ユーザー" />
-                            <Button x:Name="PermissionMoveRightButton"
-                                    Content="→"
-                                    Width="20"
-                                    Height="16"
-                                    Margin="0,1"
-                                    FontSize="9"
-                                    Padding="0"
-                                    Click="PermissionMoveRightButton_Click"
-                                    ToolTip="利用ユーザー → 非ユーザー" />
-                        </StackPanel>
-
                         <Border Grid.Column="2"
                                 x:Name="PermissionUnsetBorder"
                                 BorderBrush="#D8D2C3"
                                 BorderThickness="1"
                                 CornerRadius="3"
-                                Background="White">
+                                Background="White"
+                                ToolTip="ダブルクリックで左へ移す">
                             <ListBox x:Name="PermissionUnsetListBox"
                                      BorderThickness="0"
                                      Background="Transparent"
@@ -959,7 +911,7 @@
                     </Grid>
 
                     <!-- ラジオ + 確定 -->
-                    <Grid Grid.Row="6">
+                    <Grid Grid.Row="4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -996,22 +948,22 @@
                                 IsDefault="True" />
                     </Grid>
                 </Grid></Border>
-                <!-- 吹き出しの矢印（左向き） -->
-                <Polygon Points="0,8 9,1 9,15"
-                         Fill="#FFFEFA"
-                         Stroke="#A6BCB3"
-                         StrokeThickness="1"
-                         StrokeLineJoin="Round"
-                         HorizontalAlignment="Left"
-                         VerticalAlignment="Top"
-                         Margin="0,8,0,0"
-                         SnapsToDevicePixels="True" />
-                <!-- 矢印接続部のボーダー継ぎ目を隠す -->
-                <Rectangle Width="2" Height="13"
+                <!-- 吹き出しのしっぽ（左向き・先端カーブ） -->
+                <Path Data="M 12,2 L 1,12 Q 0,13 1,14 L 12,24 Z"
+                      Fill="#FFFEFA"
+                      Stroke="#A6BCB3"
+                      StrokeThickness="1"
+                      StrokeLineJoin="Round"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Top"
+                      Margin="0,6,0,0"
+                      SnapsToDevicePixels="True" />
+                <!-- 本体ボーダーの継ぎ目を隠す -->
+                <Rectangle Width="2" Height="22"
                            Fill="#FFFEFA"
                            HorizontalAlignment="Left"
                            VerticalAlignment="Top"
-                           Margin="8,5,0,0"
+                           Margin="9,3,0,0"
                            SnapsToDevicePixels="True" />
             </Grid>
         </Popup>

@@ -17,6 +17,7 @@
 - [インストーラー時はクリーンビルド＋SHA検証](feedback_installer_build_workflow.md) — 増分ビルドの罠を避ける毎回固定の手順
 - [**更新履歴の記録方針**](feedback_history_recording_philosophy.md) — 網羅性・密度の2軸。「全部出す」と「大量を避ける」は矛盾しない。機械的適用禁止
 - [**UIテキストはヒエラルキーで段階的に小さく**](feedback_ui_text_hierarchy.md) — 親画面→ポップアップ→ボタンと1段ずつ。毎回聞くべき原則ではなく身体化する
+- [**ポップアップ自体がコンテキスト**](feedback_popup_is_context.md) — 吹き出しの矢印が対象を指している。タイトル・対象名・説明文・重複ボタンを足さない
 
 ## Project
 - [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
