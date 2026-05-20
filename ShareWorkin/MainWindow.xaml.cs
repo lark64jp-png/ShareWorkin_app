@@ -1445,6 +1445,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private DispatcherTimer? _processingShowDelayTimer;
+    private const int ProcessingShowDelayMs = 500;
+
     private void BeginProcessing(string? label = null)
     {
         if (_processingDepth++ == 0)
@@ -1452,7 +1455,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ProcessingLabel.Text = label ?? "● 処理中…";
             ProcessingProgressBar.IsIndeterminate = true;
             ProcessingProgressBar.Value = 0;
-            ProcessingBar.Visibility = Visibility.Visible;
+            // 0.5秒以内に終わる処理では出さない（点滅ノイズ回避）
+            _processingShowDelayTimer?.Stop();
+            _processingShowDelayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ProcessingShowDelayMs) };
+            _processingShowDelayTimer.Tick += (_, _) =>
+            {
+                _processingShowDelayTimer?.Stop();
+                _processingShowDelayTimer = null;
+                if (_processingDepth > 0)
+                {
+                    ProcessingBar.Visibility = Visibility.Visible;
+                }
+            };
+            _processingShowDelayTimer.Start();
         }
         else if (label != null)
         {
@@ -1465,6 +1480,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (--_processingDepth <= 0)
         {
             _processingDepth = 0;
+            _processingShowDelayTimer?.Stop();
+            _processingShowDelayTimer = null;
             ProcessingBar.Visibility = Visibility.Collapsed;
         }
     }
@@ -1636,11 +1653,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ReloadPermissionUnset();
     }
 
-    private void PermissionClearButton_Click(object sender, RoutedEventArgs e)
+    private void PermissionClearButton_Click(object sender, MouseButtonEventArgs e)
     {
         if (_permissionPopupReadOnly) return;
         _permissionAllowed.Clear();
         ReloadPermissionUnset();
+        e.Handled = true;
     }
 
     private void PermissionAllowedListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e) => MovePermissionAllowedToUnset();
