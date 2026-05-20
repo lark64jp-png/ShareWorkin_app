@@ -202,6 +202,7 @@ public partial class MainWindow : Window
         LoadSettings();
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
+
         // ExplorerTargetComboBox.SelectionChanged は XAML 側で登録済み (二重発火防止のため code-behind 登録は外す)
         InitializeExplorerDropdownForStartup();
         UpdateShopState(false);
@@ -382,7 +383,12 @@ public partial class MainWindow : Window
 
         string capturedDestination = destination;
         SwkLogger.Info($"WM_DROPFILES accepted: count={paths.Count} -> {capturedDestination}");
-        _ = Dispatcher.InvokeAsync(() => PlaceExternalFiles(paths, capturedDestination));
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            BeginProcessing();
+            try { await PlaceExternalFilesAsync(paths, capturedDestination); }
+            finally { EndProcessing(); }
+        });
     }
 
     private void RegisterExplorerOleDropTarget()
@@ -472,7 +478,7 @@ public partial class MainWindow : Window
             : (int)System.Windows.DragDropEffects.None;
     }
 
-    internal void HandleOleDrop(Forms.IDataObject data, DragDropKeyStates keyStates, System.Windows.Point screenPoint)
+    internal async void HandleOleDrop(Forms.IDataObject data, DragDropKeyStates keyStates, System.Windows.Point screenPoint)
     {
         string destinationFolder = ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? _currentFolder ?? string.Empty;
         if (string.IsNullOrWhiteSpace(destinationFolder))
@@ -480,50 +486,58 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (data.GetDataPresent(InternalDragPathFormat))
+        BeginProcessing();
+        try
         {
-            string sourcePath = data.GetData(InternalDragPathFormat) as string ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(sourcePath))
+            if (data.GetDataPresent(InternalDragPathFormat))
             {
+                string sourcePath = data.GetData(InternalDragPathFormat) as string ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(sourcePath))
+                {
+                    return;
+                }
+
+                if (IsHoldFolderPath(destinationFolder))
+                    await HoldInternalDraggedItemsAsync([sourcePath]);
+                else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                    await CopyInternalDraggedItemAsync(sourcePath, destinationFolder);
+                else
+                    await MoveInternalDraggedItemAsync(sourcePath, destinationFolder);
                 return;
             }
 
-            if (IsHoldFolderPath(destinationFolder))
-                HoldInternalDraggedItems([sourcePath]);
-            else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
-                CopyInternalDraggedItem(sourcePath, destinationFolder);
-            else
-                MoveInternalDraggedItem(sourcePath, destinationFolder);
-            return;
+            if (data.GetDataPresent(InternalDragPathsFormat))
+            {
+                string[] sourcePaths = data.GetData(InternalDragPathsFormat) as string[] ?? [];
+                if (sourcePaths.Length == 0)
+                {
+                    return;
+                }
+
+                if (IsHoldFolderPath(destinationFolder))
+                    await HoldInternalDraggedItemsAsync(sourcePaths);
+                else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                    await PlaceExternalFilesAsync(sourcePaths, destinationFolder);
+                else
+                    await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                return;
+            }
+
+            if (data.GetDataPresent(Forms.DataFormats.FileDrop))
+            {
+                string[] paths = data.GetData(Forms.DataFormats.FileDrop) as string[] ?? [];
+                if (paths.Length == 0)
+                {
+                    return;
+                }
+
+                SwkLogger.Info($"OLE drop accepted: count={paths.Length} -> {destinationFolder}");
+                await PlaceExternalFilesAsync(paths, destinationFolder);
+            }
         }
-
-        if (data.GetDataPresent(InternalDragPathsFormat))
+        finally
         {
-            string[] sourcePaths = data.GetData(InternalDragPathsFormat) as string[] ?? [];
-            if (sourcePaths.Length == 0)
-            {
-                return;
-            }
-
-            if (IsHoldFolderPath(destinationFolder))
-                HoldInternalDraggedItems(sourcePaths);
-            else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
-                PlaceExternalFiles(sourcePaths, destinationFolder);
-            else
-                MoveInternalDraggedItems(sourcePaths, destinationFolder);
-            return;
-        }
-
-        if (data.GetDataPresent(Forms.DataFormats.FileDrop))
-        {
-            string[] paths = data.GetData(Forms.DataFormats.FileDrop) as string[] ?? [];
-            if (paths.Length == 0)
-            {
-                return;
-            }
-
-            SwkLogger.Info($"OLE drop accepted: count={paths.Length} -> {destinationFolder}");
-            PlaceExternalFiles(paths, destinationFolder);
+            EndProcessing();
         }
     }
 
@@ -1431,12 +1445,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void BeginProcessing()
+    private void BeginProcessing(string? label = null)
     {
         if (_processingDepth++ == 0)
         {
+            ProcessingLabel.Text = label ?? "● 処理中…";
+            ProcessingProgressBar.IsIndeterminate = true;
+            ProcessingProgressBar.Value = 0;
             ProcessingBar.Visibility = Visibility.Visible;
-            Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        }
+        else if (label != null)
+        {
+            ProcessingLabel.Text = label;
         }
     }
 
@@ -1447,6 +1467,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _processingDepth = 0;
             ProcessingBar.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private IProgress<(int current, int total, string name)> CreateFileProgress(string verb)
+    {
+        return new Progress<(int current, int total, string name)>(p =>
+        {
+            ProcessingProgressBar.IsIndeterminate = false;
+            ProcessingProgressBar.Value = p.total > 0 ? (double)p.current / p.total * 100 : 0;
+            ProcessingLabel.Text = $"● {verb}中… {p.current}/{p.total}  {p.name}";
+        });
     }
 
     private IDisposable Processing() => new ProcessingScope(this);
@@ -1554,7 +1584,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!_permissionPopupReadOnly)
         {
             PermissionClearButton.IsEnabled = !isEveryone;
-            PermissionClearButton.Opacity = isEveryone ? 0.4 : 1.0;
         }
     }
 
@@ -2170,7 +2199,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PasteExternalFilesFromClipboard();
     }
 
-    private void PasteExternalFilesFromClipboard()
+    private async void PasteExternalFilesFromClipboard()
     {
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
@@ -2205,7 +2234,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        PlaceExternalFiles(paths, _currentFolder);
+        BeginProcessing();
+        try { await PlaceExternalFilesAsync(paths, _currentFolder); }
+        finally { EndProcessing(); }
     }
 
     private void UpdateRubberBand(System.Windows.Point current)
@@ -2398,7 +2429,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
+    private async void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
     {
         if (EnableExternalDragDiagnostics)
         {
@@ -2420,51 +2451,55 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        using var _processing = Processing();
-
+        e.Handled = true;
         // 視覚ツリーウォークを試み、失敗なら DragOver で特定済みのフォルダをフォールバックに使う
         string destinationFolder = GetDropDestinationFolder(e)
             ?? highlightedFolder?.FullPath
             ?? _currentFolder;
-        if (e.Data.GetDataPresent(InternalDragPathFormat))
-        {
-            string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
-            if (IsHoldFolderPath(destinationFolder))
-                HoldInternalDraggedItems([sourcePath]);
-            else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                CopyInternalDraggedItem(sourcePath, destinationFolder);
-            else
-                MoveInternalDraggedItem(sourcePath, destinationFolder);
-            e.Handled = true;
-            return;
-        }
 
-        if (e.Data.GetDataPresent(InternalDragPathsFormat))
+        BeginProcessing();
+        try
         {
-            string[] sourcePaths = (string[])e.Data.GetData(InternalDragPathsFormat);
-            if (IsHoldFolderPath(destinationFolder))
-                HoldInternalDraggedItems(sourcePaths);
-            else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                PlaceExternalFiles(sourcePaths, destinationFolder);
-            else
-                MoveInternalDraggedItems(sourcePaths, destinationFolder);
-            e.Handled = true;
-            return;
-        }
+            if (e.Data.GetDataPresent(InternalDragPathFormat))
+            {
+                string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
+                if (IsHoldFolderPath(destinationFolder))
+                    await HoldInternalDraggedItemsAsync([sourcePath]);
+                else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+                    await CopyInternalDraggedItemAsync(sourcePath, destinationFolder);
+                else
+                    await MoveInternalDraggedItemAsync(sourcePath, destinationFolder);
+                return;
+            }
 
-        if (!Directory.Exists(destinationFolder))
+            if (e.Data.GetDataPresent(InternalDragPathsFormat))
+            {
+                string[] sourcePaths = (string[])e.Data.GetData(InternalDragPathsFormat);
+                if (IsHoldFolderPath(destinationFolder))
+                    await HoldInternalDraggedItemsAsync(sourcePaths);
+                else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
+                    await PlaceExternalFilesAsync(sourcePaths, destinationFolder);
+                else
+                    await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                return;
+            }
+
+            if (!Directory.Exists(destinationFolder))
+            {
+                SetTransientStatus("その場所が見つかりません。");
+                return;
+            }
+
+            string[] paths = (string[])e.Data.GetData(System.Windows.DataFormats.FileDrop);
+            await PlaceExternalFilesAsync(paths, destinationFolder);
+        }
+        finally
         {
-            SetTransientStatus("その場所が見つかりません。");
-            e.Handled = true;
-            return;
+            EndProcessing();
         }
-
-        string[] paths = (string[])e.Data.GetData(System.Windows.DataFormats.FileDrop);
-        PlaceExternalFiles(paths, destinationFolder);
-        e.Handled = true;
     }
 
-    private void PlaceExternalFiles(IReadOnlyList<string> paths, string destinationFolder)
+    private async Task PlaceExternalFilesAsync(IReadOnlyList<string> paths, string destinationFolder)
     {
         if (!Directory.Exists(destinationFolder)) return;
 
@@ -2477,16 +2512,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         int placedCount = 0;
         string? lastPlacedName = null;
+        var progress = CreateFileProgress("コピー");
+        int total = paths.Count;
+        string modeLabel = _currentMode.ToString();
 
-        foreach (string sourcePath in paths)
+        for (int i = 0; i < total; i++)
         {
-            ExplorerActionResult result = ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
+            string sourcePath = paths[i];
+            string fileName = Path.GetFileName(sourcePath);
+            progress.Report((i, total, fileName));
+
+            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
             {
-                ModeLabel = _currentMode.ToString(),
+                ModeLabel = modeLabel,
                 SourcePath = sourcePath,
                 DestinationFolder = destinationFolder,
                 BeforeWrite = SuppressExternalChangeNotifications,
-            });
+            }));
 
             ApplyExplorerActionResult(result);
 
@@ -2499,6 +2541,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 placedCount++;
                 lastPlacedName = result.TargetName;
             }
+
+            progress.Report((i + 1, total, fileName));
         }
 
         if (placedCount > 0)
@@ -2523,18 +2567,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void MoveInternalDraggedItem(string sourcePath, string destinationFolder)
+    private async Task MoveInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
-        ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
+        string modeLabel = _currentMode.ToString();
+        ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
         {
-            ModeLabel = _currentMode.ToString(),
+            ModeLabel = modeLabel,
             SourcePath = sourcePath,
             DestinationFolder = destinationFolder,
             IsHoldFolderPath = IsHoldFolderPath,
             IsUnderFolder = IsUnderFolder,
             GetShareStatus = GetItemShareStatus,
             BeforeWrite = SuppressExternalChangeNotifications,
-        });
+        }));
 
         if (result.State == ExplorerActionState.NoChange)
         {
@@ -2567,9 +2612,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         RefreshShopItems();
     }
 
-    private void MoveInternalDraggedItems(IReadOnlyList<string> sourcePaths, string destinationFolder)
+    private async Task MoveInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        int movedCount = ExecuteMoveExplorerActions(sourcePaths, destinationFolder, out string? lastName);
+        var progress = CreateFileProgress("移動");
+        (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(sourcePaths, destinationFolder, progress);
 
         if (movedCount > 0)
         {
@@ -2582,18 +2628,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void CopyInternalDraggedItem(string sourcePath, string destinationFolder)
+    private async Task CopyInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
-        ExplorerActionResult result = ExplorerActionService.CopyItem(new CopyItemRequest
+        string modeLabel = _currentMode.ToString();
+        ExplorerActionResult result = await Task.Run(() => ExplorerActionService.CopyItem(new CopyItemRequest
         {
-            ModeLabel = _currentMode.ToString(),
+            ModeLabel = modeLabel,
             SourcePath = sourcePath,
             DestinationFolder = destinationFolder,
             IsHoldFolderPath = IsHoldFolderPath,
             IsUnderFolder = IsUnderFolder,
             GetShareStatus = GetItemShareStatus,
             BeforeWrite = SuppressExternalChangeNotifications,
-        });
+        }));
 
         if (result.State == ExplorerActionState.NoChange)
         {
@@ -2735,10 +2782,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         RefreshShopItems();
     }
 
-    private void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
-        MoveSelectedItemsToFolder();
+    private async void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
+        await MoveSelectedItemsToFolderAsync();
 
-    private void MoveSelectedItemsToFolder()
+    private async Task MoveSelectedItemsToFolderAsync()
     {
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
@@ -2764,29 +2811,47 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        int movedCount = ExecuteMoveExplorerActions(items.Select(static item => item.FullPath).ToList(), destinationFolder, out string? lastName);
-
-        if (movedCount > 0)
+        BeginProcessing();
+        try
         {
-            string statusMessage = movedCount == 1 && lastName is not null
-                ? $"{lastName} を移しました。"
-                : $"{movedCount} つ移しました。";
-            SetTransientStatus(statusMessage);
-            RefreshShopItems();
+            var progress = CreateFileProgress("移動");
+            (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
+                items.Select(static item => item.FullPath).ToList(), destinationFolder, progress);
+
+            if (movedCount > 0)
+            {
+                string statusMessage = movedCount == 1 && lastName is not null
+                    ? $"{lastName} を移しました。"
+                    : $"{movedCount} つ移しました。";
+                SetTransientStatus(statusMessage);
+                RefreshShopItems();
+            }
+        }
+        finally
+        {
+            EndProcessing();
         }
     }
 
-    private void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
+    private async void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
             .ToList();
         if (items.Count == 0) return;
 
-        HoldInternalDraggedItems(items.Select(static item => item.FullPath).ToList());
+        BeginProcessing();
+        try
+        {
+            await HoldInternalDraggedItemsAsync(items.Select(static item => item.FullPath).ToList());
+        }
+        finally
+        {
+            EndProcessing();
+        }
     }
 
-    private void HoldInternalDraggedItems(IReadOnlyList<string> sourcePaths)
+    private async Task HoldInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths)
     {
         if (sourcePaths.Count == 0)
         {
@@ -2802,14 +2867,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string holdFolderPath = GetHoldFolderPath();
         int movedCount = 0;
         string? lastName = null;
+        var progress = CreateFileProgress("保留");
+        int total = sourcePaths.Count;
+        string modeLabel = _currentMode.ToString();
 
-        foreach (string sourcePath in sourcePaths)
+        for (int i = 0; i < total; i++)
         {
-            ShopItem? item = ShopItems.FirstOrDefault(i => string.Equals(i.FullPath, sourcePath, StringComparison.OrdinalIgnoreCase));
+            string sourcePath = sourcePaths[i];
+            ShopItem? item = ShopItems.FirstOrDefault(it => string.Equals(it.FullPath, sourcePath, StringComparison.OrdinalIgnoreCase));
             if (item is null || item.IsHoldFolder)
             {
                 continue;
             }
+
+            string fileName = item.Name;
+            progress.Report((i, total, fileName));
 
             var displayPermBeforeHold = (
                 item.AllowedUsers
@@ -2819,14 +2891,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 item.IsReadOnly,
                 item.IsSharedOff);
 
-            ExplorerActionResult result = ExplorerActionService.HoldItem(new HoldItemRequest
+            string itemPath = item.FullPath;
+            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.HoldItem(new HoldItemRequest
             {
-                ModeLabel = _currentMode.ToString(),
-                SourcePath = item.FullPath,
+                ModeLabel = modeLabel,
+                SourcePath = itemPath,
                 HoldFolderPath = holdFolderPath,
                 GetShareStatus = GetItemShareStatus,
                 BeforeWrite = SuppressExternalChangeNotifications,
-            });
+            }));
 
             ApplyExplorerActionResult(result);
 
@@ -2846,6 +2919,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 movedCount++;
                 lastName = result.TargetName;
             }
+
+            progress.Report((i + 1, total, fileName));
         }
 
         if (movedCount > 0)
@@ -2858,7 +2933,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void DeleteShopItemMenuItem_Click(object sender, RoutedEventArgs e)
+    private async void DeleteShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
@@ -2872,37 +2947,56 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             this, confirmMsg, "削除", MessageBoxButton.OKCancel, MessageBoxImage.None);
         if (confirmResult != MessageBoxResult.OK) return;
 
-        int deletedCount = 0;
-        string? lastName = null;
-
-        foreach (ShopItem item in items)
+        BeginProcessing();
+        try
         {
-            ExplorerActionResult result = ExplorerActionService.DeleteItem(new DeleteItemRequest
-            {
-                ModeLabel = _currentMode.ToString(),
-                ItemPath = item.FullPath,
-                IsDirectory = item.IsDirectory,
-                GetShareStatus = GetItemShareStatus,
-                BeforeWrite = SuppressExternalChangeNotifications,
-            });
+            var progress = CreateFileProgress("削除");
+            int deletedCount = 0;
+            string? lastName = null;
+            int total = items.Count;
+            string modeLabel = _currentMode.ToString();
 
-            ApplyExplorerActionResult(result);
-
-            if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
+            for (int i = 0; i < total; i++)
             {
-                InvalidateSizeCacheUnder(result.SourceParent);
-                deletedCount++;
-                lastName = result.TargetName;
+                ShopItem item = items[i];
+                string itemPath = item.FullPath;
+                bool isDirectory = item.IsDirectory;
+                string fileName = item.Name;
+                progress.Report((i, total, fileName));
+
+                ExplorerActionResult result = await Task.Run(() => ExplorerActionService.DeleteItem(new DeleteItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    ItemPath = itemPath,
+                    IsDirectory = isDirectory,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                }));
+
+                ApplyExplorerActionResult(result);
+
+                if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
+                {
+                    InvalidateSizeCacheUnder(result.SourceParent);
+                    deletedCount++;
+                    lastName = result.TargetName;
+                }
+
+                progress.Report((i + 1, total, fileName));
+            }
+
+            if (deletedCount > 0)
+            {
+                string statusMessage = deletedCount == 1 && lastName is not null
+                    ? $"{lastName} を消しました。"
+                    : $"{deletedCount} つ消しました。";
+                SetTransientStatus(statusMessage);
+                RefreshShopItems();
             }
         }
-
-        if (deletedCount > 0)
+        finally
         {
-            string statusMessage = deletedCount == 1 && lastName is not null
-                ? $"{lastName} を消しました。"
-                : $"{deletedCount} つ消しました。";
-            SetTransientStatus(statusMessage);
-            RefreshShopItems();
+            EndProcessing();
         }
     }
 
@@ -3021,38 +3115,38 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void ActionBarRenameButton_Click(object sender, RoutedEventArgs e) =>
         RenameShopItemMenuItem_Click(sender, e);
 
-    private void ActionBarMoveButton_Click(object sender, RoutedEventArgs e)
-    {
-        using var _ = Processing();
-        MoveSelectedItemsToFolder();
-    }
+    private async void ActionBarMoveButton_Click(object sender, RoutedEventArgs e) =>
+        await MoveSelectedItemsToFolderAsync();
 
-    private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e)
-    {
-        using var _ = Processing();
+    private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e) =>
         HoldShopItemMenuItem_Click(sender, e);
-    }
 
-    private void ActionBarDeleteButton_Click(object sender, RoutedEventArgs e)
-    {
-        using var _ = Processing();
+    private void ActionBarDeleteButton_Click(object sender, RoutedEventArgs e) =>
         DeleteShopItemMenuItem_Click(sender, e);
-    }
 
-    private void ActionBarPlaceButton_Click(object sender, RoutedEventArgs e)
-    {
-        using var _ = Processing();
-        PlaceBackSelectedItems();
-    }
+    private async void ActionBarPlaceButton_Click(object sender, RoutedEventArgs e) =>
+        await PlaceBackSelectedItemsAsync();
 
-    private void PlaceBackSelectedItems()
+    private async Task PlaceBackSelectedItemsAsync()
     {
         if (string.IsNullOrWhiteSpace(_shopFolder)) return;
 
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>().ToList();
         if (items.Count == 0) return;
 
-        int movedCount = ExecuteMoveExplorerActions(items.Select(static item => item.FullPath).ToList(), _shopFolder!, out string? lastName);
+        BeginProcessing();
+        int movedCount;
+        string? lastName;
+        try
+        {
+            var progress = CreateFileProgress("戻し");
+            (movedCount, lastName) = await ExecuteMoveExplorerActionsAsync(
+                items.Select(static item => item.FullPath).ToList(), _shopFolder!, progress);
+        }
+        finally
+        {
+            EndProcessing();
+        }
 
         if (movedCount > 0)
         {
@@ -3064,29 +3158,36 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private int ExecuteMoveExplorerActions(
+    private async Task<(int movedCount, string? lastName)> ExecuteMoveExplorerActionsAsync(
         IReadOnlyList<string> sourcePaths,
         string destinationFolder,
-        out string? lastName)
+        IProgress<(int current, int total, string name)>? progress = null)
     {
         int movedCount = 0;
-        lastName = null;
+        string? lastName = null;
+        int total = sourcePaths.Count;
+        string modeLabel = _currentMode.ToString();
 
-        foreach (string sourcePath in sourcePaths)
+        for (int i = 0; i < total; i++)
         {
-            ExplorerActionResult result = ExplorerActionService.MoveItem(new MoveItemRequest
+            string sourcePath = sourcePaths[i];
+            string fileName = Path.GetFileName(sourcePath);
+            progress?.Report((i, total, fileName));
+
+            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
             {
-                ModeLabel = _currentMode.ToString(),
+                ModeLabel = modeLabel,
                 SourcePath = sourcePath,
                 DestinationFolder = destinationFolder,
                 IsHoldFolderPath = IsHoldFolderPath,
                 IsUnderFolder = IsUnderFolder,
                 GetShareStatus = GetItemShareStatus,
                 BeforeWrite = SuppressExternalChangeNotifications,
-            });
+            }));
 
             if (result.State == ExplorerActionState.NoChange)
             {
+                progress?.Report((i + 1, total, fileName));
                 continue;
             }
 
@@ -3098,6 +3199,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 string.IsNullOrWhiteSpace(result.DestinationPath) ||
                 string.IsNullOrWhiteSpace(result.DestinationFolder))
             {
+                progress?.Report((i + 1, total, fileName));
                 continue;
             }
 
@@ -3115,6 +3217,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             InvalidateSizeCacheUnder(result.SourceParent);
             movedCount++;
             lastName = result.TargetName;
+            progress?.Report((i + 1, total, fileName));
         }
 
         if (movedCount > 0)
@@ -3122,7 +3225,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             InvalidateSizeCacheUnder(destinationFolder);
         }
 
-        return movedCount;
+        return (movedCount, lastName);
     }
 
     // --- インラインリネーム ---
