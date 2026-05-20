@@ -18,6 +18,7 @@
 - [**更新履歴の記録方針**](feedback_history_recording_philosophy.md) — 網羅性・密度の2軸。「全部出す」と「大量を避ける」は矛盾しない。機械的適用禁止
 - [**UIテキストはヒエラルキーで段階的に小さく**](feedback_ui_text_hierarchy.md) — 親画面→ポップアップ→ボタンと1段ずつ。毎回聞くべき原則ではなく身体化する
 - [**ポップアップ自体がコンテキスト**](feedback_popup_is_context.md) — 吹き出しの矢印が対象を指している。タイトル・対象名・説明文・重複ボタンを足さない
+- [**確認コスト << 作り直しコスト**](feedback_consultation_cost_economics.md) — 「先に動く方が速い」は錯覚。2倍想定が3倍に膨らんだ実例。Auto Mode でも UI 設計判断は必ず確認
 
 ## Project
 - [現在地](project_current_state.md) — v1.06作成済み・Win11実機確認待ち・次は課題1〜10
