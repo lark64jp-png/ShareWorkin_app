@@ -334,7 +334,6 @@
                                   ItemsSource="{Binding ShopItems}"
                                   ItemContainerStyle="{StaticResource ShopListViewItemStyle}"
                                   SelectionMode="Extended"
-                                  BorderThickness="0"
                                   Padding="0"
                                   AllowDrop="True"
                                   DragEnter="ShopItemsListView_DragEnter"
@@ -822,7 +821,7 @@
                                            Foreground="White" />
                             </Border>
                             <Border x:Name="PermissionClearButton"
-                                    Background="#E0CDA0"
+                                    Background="#F2EBD7"
                                     BorderBrush="{x:Null}"
                                     BorderThickness="0"
                                     CornerRadius="8"
@@ -833,8 +832,7 @@
                                     ToolTip="左のリストを空にして「全員」に戻す">
                                 <TextBlock Text="クリア"
                                            FontSize="9"
-                                           FontWeight="SemiBold"
-                                           Foreground="#3F3A32" />
+                                           Foreground="#8A867D" />
                             </Border>
                         </StackPanel>
                         <TextBlock Grid.Column="2"
