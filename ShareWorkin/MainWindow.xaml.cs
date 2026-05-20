@@ -1510,13 +1510,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionReadOnlyRadio.IsChecked = item.IsReadOnly && !item.IsSharedOff;
         PermissionSharedOffRadio.IsChecked = item.IsSharedOff;
 
+        PermissionTitleLabel.Text = readOnly ? "共有内容" : "共有許可";
+        PermissionTargetName.Text = readOnly ? $"{item.Name}（相手のフォルダー）" : item.Name;
+
         Visibility editVis = readOnly ? Visibility.Collapsed : Visibility.Visible;
         PermissionOkButton.Visibility = editVis;
         PermissionClearButton.Visibility = editVis;
         PermissionMoveStack.Visibility = editVis;
         PermissionMoveColumn.Width = readOnly ? new GridLength(0) : new GridLength(34);
+        PermissionHeaderMoveColumn.Width = readOnly ? new GridLength(0) : new GridLength(34);
         PermissionUnsetBorder.Visibility = editVis;
+        PermissionUnsetHeader.Visibility = editVis;
         PermissionUnsetColumn.Width = readOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        PermissionHeaderUnsetColumn.Width = readOnly ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        PermissionEveryoneChip.Cursor = readOnly ? null : System.Windows.Input.Cursors.Hand;
 
         bool enabled = !readOnly;
         PermissionAllowedListBox.IsEnabled = enabled;
@@ -1525,8 +1532,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionReadOnlyRadio.IsEnabled = enabled;
         PermissionSharedOffRadio.IsEnabled = enabled;
 
-        UpdatePermissionOverlay();
-        UpdatePermissionUnsetOverlay();
+        UpdateEveryoneChipState();
 
         _permissionPopupInitializing = false;
         ApplyPermissionAccessLevelUiState();
@@ -1537,13 +1543,34 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionPopup.IsOpen = true;
     }
 
+    private void UpdateEveryoneChipState()
+    {
+        bool isEveryone = _permissionAllowed.Count == 0;
+        if (isEveryone)
+        {
+            PermissionEveryoneChip.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3F, 0x7A, 0x66));
+            PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3F, 0x7A, 0x66));
+            PermissionEveryoneChipText.Foreground = System.Windows.Media.Brushes.White;
+        }
+        else
+        {
+            PermissionEveryoneChip.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF1, 0xED, 0xE4));
+            PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC8, 0xC2, 0xB5));
+            PermissionEveryoneChipText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x7A, 0x74, 0x6A));
+        }
+        if (!_permissionPopupReadOnly)
+        {
+            PermissionClearButton.IsEnabled = !isEveryone;
+            PermissionClearButton.Opacity = isEveryone ? 0.4 : 1.0;
+        }
+    }
+
     private void EnsurePermissionPopupBindings()
     {
         if (_permissionPopupBound) return;
         PermissionAllowedListBox.ItemsSource = _permissionAllowed;
         PermissionUnsetListBox.ItemsSource = _permissionUnset;
-        _permissionAllowed.CollectionChanged += (_, _) => UpdatePermissionOverlay();
-        _permissionUnset.CollectionChanged += (_, _) => UpdatePermissionUnsetOverlay();
+        _permissionAllowed.CollectionChanged += (_, _) => UpdateEveryoneChipState();
         _permissionPopupBound = true;
     }
 
@@ -1559,12 +1586,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void UpdatePermissionOverlay() =>
-        PermissionEveryoneOverlay.Visibility = _permissionAllowed.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-    private void UpdatePermissionUnsetOverlay() =>
-        PermissionUnsetOverlay.Visibility = _permissionUnset.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
     private void ApplyPermissionAccessLevelUiState()
     {
         if (_permissionPopupReadOnly) return;
@@ -1573,7 +1594,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionUnsetListBox.IsEnabled = canSpecifyUsers;
         PermissionMoveLeftButton.IsEnabled = canSpecifyUsers;
         PermissionMoveRightButton.IsEnabled = canSpecifyUsers;
-        PermissionClearButton.IsEnabled = canSpecifyUsers;
+        PermissionEveryoneChip.IsEnabled = canSpecifyUsers;
+        UpdateEveryoneChipState();
     }
 
     private void PermissionAccessLevelRadio_Checked(object sender, RoutedEventArgs e)
@@ -1585,6 +1607,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ReloadPermissionUnset();
         }
         ApplyPermissionAccessLevelUiState();
+    }
+
+    private void PermissionEveryoneChip_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (_permissionPopupReadOnly) return;
+        if (PermissionSharedOffRadio.IsChecked == true) return;
+        if (_permissionAllowed.Count == 0) return;
+        _permissionAllowed.Clear();
+        ReloadPermissionUnset();
     }
 
     private void PermissionClearButton_Click(object sender, RoutedEventArgs e)
@@ -1623,9 +1654,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void PermissionCloseButton_Click(object sender, RoutedEventArgs e)
+    private void PermissionCloseButton_Click(object sender, MouseButtonEventArgs e)
     {
         PermissionPopup.IsOpen = false;
+        e.Handled = true;
     }
 
     private void PermissionPopup_Closed(object? sender, EventArgs e)
@@ -1645,8 +1677,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         try
         {
-            item.IsSharedOff = PermissionSharedOffRadio.IsChecked == true;
-            item.IsReadOnly = PermissionReadOnlyRadio.IsChecked == true;
+            bool newSharedOff = PermissionSharedOffRadio.IsChecked == true;
+            bool newReadOnly = PermissionReadOnlyRadio.IsChecked == true;
+            bool changed = newSharedOff != item.IsSharedOff
+                           || newReadOnly != item.IsReadOnly
+                           || !item.AllowedUsers.SequenceEqual(_permissionAllowed, StringComparer.OrdinalIgnoreCase);
+
+            if (!changed)
+            {
+                PermissionPopup.IsOpen = false;
+                return;
+            }
+
+            item.IsSharedOff = newSharedOff;
+            item.IsReadOnly = newReadOnly;
             item.AllowedUsers.Clear();
             foreach (string name in _permissionAllowed)
             {

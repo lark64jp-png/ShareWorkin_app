@@ -594,14 +594,19 @@
                     </Grid>
 
                     <StackPanel Grid.Row="3" Margin="0,8,2,0">
-                        <ProgressBar x:Name="ProcessingBar"
-                                     Height="3"
-                                     IsIndeterminate="True"
-                                     Foreground="#C8DED2"
-                                     Background="Transparent"
-                                     BorderThickness="0"
-                                     Visibility="Collapsed"
-                                     Margin="0,0,0,6" />
+                        <Border x:Name="ProcessingBar"
+                                Background="#E8F1ED"
+                                BorderBrush="#9FCDBD"
+                                BorderThickness="0,0,0,2"
+                                CornerRadius="2"
+                                Padding="8,2"
+                                Visibility="Collapsed"
+                                Margin="0,0,0,6">
+                            <TextBlock Text="● 処理中…"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       Foreground="#3F7A66" />
+                        </Border>
                     <DockPanel LastChildFill="False">
                         <CheckBox x:Name="SizeCalcCheckBox"
                                   DockPanel.Dock="Right"
@@ -761,70 +766,112 @@
                 <Border.Effect>
                     <DropShadowEffect Color="#000000" Opacity="0.18" BlurRadius="10" ShadowDepth="2" />
                 </Border.Effect>
-                <Grid Width="360">
+                <Grid Width="340">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="6" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="4" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="8" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
+                    <!-- タイトル行: 対象名 + 目立つ閉じる -->
                     <Grid Grid.Row="0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="8" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="6" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0"
-                                   Text="利用ユーザー"
+                                   x:Name="PermissionTitleLabel"
+                                   Text="共有許可"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="#2F2A22"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="2"
-                                   Text="全員"
-                                   FontSize="11"
-                                   Foreground="#6F675C"
-                                   HorizontalAlignment="Left"
-                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="3"
-                                x:Name="PermissionClearButton"
-                                Content="クリア"
-                                FontSize="11"
-                                Padding="6,1"
-                                Margin="4,0"
-                                Background="Transparent"
-                                BorderBrush="#C8C2B5"
+                                   x:Name="PermissionTargetName"
+                                   Text=""
+                                   FontSize="12"
+                                   Foreground="#1F4438"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding RelativeSource={RelativeSource Self}, Path=Text}" />
+                        <Border Grid.Column="3"
+                                x:Name="PermissionCloseBorder"
+                                Width="24" Height="24"
+                                CornerRadius="12"
+                                Background="#F1EDE4"
+                                BorderBrush="#9E8C6B"
                                 BorderThickness="1"
                                 Cursor="Hand"
-                                Click="PermissionClearButton_Click"
-                                ToolTip="左の指定を空にして「全員」に戻す" />
-                        <TextBlock Grid.Column="4"
-                                   Text="非ユーザー"
-                                   FontSize="11"
-                                   Foreground="#6F675C"
-                                   HorizontalAlignment="Right"
-                                   VerticalAlignment="Center" />
-                        <Button Grid.Column="5"
-                                x:Name="PermissionCloseButton"
-                                Content="✕"
-                                FontSize="11"
-                                Width="20"
-                                Height="20"
-                                Margin="6,0,0,0"
-                                Background="Transparent"
-                                BorderBrush="Transparent"
-                                Foreground="#7A746A"
-                                Cursor="Hand"
-                                Click="PermissionCloseButton_Click"
-                                ToolTip="閉じる" />
+                                MouseLeftButtonUp="PermissionCloseButton_Click"
+                                ToolTip="閉じる">
+                            <TextBlock Text="✕"
+                                       FontSize="13"
+                                       FontWeight="Bold"
+                                       Foreground="#7A5C2E"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Border>
                     </Grid>
 
-                    <Grid Grid.Row="2" Height="120">
+                    <!-- サブヘッダー: 利用ユーザー [全員チップ] [クリア]  非ユーザー -->
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="34" x:Name="PermissionHeaderMoveColumn" />
+                            <ColumnDefinition Width="*" x:Name="PermissionHeaderUnsetColumn" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="利用ユーザー"
+                                       FontSize="11"
+                                       Foreground="#5F5A50"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,6,0" />
+                            <Border x:Name="PermissionEveryoneChip"
+                                    CornerRadius="10"
+                                    Padding="9,1"
+                                    Background="#3F7A66"
+                                    BorderBrush="#3F7A66"
+                                    BorderThickness="1"
+                                    Cursor="Hand"
+                                    MouseLeftButtonUp="PermissionEveryoneChip_Click"
+                                    ToolTip="全員に開く（左を空にする）">
+                                <TextBlock x:Name="PermissionEveryoneChipText"
+                                           Text="全員"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="White" />
+                            </Border>
+                            <Button x:Name="PermissionClearButton"
+                                    Content="クリア"
+                                    FontSize="11"
+                                    Padding="6,0"
+                                    Height="20"
+                                    Margin="6,0,0,0"
+                                    Background="Transparent"
+                                    BorderBrush="#C8C2B5"
+                                    BorderThickness="1"
+                                    Foreground="#7A746A"
+                                    Cursor="Hand"
+                                    Click="PermissionClearButton_Click"
+                                    ToolTip="左のリストを空にして「全員」に戻す" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2"
+                                   x:Name="PermissionUnsetHeader"
+                                   Text="非ユーザー"
+                                   FontSize="11"
+                                   Foreground="#7A746A"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- リスト本体 (左右対称) -->
+                    <Grid Grid.Row="4" Height="110">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="34" x:Name="PermissionMoveColumn" />
@@ -836,28 +883,24 @@
                                 BorderThickness="1"
                                 CornerRadius="4"
                                 Background="White">
-                            <Grid>
-                                <ListBox x:Name="PermissionAllowedListBox"
-                                         BorderThickness="0"
-                                         Background="Transparent"
-                                         FontSize="12"
-                                         SelectionMode="Extended"
-                                         MouseDoubleClick="PermissionAllowedListBox_MouseDoubleClick">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding}" FontSize="12" Padding="4,2" />
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBlock x:Name="PermissionEveryoneOverlay"
-                                           Text="全員"
-                                           FontSize="22"
-                                           FontWeight="SemiBold"
-                                           Foreground="#D3CDC0"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           IsHitTestVisible="False" />
-                            </Grid>
+                            <ListBox x:Name="PermissionAllowedListBox"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     FontSize="12"
+                                     SelectionMode="Extended"
+                                     MouseDoubleClick="PermissionAllowedListBox_MouseDoubleClick">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="MinHeight" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontSize="12" Padding="4,1" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Border>
 
                         <StackPanel Grid.Column="1"
@@ -867,19 +910,19 @@
                             <Button x:Name="PermissionMoveLeftButton"
                                     Content="←"
                                     Width="26"
-                                    Height="24"
+                                    Height="22"
                                     Margin="0,2"
                                     FontSize="12"
                                     Click="PermissionMoveLeftButton_Click"
-                                    ToolTip="未設定 → 許可" />
+                                    ToolTip="非ユーザー → 利用ユーザー" />
                             <Button x:Name="PermissionMoveRightButton"
                                     Content="→"
                                     Width="26"
-                                    Height="24"
+                                    Height="22"
                                     Margin="0,2"
                                     FontSize="12"
                                     Click="PermissionMoveRightButton_Click"
-                                    ToolTip="許可 → 未設定" />
+                                    ToolTip="利用ユーザー → 非ユーザー" />
                         </StackPanel>
 
                         <Border Grid.Column="2"
@@ -888,32 +931,29 @@
                                 BorderThickness="1"
                                 CornerRadius="4"
                                 Background="White">
-                            <Grid>
-                                <ListBox x:Name="PermissionUnsetListBox"
-                                         BorderThickness="0"
-                                         Background="Transparent"
-                                         FontSize="12"
-                                         SelectionMode="Extended"
-                                         MouseDoubleClick="PermissionUnsetListBox_MouseDoubleClick">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding}" FontSize="12" Padding="4,2" />
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBlock x:Name="PermissionUnsetOverlay"
-                                           Text="全員を設定済み"
-                                           FontSize="12"
-                                           FontWeight="SemiBold"
-                                           Foreground="#C8C2B5"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           IsHitTestVisible="False" />
-                            </Grid>
+                            <ListBox x:Name="PermissionUnsetListBox"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     FontSize="12"
+                                     SelectionMode="Extended"
+                                     MouseDoubleClick="PermissionUnsetListBox_MouseDoubleClick">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="MinHeight" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontSize="12" Padding="4,1" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Border>
                     </Grid>
 
-                    <Grid Grid.Row="4">
+                    <!-- ラジオ + 確定 -->
+                    <Grid Grid.Row="6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -944,7 +984,7 @@
                                 x:Name="PermissionOkButton"
                                 Content="確定"
                                 Width="64"
-                                Height="26"
+                                Height="24"
                                 FontSize="12"
                                 Click="PermissionOkButton_Click"
                                 IsDefault="True" />
