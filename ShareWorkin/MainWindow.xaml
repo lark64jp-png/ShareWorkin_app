@@ -334,6 +334,8 @@
                                   ItemsSource="{Binding ShopItems}"
                                   ItemContainerStyle="{StaticResource ShopListViewItemStyle}"
                                   SelectionMode="Extended"
+                                  BorderThickness="0"
+                                  Padding="0"
                                   AllowDrop="True"
                                   DragEnter="ShopItemsListView_DragEnter"
                                   DragOver="ShopItemsListView_DragEnter"
@@ -823,9 +825,11 @@
                                     Background="White"
                                     BorderBrush="#7A6849"
                                     BorderThickness="1"
-                                    CornerRadius="2"
+                                    CornerRadius="0"
                                     Padding="6,1"
                                     Margin="5,0,0,0"
+                                    SnapsToDevicePixels="True"
+                                    UseLayoutRounding="True"
                                     Cursor="Hand"
                                     MouseLeftButtonUp="PermissionClearButton_Click"
                                     ToolTip="左のリストを空にして「全員」に戻す">
@@ -870,6 +874,7 @@
                                 ToolTip="ダブルクリックで右へ移す">
                             <ListBox x:Name="PermissionAllowedListBox"
                                      BorderThickness="0"
+                                     Padding="0"
                                      Background="Transparent"
                                      FontSize="11"
                                      SelectionMode="Extended"
@@ -897,6 +902,7 @@
                                 ToolTip="ダブルクリックで左へ移す">
                             <ListBox x:Name="PermissionUnsetListBox"
                                      BorderThickness="0"
+                                     Padding="0"
                                      Background="Transparent"
                                      FontSize="11"
                                      SelectionMode="Extended"
@@ -963,7 +969,11 @@
                       HorizontalAlignment="Left"
                       VerticalAlignment="Top"
                       Margin="0,6,0,0"
-                      SnapsToDevicePixels="True" />
+                      SnapsToDevicePixels="True">
+                    <Path.RenderTransform>
+                        <TranslateTransform X="-3" />
+                    </Path.RenderTransform>
+                </Path>
                 <!-- 本体ボーダーの継ぎ目を隠す -->
                 <Rectangle Width="2" Height="22"
                            Fill="#FFFEF2"
