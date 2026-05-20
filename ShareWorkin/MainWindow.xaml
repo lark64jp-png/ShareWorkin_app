@@ -783,7 +783,7 @@
                         BorderThickness="1"
                         CornerRadius="6"
                         Margin="8,0,0,0"
-                        Padding="8,6"><Grid Width="280">
+                        Padding="8,6"><Grid Width="300">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="3" />
@@ -822,20 +822,19 @@
                                            Foreground="White" />
                             </Border>
                             <Border x:Name="PermissionClearButton"
-                                    Background="White"
-                                    BorderBrush="#7A6849"
-                                    BorderThickness="1"
-                                    CornerRadius="0"
-                                    Padding="6,1"
+                                    Background="#E0CDA0"
+                                    BorderBrush="{x:Null}"
+                                    BorderThickness="0"
+                                    CornerRadius="8"
+                                    Padding="7,0"
                                     Margin="5,0,0,0"
-                                    SnapsToDevicePixels="True"
-                                    UseLayoutRounding="True"
                                     Cursor="Hand"
                                     MouseLeftButtonUp="PermissionClearButton_Click"
                                     ToolTip="左のリストを空にして「全員」に戻す">
                                 <TextBlock Text="クリア"
                                            FontSize="9"
-                                           Foreground="#5F5A50" />
+                                           FontWeight="SemiBold"
+                                           Foreground="#3F3A32" />
                             </Border>
                         </StackPanel>
                         <TextBlock Grid.Column="2"
@@ -867,8 +866,8 @@
                         </Grid.ColumnDefinitions>
 
                         <Border Grid.Column="0"
-                                BorderBrush="#A6BCB3"
-                                BorderThickness="1"
+                                BorderBrush="#7A8C82"
+                                BorderThickness="1.5"
                                 CornerRadius="3"
                                 Background="White"
                                 ToolTip="ダブルクリックで右へ移す">
@@ -895,8 +894,8 @@
 
                         <Border Grid.Column="2"
                                 x:Name="PermissionUnsetBorder"
-                                BorderBrush="#A6BCB3"
-                                BorderThickness="1"
+                                BorderBrush="#7A8C82"
+                                BorderThickness="1.5"
                                 CornerRadius="3"
                                 Background="White"
                                 ToolTip="ダブルクリックで左へ移す">
@@ -950,14 +949,23 @@
                                          Foreground="#3F3A32"
                                          Checked="PermissionAccessLevelRadio_Checked" />
                         </WrapPanel>
-                        <Button Grid.Column="1"
+                        <Border Grid.Column="1"
                                 x:Name="PermissionOkButton"
-                                Content="確定"
-                                Width="48"
-                                Height="20"
-                                FontSize="10"
-                                Click="PermissionOkButton_Click"
-                                IsDefault="True" />
+                                Background="#2F6650"
+                                BorderBrush="{x:Null}"
+                                BorderThickness="0"
+                                CornerRadius="8"
+                                Padding="12,2"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Right"
+                                Cursor="Hand"
+                                MouseLeftButtonUp="PermissionOkButton_Click"
+                                ToolTip="設定を保存して閉じる">
+                            <TextBlock Text="確定"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="White" />
+                        </Border>
                     </Grid>
                 </Grid></Border>
                 <!-- 吹き出しのしっぽ（左向き・先端カーブ） -->

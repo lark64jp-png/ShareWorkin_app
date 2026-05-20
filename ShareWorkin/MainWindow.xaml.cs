@@ -1701,8 +1701,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _permissionPopupBeforeStatus = string.Empty;
     }
 
-    private async void PermissionOkButton_Click(object sender, RoutedEventArgs e)
+    private async void PermissionOkButton_Click(object sender, MouseButtonEventArgs e)
     {
+        e.Handled = true;
         if (_permissionPopupReadOnly) return;
         ShopItem? item = _permissionPopupTarget;
         System.Windows.Controls.Button? button = _permissionPopupAnchor;
