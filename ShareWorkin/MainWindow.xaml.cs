@@ -1581,10 +1581,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC8, 0xC2, 0xB5));
             PermissionEveryoneChipText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x7A, 0x74, 0x6A));
         }
-        if (!_permissionPopupReadOnly)
-        {
-            PermissionClearButton.IsEnabled = !isEveryone;
-        }
+        // クリアボタンは常に有効（ボタンとして見える状態を維持）
+        // 全員状態でクリックされても _permissionAllowed.Clear() が無操作で完了するだけ
     }
 
     private void EnsurePermissionPopupBindings()
@@ -2521,6 +2519,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string sourcePath = paths[i];
             string fileName = Path.GetFileName(sourcePath);
             progress.Report((i, total, fileName));
+            await Task.Yield(); // 高速完了時の同期化を防ぎ Progress callback を確実に描画させる
 
             ExplorerActionResult result = await Task.Run(() => ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
             {
@@ -2882,6 +2881,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             string fileName = item.Name;
             progress.Report((i, total, fileName));
+            await Task.Yield();
 
             var displayPermBeforeHold = (
                 item.AllowedUsers
@@ -2963,6 +2963,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 bool isDirectory = item.IsDirectory;
                 string fileName = item.Name;
                 progress.Report((i, total, fileName));
+                await Task.Yield();
 
                 ExplorerActionResult result = await Task.Run(() => ExplorerActionService.DeleteItem(new DeleteItemRequest
                 {
@@ -3173,6 +3174,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string sourcePath = sourcePaths[i];
             string fileName = Path.GetFileName(sourcePath);
             progress?.Report((i, total, fileName));
+            await Task.Yield();
 
             ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
             {

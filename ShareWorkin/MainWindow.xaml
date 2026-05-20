@@ -776,7 +776,7 @@
                 </Grid.Effect>
                 <!-- バブル本体 -->
                 <Border x:Name="PermissionBubbleBody"
-                        Background="#FFFEFA"
+                        Background="#FFFBE6"
                         BorderBrush="#A6BCB3"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -838,6 +838,7 @@
                                    Text="非ユーザー"
                                    FontSize="11"
                                    Foreground="#7A746A"
+                                   Margin="4,0,0,0"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="3"
                                    x:Name="PermissionCloseText"
@@ -954,7 +955,7 @@
                 </Grid></Border>
                 <!-- 吹き出しのしっぽ（左向き・先端カーブ） -->
                 <Path Data="M 12,2 L 1,12 Q 0,13 1,14 L 12,24 Z"
-                      Fill="#FFFEFA"
+                      Fill="#FFFBE6"
                       Stroke="#A6BCB3"
                       StrokeThickness="1"
                       StrokeLineJoin="Round"
@@ -964,7 +965,7 @@
                       SnapsToDevicePixels="True" />
                 <!-- 本体ボーダーの継ぎ目を隠す -->
                 <Rectangle Width="2" Height="22"
-                           Fill="#FFFEFA"
+                           Fill="#FFFBE6"
                            HorizontalAlignment="Left"
                            VerticalAlignment="Top"
                            Margin="9,3,0,0"
