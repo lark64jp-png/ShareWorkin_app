@@ -413,7 +413,8 @@
                                                                    FontSize="9"
                                                                    FontWeight="Black"
                                                                    Foreground="#8B5E00"
-                                                                   Padding="0" />
+                                                                   Padding="0"
+                                                                   Margin="0,0,1,0" />
                                                     </Grid>
                                                     <TextBlock Text="{Binding Name}"
                                                                VerticalAlignment="Center">
