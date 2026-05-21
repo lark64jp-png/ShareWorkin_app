@@ -485,6 +485,111 @@ begin
   end;
 end;
 
+function RunHiddenSystemCommand(const CommandPath: String; const Parameters: String; var ResultCode: Integer): Boolean;
+begin
+  Result := Exec(CommandPath, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function DeleteFirewallRulesForProgramPath(const ProgramPath: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+
+  if ProgramPath = '' then
+    Exit;
+
+  if not RunHiddenSystemCommand(
+    ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name=all dir=in program="' + ProgramPath + '"',
+    ResultCode) then
+    Result := False;
+end;
+
+function AddFirewallRuleOrWarn(const RuleLabel: String; const Parameters: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RunHiddenSystemCommand(ExpandConstant('{sys}\netsh.exe'), Parameters, ResultCode) and (ResultCode = 0);
+  if not Result then
+  begin
+    MsgBox('Windows Defender Firewall の設定に失敗しました。' + #13#10 +
+      '失敗項目: ' + RuleLabel + #13#10 +
+      'Windows 11 によって共有が遮断される可能性があります。' + #13#10 +
+      'もう一度インストーラーを管理者として実行してください。',
+      mbError, MB_OK);
+  end;
+end;
+
+function CreateScheduledTaskOrWarn(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Create /TN "ShareWorkin\ShareWorkinTray" /TR "\"' +
+    ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
+    ResultCode) and (ResultCode = 0);
+
+  if not Result then
+  begin
+    MsgBox('ShareWorkinTray の自動起動設定に失敗しました。' + #13#10 +
+      'Windows 11 によって初回起動が不安定になる可能性があります。' + #13#10 +
+      'もう一度インストーラーを管理者として実行してください。',
+      mbError, MB_OK);
+  end;
+end;
+
+function RunScheduledTaskOrWarn(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Run /TN "ShareWorkin\ShareWorkinTray"',
+    ResultCode) and (ResultCode = 0);
+
+  if not Result then
+  begin
+    MsgBox('ShareWorkinTray の起動に失敗しました。' + #13#10 +
+      'インストール直後に共有を開けない場合があります。' + #13#10 +
+      'Windows の警告表示が出ていないか確認してください。',
+      mbError, MB_OK);
+  end;
+end;
+
+procedure CleanupFirewallRules(const RegisteredInstallDir: String);
+var
+  ResultCode: Integer;
+  RegisteredRoot: String;
+begin
+  // 名前付きルールは存在しなくても問題ないためベストエフォートで削除する。
+  RunHiddenSystemCommand(ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="ShareWorkin UDP 7831"',
+    ResultCode);
+  RunHiddenSystemCommand(ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="ShareWorkin Discovery (UDP 7831)"',
+    ResultCode);
+  RunHiddenSystemCommand(ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="ShareWorkin App (TCP Inbound)"',
+    ResultCode);
+  RunHiddenSystemCommand(ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="ShareWorkin Tray (TCP Inbound)"',
+    ResultCode);
+
+  DeleteFirewallRulesForProgramPath(INSTALL_DIR + '\' + APP_EXE);
+  DeleteFirewallRulesForProgramPath(INSTALL_DIR + '\' + TRAY_EXE);
+  DeleteFirewallRulesForProgramPath(OldInstallDir() + '\' + APP_EXE);
+  DeleteFirewallRulesForProgramPath(OldInstallDir() + '\' + TRAY_EXE);
+
+  RegisteredRoot := RemoveBackslashUnlessRoot(RegisteredInstallDir);
+  if RegisteredRoot <> '' then
+  begin
+    DeleteFirewallRulesForProgramPath(RegisteredRoot + '\' + APP_EXE);
+    DeleteFirewallRulesForProgramPath(RegisteredRoot + '\' + TRAY_EXE);
+  end;
+end;
+
 procedure DeleteDirIfExists(DirName: String);
 begin
   if DirExists(DirName) then
@@ -547,6 +652,9 @@ begin
   end;
 
   QueryInstallLocation(RegisteredInstallDir);
+  // §D System 依存物の一掃（Firewall ルール）
+  // インストーラー生成ルール・アプリ生成ルール・Windows 自動生成ブロックルールをすべて除去する
+  CleanupFirewallRules(RegisteredInstallDir);
 
   DeleteDirIfExists(INSTALL_DIR);
   DeleteDirIfExists(OldInstallDir());
@@ -863,6 +971,7 @@ begin
   if not CleanExistingInstall(False, False) then
     Exit;
 
+  // スケジュールタスクはインストール後に作成されるため CleanExistingInstall の対象外→ここで削除
   Exec(ExpandConstant('{sys}\schtasks.exe'),
     '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -953,7 +1062,9 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ResultCode: Integer;
+  FirewallReady: Boolean;
+  TaskReady: Boolean;
+  TrayReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -962,14 +1073,36 @@ begin
 
     if (SelectedAction = 'both') or (SelectedAction = 'app') then
     begin
-      Exec(ExpandConstant('{sys}\schtasks.exe'),
-        '/Create /TN "ShareWorkin\ShareWorkinTray" /TR "\"' +
-        ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
-        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      Exec(ExpandConstant('{app}\' + TRAY_EXE), '', ExpandConstant('{app}'), SW_HIDE, ewNoWait, ResultCode);
-      MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
-        '数秒待ってから、デスクトップまたはスタートメニューの ShareWorkin を開いてください。',
-        mbInformation, MB_OK);
+      // §D Firewall 許可ルールの設定
+      // CleanExistingInstall で旧ルール・ブロックルールを一掃済みのため、ここでは add のみ
+      FirewallReady := True;
+      if not AddFirewallRuleOrWarn(
+        'ShareWorkin UDP 7831',
+        'advfirewall firewall add rule name="ShareWorkin UDP 7831" dir=in action=allow protocol=UDP localport=7831 profile=private,domain') then
+        FirewallReady := False;
+      if not AddFirewallRuleOrWarn(
+        'ShareWorkin App (TCP Inbound)',
+        'advfirewall firewall add rule name="ShareWorkin App (TCP Inbound)" dir=in action=allow protocol=TCP program="' + INSTALL_DIR + '\' + APP_EXE + '" profile=private,domain') then
+        FirewallReady := False;
+      if not AddFirewallRuleOrWarn(
+        'ShareWorkin Tray (TCP Inbound)',
+        'advfirewall firewall add rule name="ShareWorkin Tray (TCP Inbound)" dir=in action=allow protocol=TCP program="' + INSTALL_DIR + '\' + TRAY_EXE + '" profile=private,domain') then
+        FirewallReady := False;
+
+      TaskReady := CreateScheduledTaskOrWarn();
+      if TaskReady then
+        TrayReady := RunScheduledTaskOrWarn()
+      else
+        TrayReady := False;
+
+      if FirewallReady and TaskReady and TrayReady then
+        MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
+          '数秒待ってから、デスクトップまたはスタートメニューの ShareWorkin を開いてください。',
+          mbInformation, MB_OK)
+      else
+        MsgBox(APP_NAME + ' のファイル配置は完了しましたが、Windows 11 の保護設定または起動設定により、共有開始の準備が不完全です。' + #13#10 +
+          '管理者として再実行し、Windows の警告や確認画面を許可してください。',
+          mbError, MB_OK);
     end;
   end;
 end;

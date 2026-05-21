@@ -15,10 +15,20 @@
     <InformationalVersion>1.20</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\ShareWorkin\app.ico</ApplicationIcon>
-    <Company>ShareWorkin</Company>
+    <AssemblyTitle>ShareWorkinTray</AssemblyTitle>
+    <Description>ShareWorkin の共有状態を維持するトレイ常駐アプリ</Description>
+    <Company>株式会社メディアハウス</Company>
     <Product>ShareWorkin</Product>
-    <Copyright>Copyright (c) 2026 ShareWorkin</Copyright>
+    <Authors>株式会社メディアハウス</Authors>
+    <PackageProjectUrl>https://app.media-house.jp/</PackageProjectUrl>
+    <RepositoryUrl>https://media-house.jp/</RepositoryUrl>
+    <Copyright>Copyright (c) 2026 株式会社メディアハウス</Copyright>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="SupportUrl" Value="https://app.media-house.jp/" />
+    <AssemblyMetadata Include="CorporateUrl" Value="https://media-house.jp/" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="../ShareWorkin/app.ico">

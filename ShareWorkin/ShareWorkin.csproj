@@ -13,12 +13,22 @@
     <FileVersion>1.20.0.0</FileVersion>
     <AssemblyVersion>1.20.0.0</AssemblyVersion>
     <InformationalVersion>1.20</InformationalVersion>
-    <Company>ShareWorkin</Company>
+    <AssemblyTitle>ShareWorkin</AssemblyTitle>
+    <Description>共有相手と自分のPC内部のフォルダーを共有する ShareWorkin 管理アプリ</Description>
+    <Company>株式会社メディアハウス</Company>
     <Product>ShareWorkin</Product>
-    <Copyright>Copyright (c) 2026 ShareWorkin</Copyright>
+    <Authors>株式会社メディアハウス</Authors>
+    <PackageProjectUrl>https://app.media-house.jp/</PackageProjectUrl>
+    <RepositoryUrl>https://media-house.jp/</RepositoryUrl>
+    <Copyright>Copyright (c) 2026 株式会社メディアハウス</Copyright>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="SupportUrl" Value="https://app.media-house.jp/" />
+    <AssemblyMetadata Include="CorporateUrl" Value="https://media-house.jp/" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="app.ico">

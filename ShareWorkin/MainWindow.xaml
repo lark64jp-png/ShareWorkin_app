@@ -210,7 +210,10 @@
                                    Text=""
                                    FontSize="13"
                                    Foreground="#52645E"
-                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="Wrap"
+                                   LineStackingStrategy="BlockLineHeight"
+                                   LineHeight="15"
+                                   MaxHeight="46"
                                    ToolTip=""
                                    Margin="0,2,0,0" />
                     </StackPanel>
@@ -319,6 +322,9 @@
                                        Foreground="#3D3833"
                                        VerticalAlignment="Bottom"
                                        TextWrapping="Wrap"
+                                       LineStackingStrategy="BlockLineHeight"
+                                       LineHeight="11"
+                                       MaxHeight="34"
                                        Margin="10,0,0,2" />
                         </Grid>
                     </DockPanel>
@@ -394,11 +400,17 @@
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <Grid Width="18"
-                                                          Height="18"
-                                                          Margin="0,0,8,0"
+                                                    <Grid Margin="0,0,8,0"
                                                           VerticalAlignment="Center">
-                                                        <Viewbox Stretch="Uniform">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="26" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Viewbox Grid.Column="0"
+                                                                 Width="26"
+                                                                 Height="22"
+                                                                 Stretch="Uniform"
+                                                                 VerticalAlignment="Center">
                                                             <Path Data="{Binding IconPathData}"
                                                                   Fill="{Binding IconFillBrush}"
                                                                   Stroke="{Binding IconStrokeBrush}"
@@ -407,14 +419,36 @@
                                                                   StrokeStartLineCap="Round"
                                                                   StrokeEndLineCap="Round" />
                                                         </Viewbox>
-                                                        <TextBlock Text="{Binding SubfolderBadgeText}"
-                                                                   HorizontalAlignment="Right"
-                                                                   VerticalAlignment="Bottom"
-                                                                   FontSize="9"
-                                                                   FontWeight="Black"
-                                                                   Foreground="#8B5E00"
-                                                                   Padding="0"
-                                                                   Margin="0,0,1,0" />
+                                                        <Border Grid.Column="1"
+                                                                Margin="3,0,0,0"
+                                                                MinWidth="13"
+                                                                Height="13"
+                                                                Padding="2,0"
+                                                                VerticalAlignment="Center"
+                                                                CornerRadius="6.5"
+                                                                Background="#FFF4E0"
+                                                                BorderBrush="#E4B44C"
+                                                                BorderThickness="1">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding SubfolderBadgeText}" Value="">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                            <TextBlock Text="{Binding SubfolderBadgeText}"
+                                                                       HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center"
+                                                                       TextAlignment="Center"
+                                                                       FontSize="8"
+                                                                       FontWeight="Bold"
+                                                                       Foreground="#8B5E00"
+                                                                       LineHeight="8"
+                                                                       LineStackingStrategy="BlockLineHeight" />
+                                                        </Border>
                                                     </Grid>
                                                     <TextBlock Text="{Binding Name}"
                                                                VerticalAlignment="Center">

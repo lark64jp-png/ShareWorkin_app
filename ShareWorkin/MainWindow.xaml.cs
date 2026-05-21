@@ -606,19 +606,51 @@ public partial class MainWindow : Window
 
         bool trayAlreadyRunning = Process.GetProcessesByName("ShareWorkinTray").Length > 0;
         if (!trayAlreadyRunning)
-            StartTrayProcess(); // 失敗しても待機は続ける（ログオン直後・スケジュールタスク起動中など）
+        {
+            if (!StartTrayFromScheduledTask())
+            {
+                StartTrayProcess();
+            }
+        }
 
         // Tray のコールドスタート(JIT・Defender スキャン・WPF 初期化)で
-        // パイプ受け入れまで数秒かかる場合がある。時間ベースで最大 10 秒待つ。
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        // パイプ受け入れまで数秒かかる場合がある。時間ベースで最大 20 秒待つ。
+        bool fallbackStarted = trayAlreadyRunning;
+        var deadline = DateTime.UtcNow.AddSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
-            await Task.Delay(100);
+            await Task.Delay(200);
             if (_pipeClient.Connect(timeoutMs: 100))
                 return true;
+
+            if (!fallbackStarted && Process.GetProcessesByName("ShareWorkinTray").Length == 0)
+            {
+                fallbackStarted = StartTrayProcess();
+            }
         }
 
         return false;
+    }
+
+    private static bool StartTrayFromScheduledTask()
+    {
+        try
+        {
+            using Process? process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = "/Run /TN \"ShareWorkin\\ShareWorkinTray\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+            return process != null;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"StartTrayFromScheduledTask failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool StartTrayProcess()
@@ -824,6 +856,33 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
+            SwkLogger.Warn($"TryEnsureHoldFolder first attempt failed: path={holdFolderPath} message={ex.Message}");
+        }
+
+        try
+        {
+            string? repairTarget = Directory.Exists(holdFolderPath)
+                ? holdFolderPath
+                : Path.GetDirectoryName(holdFolderPath);
+
+            if (!string.IsNullOrWhiteSpace(repairTarget) && Directory.Exists(repairTarget))
+            {
+                SwkLogger.Info($"TryEnsureHoldFolder: repairing ownership via takeown ({repairTarget})");
+                if (!SmbNtfsManager.TakeOwnershipPath(repairTarget))
+                {
+                    SwkLogger.Warn($"TryEnsureHoldFolder: takeown failed ({repairTarget})");
+                }
+            }
+
+            Directory.CreateDirectory(holdFolderPath);
+            ClearHiddenFolderAttribute(holdFolderPath);
+            SetPrivateHoldFolderPermissions(holdFolderPath);
+            SwkLogger.Info($"TryEnsureHoldFolder recovered after ownership repair: {holdFolderPath}");
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            SwkLogger.Warn($"TryEnsureHoldFolder failed: path={holdFolderPath} message={ex.Message}");
             return false;
         }
     }
@@ -3903,12 +3962,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (!TryEnsureHoldFolder())
-        {
-            UpdateShopState(false, "保留を準備できません。");
-            return;
-        }
-
         ShopOpenOutcome? outcome;
         Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
         try
@@ -3962,6 +4015,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 message += "\n\n対象:\n" + list;
             }
             UpdateShopState(false, message);
+            return;
+        }
+
+        // 共有開始で所有権/ACL の回復が済んだあとに保留を作る。
+        // 先に保留を触ると、別 OS 由来の所有者ずれで開店前に失敗してしまう。
+        if (!TryEnsureHoldFolder())
+        {
+            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+            try
+            {
+                _pipeClient.CloseShop();
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
+            }
+
+            UpdateShopState(false, "保留を準備できません。");
             return;
         }
 
@@ -5500,26 +5571,51 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         string? rootPath = GetCurrentRootPath();
         if (string.IsNullOrWhiteSpace(rootPath)) return string.Empty;
+        string rootLabel = GetRootDisplayLabel(rootPath);
+        if (string.IsNullOrWhiteSpace(rootLabel)) return string.Empty;
 
         try
         {
             string root = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string current = _currentFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-            if (string.Equals(root, current, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+            if (string.Equals(root, current, StringComparison.OrdinalIgnoreCase)) return rootLabel;
 
             if (current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             {
                 string relative = current[(root.Length + 1)..];
                 string[] segments = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-                return string.Join(" / ", segments);
+                return segments.Length == 0
+                    ? rootLabel
+                    : $"{rootLabel} / {string.Join(" / ", segments)}";
             }
 
-            return string.Empty;
+            return rootLabel;
         }
         catch
         {
-            return string.Empty;
+            return rootLabel;
+        }
+    }
+
+    private static string GetRootDisplayLabel(string rootPath)
+    {
+        try
+        {
+            string normalized = Path.GetFullPath(rootPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string name = Path.GetFileName(normalized);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+
+            string root = Path.GetPathRoot(normalized) ?? normalized;
+            return root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch
+        {
+            return rootPath;
         }
     }
 
@@ -5535,9 +5631,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void UpdateBreadcrumbDisplay()
     {
         SyncDropdownToCurrentMode();
-        CurrentPathTextBlock.Text = string.IsNullOrEmpty(_breadcrumbFullText)
-            ? string.Empty
-            : $"›  {_breadcrumbFullText}";
+        CurrentPathTextBlock.Text = _breadcrumbFullText;
         CurrentPathTextBlock.ToolTip = string.IsNullOrWhiteSpace(_currentFolder) ? null : _currentFolder;
     }
 

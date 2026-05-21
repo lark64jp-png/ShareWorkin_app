@@ -374,6 +374,10 @@ public static class SmbNtfsManager
         }
 
         SwkLogger.Info($"SetSubfolderPermission shared-off: {subfolderPath}");
+        if (!RunIcacls(new[] { subfolderPath, "/remove:g", SmbAccountManager.LocalQualifiedAccountName }, "Revoke swkguest shared-off"))
+        {
+            return false;
+        }
         return ResetChildrenToInherited(subfolderPath);
     }
 
