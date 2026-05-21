@@ -71,7 +71,11 @@ const
   INVITES_FILE = 'invites.json';
   HISTORY_FILE = 'history.json';
   HISTORY_JOURNAL_FILE = 'history-journal.jsonl';
+  USERLIST_STATE_FILE = 'userlist-state.json';
+  INSTANCE_FILE = 'swk-instance.json';
+  NOTIFY_CERT_FILE = 'notifycert.dat';
   HOLD_DIR = 'hold';
+  ICONS_DIR = 'icons';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
   SECURE_BACKUP_FILE = 'ShareWorkin_secure_backup.dat';
   FRIENDS_BACKUP_FILE = 'ShareWorkin_friends_backup.json';
@@ -79,7 +83,11 @@ const
   INVITES_BACKUP_FILE = 'ShareWorkin_invites_backup.json';
   HISTORY_BACKUP_FILE = 'ShareWorkin_history_backup.json';
   HISTORY_JOURNAL_BACKUP_FILE = 'ShareWorkin_history_journal_backup.jsonl';
+  USERLIST_STATE_BACKUP_FILE = 'ShareWorkin_userlist_state_backup.json';
+  INSTANCE_BACKUP_FILE = 'ShareWorkin_instance_backup.json';
+  NOTIFY_CERT_BACKUP_FILE = 'ShareWorkin_notifycert_backup.dat';
   HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
+  ICONS_BACKUP_DIR = 'ShareWorkin_icons_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
   RUNTIME_REG_KEY = 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App';
   UNINSTALL_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7D6F9F2E-827D-4E8D-9D7C-81DD52D313E1}_is1';
@@ -161,6 +169,26 @@ begin
   Result := ExpandConstant('{tmp}\' + HISTORY_JOURNAL_BACKUP_FILE);
 end;
 
+function UserListStateBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + USERLIST_STATE_BACKUP_FILE);
+end;
+
+function InstanceBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + INSTANCE_BACKUP_FILE);
+end;
+
+function NotifyCertBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + NOTIFY_CERT_BACKUP_FILE);
+end;
+
+function IconsBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + ICONS_BACKUP_DIR);
+end;
+
 function FindExistingFile(FileName: String; var FoundPath: String): Boolean;
 begin
   Result := False;
@@ -223,7 +251,11 @@ begin
   DeleteFile(InvitesBackupPath());
   DeleteFile(HistoryBackupPath());
   DeleteFile(HistoryJournalBackupPath());
+  DeleteFile(UserListStateBackupPath());
+  DeleteFile(InstanceBackupPath());
+  DeleteFile(NotifyCertBackupPath());
   DelTree(HoldBackupPath(), True, True, True);
+  DelTree(IconsBackupPath(), True, True, True);
 
   if FindExistingFile(SETTINGS_FILE, Source) then
     CopyFile(Source, SettingsBackupPath(), False);
@@ -239,8 +271,16 @@ begin
     CopyFile(Source, HistoryBackupPath(), False);
   if FindExistingFile(HISTORY_JOURNAL_FILE, Source) then
     CopyFile(Source, HistoryJournalBackupPath(), False);
+  if FindExistingFile(USERLIST_STATE_FILE, Source) then
+    CopyFile(Source, UserListStateBackupPath(), False);
+  if FindExistingFile(INSTANCE_FILE, Source) then
+    CopyFile(Source, InstanceBackupPath(), False);
+  if FindExistingFile(NOTIFY_CERT_FILE, Source) then
+    CopyFile(Source, NotifyCertBackupPath(), False);
   if FindExistingDirectory(HOLD_DIR, Source) then
     CopyDirectoryContents(Source, HoldBackupPath());
+  if FindExistingDirectory(ICONS_DIR, Source) then
+    CopyDirectoryContents(Source, IconsBackupPath());
 end;
 
 procedure RestoreExistingSettings();
@@ -284,10 +324,30 @@ begin
     CopyFile(HistoryJournalBackupPath(), AppDir + '\' + HISTORY_JOURNAL_FILE, False);
     DeleteFile(HistoryJournalBackupPath());
   end;
+  if FileExists(UserListStateBackupPath()) then
+  begin
+    CopyFile(UserListStateBackupPath(), AppDir + '\' + USERLIST_STATE_FILE, False);
+    DeleteFile(UserListStateBackupPath());
+  end;
+  if FileExists(InstanceBackupPath()) then
+  begin
+    CopyFile(InstanceBackupPath(), AppDir + '\' + INSTANCE_FILE, False);
+    DeleteFile(InstanceBackupPath());
+  end;
+  if FileExists(NotifyCertBackupPath()) then
+  begin
+    CopyFile(NotifyCertBackupPath(), AppDir + '\' + NOTIFY_CERT_FILE, False);
+    DeleteFile(NotifyCertBackupPath());
+  end;
   if DirExists(HoldBackupPath()) then
   begin
     CopyDirectoryContents(HoldBackupPath(), AppDir + '\' + HOLD_DIR);
     DelTree(HoldBackupPath(), True, True, True);
+  end;
+  if DirExists(IconsBackupPath()) then
+  begin
+    CopyDirectoryContents(IconsBackupPath(), AppDir + '\' + ICONS_DIR);
+    DelTree(IconsBackupPath(), True, True, True);
   end;
 end;
 

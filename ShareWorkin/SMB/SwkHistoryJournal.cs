@@ -137,7 +137,9 @@ public static class SwkHistoryJournal
                 return [];
             }
 
-            List<SwkHistoryJournalRecord> records = [];
+            int? limit = maxCount.HasValue ? Math.Max(1, maxCount.Value) : null;
+            Queue<SwkHistoryJournalRecord>? tail = limit.HasValue ? new Queue<SwkHistoryJournalRecord>(limit.Value) : null;
+            List<SwkHistoryJournalRecord> records = limit.HasValue ? [] : new List<SwkHistoryJournalRecord>();
             try
             {
                 foreach (string line in File.ReadLines(JournalPath, Encoding.UTF8))
@@ -150,7 +152,27 @@ public static class SwkHistoryJournal
                     try
                     {
                         SwkHistoryJournalRecord? record = JsonSerializer.Deserialize<SwkHistoryJournalRecord>(line);
-                        if (record is not null)
+                        if (record is null)
+                        {
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(channel) &&
+                            !string.Equals(record.Channel, channel, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (tail is not null)
+                        {
+                            if (tail.Count == limit)
+                            {
+                                tail.Dequeue();
+                            }
+
+                            tail.Enqueue(record);
+                        }
+                        else
                         {
                             records.Add(record);
                         }
@@ -166,19 +188,13 @@ public static class SwkHistoryJournal
                 return [];
             }
 
-            IEnumerable<SwkHistoryJournalRecord> query = records;
-            if (!string.IsNullOrWhiteSpace(channel))
+            if (tail is not null)
             {
-                query = query.Where(r => string.Equals(r.Channel, channel, StringComparison.OrdinalIgnoreCase));
+                records = tail.ToList();
             }
 
-            query = query.OrderByDescending(r => r.OccurredAt);
-            if (maxCount.HasValue)
-            {
-                query = query.Take(Math.Max(1, maxCount.Value));
-            }
-
-            return query.ToList();
+            records.Reverse();
+            return records;
         }
     }
 

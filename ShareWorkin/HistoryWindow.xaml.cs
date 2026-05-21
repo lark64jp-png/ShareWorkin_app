@@ -21,6 +21,7 @@ public partial class HistoryWindow : Window
     private readonly ObservableCollection<HistoryRow> _rows = [];
     private readonly Dictionary<string, HistoryEntry> _entryMap = [];
     private List<HistoryRow> _allRows = [];
+    private readonly System.Windows.Threading.DispatcherTimer _refreshDebounceTimer;
     private const string TimestampFormat = "yyyy/MM/dd HH:mm:ss";
 
     public HistoryWindow(string title, string subtitle, HistoryChannel channel, int maxCount)
@@ -33,6 +34,11 @@ public partial class HistoryWindow : Window
         TitleTextBlock.Text = title;
         SubtitleTextBlock.Text = subtitle;
         HistoryDataGrid.ItemsSource = _rows;
+        _refreshDebounceTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(180)
+        };
+        _refreshDebounceTimer.Tick += RefreshDebounceTimer_Tick;
 
         RefreshRows();
         HistoryRepository.HistoryChanged += HistoryRepository_HistoryChanged;
@@ -120,7 +126,7 @@ public partial class HistoryWindow : Window
             return;
         }
 
-        Dispatcher.InvokeAsync(RefreshRows);
+        ScheduleRefresh();
     }
 
     private void SwkHistoryJournal_RecordAppended(string channel)
@@ -130,11 +136,28 @@ public partial class HistoryWindow : Window
             return;
         }
 
-        Dispatcher.InvokeAsync(RefreshRows);
+        ScheduleRefresh();
+    }
+
+    private void ScheduleRefresh()
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _refreshDebounceTimer.Stop();
+            _refreshDebounceTimer.Start();
+        });
+    }
+
+    private void RefreshDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _refreshDebounceTimer.Stop();
+        RefreshRows();
     }
 
     private void HistoryWindow_Closed(object? sender, EventArgs e)
     {
+        _refreshDebounceTimer.Stop();
+        _refreshDebounceTimer.Tick -= RefreshDebounceTimer_Tick;
         HistoryRepository.HistoryChanged -= HistoryRepository_HistoryChanged;
         SwkHistoryJournal.RecordAppended -= SwkHistoryJournal_RecordAppended;
         Closed -= HistoryWindow_Closed;

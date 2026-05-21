@@ -120,7 +120,7 @@
         <Grid Grid.Row="1" Margin="28" Background="#FFFEFA">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="16" />
+                <RowDefinition Height="0" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -247,12 +247,12 @@
                     BorderThickness="1"
                     CornerRadius="8"
                     Background="#FFFEFA"
-                    Padding="20"
+                    Padding="16,6,16,16"
                     SizeChanged="ShopContentsBorder_SizeChanged">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="12" />
+                        <RowDefinition Height="4" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -261,42 +261,49 @@
                         <StackPanel DockPanel.Dock="Left"
                                     Orientation="Horizontal"
                                     VerticalAlignment="Center"
-                                    Margin="0,0,16,0">
+                                    Margin="0,0,10,0">
                             <Button x:Name="BackButton"
                                     Content="戻る"
-                                    Width="70"
+                                    Width="50"
                                     Height="30"
                                     IsEnabled="False"
                                     Click="BackButton_Click" />
                             <Button x:Name="ForwardButton"
                                     Content="進む"
-                                    Width="70"
+                                    Width="50"
                                     Height="30"
-                                    Margin="8,0,0,0"
+                                    Margin="6,0,0,0"
                                     IsEnabled="False"
                                     Click="ForwardButton_Click" />
                             <Button x:Name="TopButton"
                                     Content="トップ"
-                                    Width="70"
+                                    Width="50"
                                     Height="30"
-                                    Margin="8,0,0,0"
+                                    Margin="6,0,0,0"
                                     Click="TopButton_Click" />
                         </StackPanel>
 
                         <Button x:Name="RefreshButton"
                                 DockPanel.Dock="Right"
+                                VerticalAlignment="Bottom"
+                                Width="20"
+                                Height="20"
+                                Margin="0,0,0,2"
                                 Style="{StaticResource IconButtonStyle}"
                                 ToolTip="最新の状態に更新"
                                 Click="RefreshButton_Click">
                             <TextBlock Text="&#xE72C;"
                                        FontFamily="Segoe MDL2 Assets"
-                                       FontSize="12" />
+                                       FontSize="9" />
                         </Button>
 
-                        <StackPanel Orientation="Horizontal"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,6,0">
+                        <Grid Margin="0,0,6,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
                             <ComboBox x:Name="ExplorerTargetComboBox"
+                                      Grid.Column="0"
                                       DisplayMemberPath="Label"
                                       MinWidth="136"
                                       Height="32"
@@ -306,14 +313,14 @@
                                       VerticalContentAlignment="Center"
                                       SelectionChanged="ExplorerTargetComboBox_SelectionChanged" />
                             <TextBlock x:Name="CurrentPathTextBlock"
+                                       Grid.Column="1"
                                        Text=""
-                                       FontSize="13"
+                                       FontSize="10"
                                        Foreground="#3D3833"
                                        VerticalAlignment="Bottom"
-                                       TextTrimming="CharacterEllipsis"
-                                       Margin="10,0,0,2"
-                                       MaxWidth="420" />
-                        </StackPanel>
+                                       TextWrapping="Wrap"
+                                       Margin="10,0,0,2" />
+                        </Grid>
                     </DockPanel>
 
                     <Grid Grid.Row="2">
@@ -387,19 +394,27 @@
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <Viewbox Width="15"
-                                                             Height="15"
-                                                             Margin="0,0,8,0"
-                                                             VerticalAlignment="Center"
-                                                             Stretch="Uniform">
-                                                        <Path Data="{Binding IconPathData}"
-                                                              Fill="{Binding IconFillBrush}"
-                                                              Stroke="{Binding IconStrokeBrush}"
-                                                              StrokeThickness="1.8"
-                                                              StrokeLineJoin="Round"
-                                                              StrokeStartLineCap="Round"
-                                                              StrokeEndLineCap="Round" />
-                                                    </Viewbox>
+                                                    <Grid Width="15"
+                                                          Height="15"
+                                                          Margin="0,0,8,0"
+                                                          VerticalAlignment="Center">
+                                                        <Viewbox Stretch="Uniform">
+                                                            <Path Data="{Binding IconPathData}"
+                                                                  Fill="{Binding IconFillBrush}"
+                                                                  Stroke="{Binding IconStrokeBrush}"
+                                                                  StrokeThickness="1.8"
+                                                                  StrokeLineJoin="Round"
+                                                                  StrokeStartLineCap="Round"
+                                                                  StrokeEndLineCap="Round" />
+                                                        </Viewbox>
+                                                        <TextBlock Text="{Binding SubfolderBadgeText}"
+                                                                   HorizontalAlignment="Right"
+                                                                   VerticalAlignment="Bottom"
+                                                                   FontSize="7"
+                                                                   FontWeight="Bold"
+                                                                   Foreground="{Binding IconStrokeBrush}"
+                                                                   Padding="0" />
+                                                    </Grid>
                                                     <TextBlock Text="{Binding Name}"
                                                                VerticalAlignment="Center">
                                                         <TextBlock.Style>

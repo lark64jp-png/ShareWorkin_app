@@ -105,6 +105,7 @@ public partial class MainWindow : Window
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _subfolderCountCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<HistoryChannel, HistoryWindow> _historyWindows = [];
     private readonly HashSet<string> _friendRefreshInFlight = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTime> _friendRefreshCooldownUntil = new(StringComparer.Ordinal);
@@ -120,6 +121,7 @@ public partial class MainWindow : Window
     private FileSystemWatcher? _arrivalSensor;
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
+    private CancellationTokenSource? _subfolderCountCancellation;
     private DispatcherTimer? _friendShopPollTimer;
     private string? _shopFolder;
     private string? _currentFolder;
@@ -162,9 +164,14 @@ public partial class MainWindow : Window
     private string _permissionPopupBeforeStatus = string.Empty;
     private bool _permissionPopupInitializing;
     private bool _permissionPopupBound;
+    private readonly List<string> _permissionPopupInitialUsers = [];
+    private bool _permissionPopupInitialReadOnly;
+    private bool _permissionPopupInitialSharedOff;
     private readonly ObservableCollection<string> _permissionAllowed = new();
     private readonly ObservableCollection<string> _permissionUnset = new();
     private int _processingDepth;
+    private int _deferredPermissionSaveDepth;
+    private bool _permissionSavePending;
 
     public ObservableCollection<ArrivedItem> ArrivedItems { get; } = [];
 
@@ -517,7 +524,7 @@ public partial class MainWindow : Window
                 if (IsHoldFolderPath(destinationFolder))
                     await HoldInternalDraggedItemsAsync(sourcePaths);
                 else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
-                    await PlaceExternalFilesAsync(sourcePaths, destinationFolder);
+                    await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder);
                 else
                     await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
                 return;
@@ -1167,6 +1174,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         NotifyShopMaintenance("お店の中身が変更されました。", "お店の中身が変更されました。");
     }
 
+    private void AppendExternalChangeHistory(FileSystemEventArgs e)
+    {
+        if (ShouldSuppressExternalChangeNotification() ||
+            string.IsNullOrWhiteSpace(e.FullPath) ||
+            IsHoldFolderPath(e.FullPath))
+        {
+            return;
+        }
+
+        string itemName = e.Name ?? Path.GetFileName(e.FullPath);
+        if (string.IsNullOrWhiteSpace(itemName))
+        {
+            return;
+        }
+
+        string folder = Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty;
+        switch (e.ChangeType)
+        {
+            case WatcherChangeTypes.Created:
+                // File creation is already captured by the receive history path.
+                if (!Directory.Exists(e.FullPath))
+                {
+                    return;
+                }
+
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{itemName} フォルダーが追加されました。",
+                    "ExternalCreateFolder",
+                    HistoryOutcome.Info,
+                    targetName: itemName,
+                    pathText: folder,
+                    destinationPath: e.FullPath,
+                    destinationFolder: folder,
+                    source: "Watcher.External");
+                break;
+
+            case WatcherChangeTypes.Deleted:
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{itemName} が削除されました。",
+                    "ExternalDelete",
+                    HistoryOutcome.Info,
+                    targetName: itemName,
+                    pathText: folder,
+                    note: $"削除前: {e.FullPath}",
+                    sourcePath: e.FullPath,
+                    source: "Watcher.External");
+                break;
+        }
+    }
+
     private static System.Drawing.Icon LoadAppIcon()
     {
         try
@@ -1248,6 +1307,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         CloseShop();
         _folderSizeCache.Clear();
+        _subfolderCountCache.Clear();
         _backStack.Clear();
         _forwardStack.Clear();
 
@@ -1292,6 +1352,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
     {
+        string? targetPath = _currentFolder ?? _shopFolder;
+        string friendLabel = _activeFriendShop is null
+            ? "-"
+            : $"{_activeFriendShop.DisplayName} ({_activeFriendShop.HostMachineName}/{_activeFriendShop.ShareName})";
+        SwkLogger.Info(
+            $"Investigation.OpenFolderButton_Click: mode={_currentMode} target={targetPath ?? "(null)"} activeFriend={friendLabel}");
         VisitShop(_currentFolder ?? _shopFolder);
     }
 
@@ -1447,16 +1513,25 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private DispatcherTimer? _processingShowDelayTimer;
     private const int ProcessingShowDelayMs = 500;
+    private static readonly TimeSpan ProcessingProgressUpdateInterval = TimeSpan.FromMilliseconds(80);
 
-    private void BeginProcessing(string? label = null)
+    private void BeginProcessing(string? label = null, bool showImmediately = false)
     {
         if (_processingDepth++ == 0)
         {
             ProcessingLabel.Text = label ?? "● 処理中…";
             ProcessingProgressBar.IsIndeterminate = true;
             ProcessingProgressBar.Value = 0;
-            // 0.5秒以内に終わる処理では出さない（点滅ノイズ回避）
             _processingShowDelayTimer?.Stop();
+
+            if (showImmediately)
+            {
+                ProcessingBar.Visibility = Visibility.Visible;
+                _processingShowDelayTimer = null;
+                return;
+            }
+
+            // 0.5秒以内に終わる処理では出さない（点滅ノイズ回避）
             _processingShowDelayTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ProcessingShowDelayMs) };
             _processingShowDelayTimer.Tick += (_, _) =>
             {
@@ -1486,14 +1561,32 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private IProgress<(int current, int total, string name)> CreateFileProgress(string verb)
+    private void ShowProcessingBarNow(string? label = null)
     {
-        return new Progress<(int current, int total, string name)>(p =>
+        if (_processingDepth <= 0)
         {
-            ProcessingProgressBar.IsIndeterminate = false;
-            ProcessingProgressBar.Value = p.total > 0 ? (double)p.current / p.total * 100 : 0;
-            ProcessingLabel.Text = $"● {verb}中… {p.current}/{p.total}  {p.name}";
-        });
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            ProcessingLabel.Text = label;
+        }
+
+        _processingShowDelayTimer?.Stop();
+        _processingShowDelayTimer = null;
+        ProcessingBar.Visibility = Visibility.Visible;
+    }
+
+    private async Task<IProgress<(int current, int total, string name)>> CreateFileProgressAsync(string verb)
+    {
+        if (_processingDepth > 0)
+        {
+            ShowProcessingBarNow($"● {verb}中…");
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+        }
+
+        return new FileProgressReporter(this, verb);
     }
 
     private IDisposable Processing() => new ProcessingScope(this);
@@ -1503,6 +1596,54 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         private readonly MainWindow _owner;
         public ProcessingScope(MainWindow owner) { _owner = owner; _owner.BeginProcessing(); }
         public void Dispose() => _owner.EndProcessing();
+    }
+
+    private void UpdateProcessingProgress(string verb, int current, int total, string name)
+    {
+        ProcessingProgressBar.IsIndeterminate = false;
+        ProcessingProgressBar.Value = total > 0 ? (double)current / total * 100 : 0;
+        ProcessingLabel.Text = $"● {verb}中… {current}/{total}  {name}";
+    }
+
+    private sealed class FileProgressReporter : IProgress<(int current, int total, string name)>
+    {
+        private readonly MainWindow _owner;
+        private readonly string _verb;
+        private long _lastUpdateTicks;
+        private int _lastCurrent = -1;
+
+        public FileProgressReporter(MainWindow owner, string verb)
+        {
+            _owner = owner;
+            _verb = verb;
+        }
+
+        public void Report((int current, int total, string name) value)
+        {
+            long now = Environment.TickCount64;
+            bool isBoundary = value.current <= 0 || value.current >= value.total;
+            bool currentChanged = value.current != _lastCurrent;
+            bool due = now - _lastUpdateTicks >= (long)ProcessingProgressUpdateInterval.TotalMilliseconds;
+
+            if (!isBoundary && (!currentChanged || !due))
+            {
+                return;
+            }
+
+            _lastCurrent = value.current;
+            _lastUpdateTicks = now;
+
+            if (_owner.Dispatcher.CheckAccess())
+            {
+                _owner.UpdateProcessingProgress(_verb, value.current, value.total, value.name);
+            }
+            else
+            {
+                _ = _owner.Dispatcher.InvokeAsync(
+                    () => _owner.UpdateProcessingProgress(_verb, value.current, value.total, value.name),
+                    DispatcherPriority.Background);
+            }
+        }
     }
 
     private void ShareStatusButton_Click(object sender, RoutedEventArgs e)
@@ -1529,6 +1670,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _permissionPopupAnchor = anchor;
         _permissionPopupReadOnly = readOnly;
         _permissionPopupBeforeStatus = item.ShareStatusText;
+        _permissionPopupInitialUsers.Clear();
+        _permissionPopupInitialUsers.AddRange(item.AllowedUsers
+            .Where(u => !string.IsNullOrWhiteSpace(u))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+        _permissionPopupInitialReadOnly = item.IsReadOnly;
+        _permissionPopupInitialSharedOff = item.IsSharedOff;
 
         _permissionAllowed.Clear();
         if (readOnly && _currentMode == DisplayMode.FriendShop && _activeFriendShop is not null)
@@ -1577,6 +1724,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _permissionPopupInitializing = false;
         ApplyPermissionAccessLevelUiState();
+        UpdatePermissionOkButtonState();
 
         PermissionPopup.PlacementTarget = anchor;
         PermissionPopup.IsOpen = false;
@@ -1585,8 +1733,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UpdateEveryoneChipState()
     {
-        bool isEveryone = _permissionAllowed.Count == 0;
-        if (isEveryone)
+        bool isEveryoneState = _permissionAllowed.Count == 0 && PermissionSharedOffRadio.IsChecked != true;
+        if (isEveryoneState)
         {
             PermissionEveryoneChip.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3F, 0x7A, 0x66));
             PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3F, 0x7A, 0x66));
@@ -1594,12 +1742,34 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else
         {
-            PermissionEveryoneChip.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF1, 0xED, 0xE4));
-            PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC8, 0xC2, 0xB5));
-            PermissionEveryoneChipText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x7A, 0x74, 0x6A));
+            PermissionEveryoneChip.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE4, 0xF0, 0xE8));
+            PermissionEveryoneChip.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xA8, 0xC3, 0xB0));
+            PermissionEveryoneChipText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x54, 0x74, 0x63));
         }
-        // クリアボタンは常に有効（ボタンとして見える状態を維持）
-        // 全員状態でクリックされても _permissionAllowed.Clear() が無操作で完了するだけ
+    }
+
+    private void UpdatePermissionOkButtonState()
+    {
+        bool canSubmit = !_permissionPopupReadOnly && HasPermissionPopupChanges();
+        PermissionOkButton.IsEnabled = canSubmit;
+        PermissionOkButton.Background = canSubmit
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2F, 0x66, 0x50))
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xBF, 0xC7, 0xC2));
+        PermissionOkButton.Cursor = canSubmit ? System.Windows.Input.Cursors.Hand : null;
+    }
+
+    private bool HasPermissionPopupChanges()
+    {
+        bool newSharedOff = PermissionSharedOffRadio.IsChecked == true;
+        bool newReadOnly = PermissionReadOnlyRadio.IsChecked == true;
+        List<string> requestedUsers = _permissionAllowed
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return newSharedOff != _permissionPopupInitialSharedOff
+               || newReadOnly != _permissionPopupInitialReadOnly
+               || !requestedUsers.SequenceEqual(_permissionPopupInitialUsers, StringComparer.OrdinalIgnoreCase);
     }
 
     private void EnsurePermissionPopupBindings()
@@ -1607,7 +1777,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_permissionPopupBound) return;
         PermissionAllowedListBox.ItemsSource = _permissionAllowed;
         PermissionUnsetListBox.ItemsSource = _permissionUnset;
-        _permissionAllowed.CollectionChanged += (_, _) => UpdateEveryoneChipState();
+        _permissionAllowed.CollectionChanged += (_, _) =>
+        {
+            UpdateEveryoneChipState();
+            UpdatePermissionOkButtonState();
+        };
         _permissionPopupBound = true;
     }
 
@@ -1631,6 +1805,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         PermissionUnsetListBox.IsEnabled = canSpecifyUsers;
         PermissionEveryoneChip.IsEnabled = canSpecifyUsers;
         UpdateEveryoneChipState();
+        UpdatePermissionOkButtonState();
     }
 
     private void PermissionAccessLevelRadio_Checked(object sender, RoutedEventArgs e)
@@ -1651,6 +1826,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_permissionAllowed.Count == 0) return;
         _permissionAllowed.Clear();
         ReloadPermissionUnset();
+        e.Handled = true;
     }
 
     private void PermissionClearButton_Click(object sender, MouseButtonEventArgs e)
@@ -1705,6 +1881,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         e.Handled = true;
         if (_permissionPopupReadOnly) return;
+        if (!PermissionOkButton.IsEnabled) return;
         ShopItem? item = _permissionPopupTarget;
         System.Windows.Controls.Button? button = _permissionPopupAnchor;
         string beforeStatus = _permissionPopupBeforeStatus;
@@ -1714,9 +1891,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             bool newSharedOff = PermissionSharedOffRadio.IsChecked == true;
             bool newReadOnly = PermissionReadOnlyRadio.IsChecked == true;
+            List<string> requestedUsers = _permissionAllowed
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             bool changed = newSharedOff != item.IsSharedOff
                            || newReadOnly != item.IsReadOnly
-                           || !item.AllowedUsers.SequenceEqual(_permissionAllowed, StringComparer.OrdinalIgnoreCase);
+                           || !item.AllowedUsers.SequenceEqual(requestedUsers, StringComparer.OrdinalIgnoreCase);
 
             if (!changed)
             {
@@ -1724,10 +1905,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
+            string sourceParent = Path.GetDirectoryName(item.FullPath) ?? string.Empty;
+            var parentPerm = FindEffectiveAncestorPermission(sourceParent);
+            var requestedPerm = (requestedUsers, newReadOnly, newSharedOff);
+            if (!IsWithinRange(requestedPerm, parentPerm))
+            {
+                string parentStatus = PermissionToStatusText(parentPerm);
+                SetTransientStatus($"上位フォルダーの共有条件（{parentStatus}）を超えるため、この設定にはできません。");
+                return;
+            }
+
             item.IsSharedOff = newSharedOff;
             item.IsReadOnly = newReadOnly;
             item.AllowedUsers.Clear();
-            foreach (string name in _permissionAllowed)
+            foreach (string name in requestedUsers)
             {
                 item.AllowedUsers.Add(name);
             }
@@ -1885,6 +2076,65 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private void MovePermissionEntries(string sourcePath, string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(destinationPath))
+        {
+            return;
+        }
+
+        MovePermissionEntriesInMap(_permissionMap, sourcePath, destinationPath);
+        MovePermissionEntriesInMap(_holdDisplayPermissionMap, sourcePath, destinationPath);
+    }
+
+    private static void MovePermissionEntriesInMap(
+        Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> map,
+        string sourcePath,
+        string destinationPath)
+    {
+        List<(string SourceKey, string DestinationKey, (List<string> Users, bool IsReadOnly, bool IsSharedOff) Permission)> moves = [];
+
+        foreach (var (key, permission) in map)
+        {
+            string? movedKey = TryMovePermissionPath(key, sourcePath, destinationPath);
+            if (movedKey is null)
+            {
+                continue;
+            }
+
+            moves.Add((key, movedKey, ([.. permission.Users], permission.IsReadOnly, permission.IsSharedOff)));
+        }
+
+        foreach (var (sourceKey, _, _) in moves)
+        {
+            map.Remove(sourceKey);
+        }
+
+        foreach (var (_, destinationKey, permission) in moves)
+        {
+            map[destinationKey] = permission;
+        }
+    }
+
+    private static string? TryMovePermissionPath(string path, string sourcePath, string destinationPath)
+    {
+        if (string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return destinationPath;
+        }
+
+        if (!IsUnderFolder(path, sourcePath))
+        {
+            return null;
+        }
+
+        string suffix = path[sourcePath.Length..]
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.IsNullOrEmpty(suffix)
+            ? destinationPath
+            : Path.Combine(destinationPath, suffix);
+    }
+
     private void ClearDescendantPermissionOverrides(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(folderPath))
@@ -2017,6 +2267,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _dragStartPoint = e.GetPosition(null);
         _dragStartItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
         _itemWasSelectedAtPress = false;
+
+        if (IsClickOnItemButton(e.OriginalSource as DependencyObject))
+        {
+            CancelRenameTimer();
+            _dragStartItem = null;
+            _clickSelectionPending = false;
+            _isRubberBanding = false;
+            return;
+        }
 
         // リネーム中に TextBox 以外をクリック → キャンセルして選択解除（ブランチ共通）
         if (ShopItems.Any(i => i.IsRenaming) && !IsClickOnRenameTextBox(e.OriginalSource as DependencyObject))
@@ -2495,7 +2754,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 if (IsHoldFolderPath(destinationFolder))
                     await HoldInternalDraggedItemsAsync(sourcePaths);
                 else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                    await PlaceExternalFilesAsync(sourcePaths, destinationFolder);
+                    await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder);
                 else
                     await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
                 return;
@@ -2529,38 +2788,45 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         int placedCount = 0;
         string? lastPlacedName = null;
-        var progress = CreateFileProgress("コピー");
+        var progress = await CreateFileProgressAsync("コピー");
         int total = paths.Count;
         string modeLabel = _currentMode.ToString();
-
-        for (int i = 0; i < total; i++)
+        BeginDeferredPermissionSave();
+        try
         {
-            string sourcePath = paths[i];
-            string fileName = Path.GetFileName(sourcePath);
-            progress.Report((i, total, fileName));
-            await Task.Yield(); // 高速完了時の同期化を防ぎ Progress callback を確実に描画させる
-
-            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
+            for (int i = 0; i < total; i++)
             {
-                ModeLabel = modeLabel,
-                SourcePath = sourcePath,
-                DestinationFolder = destinationFolder,
-                BeforeWrite = SuppressExternalChangeNotifications,
-            }));
+                string sourcePath = paths[i];
+                string fileName = Path.GetFileName(sourcePath);
+                progress.Report((i, total, fileName));
+                await Task.Yield(); // 高速完了時の同期化を防ぎ Progress callback を確実に描画させる
 
-            ApplyExplorerActionResult(result);
+                ExplorerActionResult result = await Task.Run(() => ExplorerActionService.PlaceExternalItem(new PlaceExternalItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                }));
 
-            if (result.ShouldRefreshUi &&
-                !string.IsNullOrWhiteSpace(result.DestinationPath) &&
-                !string.IsNullOrWhiteSpace(result.DestinationFolder))
-            {
-                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
-                MaybeAppendPermissionInheritedOnArrival(result.DestinationPath!, result.DestinationFolder!, "MainWindow.place");
-                placedCount++;
-                lastPlacedName = result.TargetName;
+                ApplyExplorerActionResult(result);
+
+                if (result.ShouldRefreshUi &&
+                    !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                    !string.IsNullOrWhiteSpace(result.DestinationFolder))
+                {
+                    NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+                    MaybeAppendPermissionInheritedOnArrival(result.DestinationPath!, result.DestinationFolder!, "MainWindow.place");
+                    placedCount++;
+                    lastPlacedName = result.TargetName;
+                }
+
+                progress.Report((i + 1, total, fileName));
             }
-
-            progress.Report((i + 1, total, fileName));
+        }
+        finally
+        {
+            EndDeferredPermissionSave();
         }
 
         if (placedCount > 0)
@@ -2632,7 +2898,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task MoveInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        var progress = CreateFileProgress("移動");
+        var progress = await CreateFileProgressAsync("移動");
         (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(sourcePaths, destinationFolder, progress);
 
         if (movedCount > 0)
@@ -2667,6 +2933,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         ApplyExplorerActionResult(result);
         if (!result.ShouldRefreshUi ||
+            string.IsNullOrWhiteSpace(result.SourcePath) ||
+            string.IsNullOrWhiteSpace(result.SourceParent) ||
             string.IsNullOrWhiteSpace(result.DestinationPath) ||
             string.IsNullOrWhiteSpace(result.DestinationFolder))
         {
@@ -2674,8 +2942,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         bool preserved = PreservePermissionOnArrival(
-            result.SourcePath!,
-            result.SourceParent!,
+            result.SourcePath,
+            result.SourceParent,
             result.DestinationPath,
             result.DestinationFolder,
             removeSourceEntry: false,
@@ -2694,6 +2962,94 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _pendingFocusName = result.TargetName;
         }
         RefreshShopItems();
+    }
+
+    private async Task CopyInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
+    {
+        int copiedCount = 0;
+        string? lastName = null;
+        int total = sourcePaths.Count;
+        string modeLabel = _currentMode.ToString();
+        var progress = await CreateFileProgressAsync("コピー");
+        BeginDeferredPermissionSave();
+        try
+        {
+            for (int i = 0; i < total; i++)
+            {
+                string sourcePath = sourcePaths[i];
+                string fileName = Path.GetFileName(sourcePath);
+                progress.Report((i, total, fileName));
+                await Task.Yield();
+
+                ExplorerActionResult result = await Task.Run(() => ExplorerActionService.CopyItem(new CopyItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    IsHoldFolderPath = IsHoldFolderPath,
+                    IsUnderFolder = IsUnderFolder,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                }));
+
+                if (result.State == ExplorerActionState.NoChange)
+                {
+                    progress.Report((i + 1, total, fileName));
+                    continue;
+                }
+
+                ApplyExplorerActionResult(result);
+                if (!result.ShouldRefreshUi ||
+                    string.IsNullOrWhiteSpace(result.SourcePath) ||
+                    string.IsNullOrWhiteSpace(result.SourceParent) ||
+                    string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                    string.IsNullOrWhiteSpace(result.DestinationFolder))
+                {
+                    progress.Report((i + 1, total, fileName));
+                    continue;
+                }
+
+                bool preserved = PreservePermissionOnArrival(
+                    result.SourcePath,
+                    result.SourceParent,
+                    result.DestinationPath,
+                    result.DestinationFolder,
+                    removeSourceEntry: false,
+                    historySource: "MainWindow.copy");
+                if (!preserved)
+                {
+                    NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+                    MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
+                }
+
+                copiedCount++;
+                lastName = result.TargetName;
+                progress.Report((i + 1, total, fileName));
+            }
+        }
+        finally
+        {
+            EndDeferredPermissionSave();
+        }
+
+        if (copiedCount > 0)
+        {
+            string statusMessage = copiedCount == 1 && lastName is not null
+                ? $"{lastName} をコピーしました。"
+                : $"{copiedCount} つコピーしました。";
+            SetTransientStatus(statusMessage);
+            InvalidateSizeCacheUnder(destinationFolder);
+            if (string.Equals(
+                    Path.GetFullPath(destinationFolder),
+                    Path.GetFullPath(_currentFolder ?? string.Empty),
+                    StringComparison.OrdinalIgnoreCase) &&
+                lastName is not null)
+            {
+                _pendingFocusName = lastName;
+            }
+
+            RefreshShopItems();
+        }
     }
 
     private void ShopItemsContextMenu_Opened(object sender, RoutedEventArgs e)
@@ -2784,6 +3140,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        string originalPath = item.FullPath;
         ApplyExplorerActionResult(result);
         if (!result.ShouldRefreshUi ||
             string.IsNullOrWhiteSpace(result.DestinationPath) ||
@@ -2792,7 +3149,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        MoveHoldDisplayPermission(item.FullPath, result.DestinationPath);
+        MovePermissionEntries(originalPath, result.DestinationPath);
         SavePermissionMap();
         NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
         InvalidateSizeCacheUnder(result.SourceParent);
@@ -2832,7 +3189,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         BeginProcessing();
         try
         {
-            var progress = CreateFileProgress("移動");
+            var progress = await CreateFileProgressAsync("移動");
             (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
                 items.Select(static item => item.FullPath).ToList(), destinationFolder, progress);
 
@@ -2885,7 +3242,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string holdFolderPath = GetHoldFolderPath();
         int movedCount = 0;
         string? lastName = null;
-        var progress = CreateFileProgress("保留");
+        var progress = await CreateFileProgressAsync("保留");
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
 
@@ -2969,7 +3326,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         BeginProcessing();
         try
         {
-            var progress = CreateFileProgress("削除");
+            var progress = await CreateFileProgressAsync("削除");
             int deletedCount = 0;
             string? lastName = null;
             int total = items.Count;
@@ -3159,7 +3516,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName;
         try
         {
-            var progress = CreateFileProgress("戻し");
+            var progress = await CreateFileProgressAsync("戻し");
             (movedCount, lastName) = await ExecuteMoveExplorerActionsAsync(
                 items.Select(static item => item.FullPath).ToList(), _shopFolder!, progress);
         }
@@ -3187,58 +3544,65 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
-
-        for (int i = 0; i < total; i++)
+        BeginDeferredPermissionSave();
+        try
         {
-            string sourcePath = sourcePaths[i];
-            string fileName = Path.GetFileName(sourcePath);
-            progress?.Report((i, total, fileName));
-            await Task.Yield();
-
-            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
+            for (int i = 0; i < total; i++)
             {
-                ModeLabel = modeLabel,
-                SourcePath = sourcePath,
-                DestinationFolder = destinationFolder,
-                IsHoldFolderPath = IsHoldFolderPath,
-                IsUnderFolder = IsUnderFolder,
-                GetShareStatus = GetItemShareStatus,
-                BeforeWrite = SuppressExternalChangeNotifications,
-            }));
+                string sourcePath = sourcePaths[i];
+                string fileName = Path.GetFileName(sourcePath);
+                progress?.Report((i, total, fileName));
+                await Task.Yield();
 
-            if (result.State == ExplorerActionState.NoChange)
-            {
+                ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    IsHoldFolderPath = IsHoldFolderPath,
+                    IsUnderFolder = IsUnderFolder,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                }));
+
+                if (result.State == ExplorerActionState.NoChange)
+                {
+                    progress?.Report((i + 1, total, fileName));
+                    continue;
+                }
+
+                ApplyExplorerActionResult(result);
+
+                if (!result.ShouldRefreshUi ||
+                    string.IsNullOrWhiteSpace(result.SourcePath) ||
+                    string.IsNullOrWhiteSpace(result.SourceParent) ||
+                    string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                    string.IsNullOrWhiteSpace(result.DestinationFolder))
+                {
+                    progress?.Report((i + 1, total, fileName));
+                    continue;
+                }
+
+                bool preserved = PreservePermissionOnArrival(
+                    result.SourcePath,
+                    result.SourceParent,
+                    result.DestinationPath,
+                    result.DestinationFolder,
+                    removeSourceEntry: true,
+                    historySource: "MainWindow.move");
+                if (!preserved)
+                {
+                    NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+                }
+                InvalidateSizeCacheUnder(result.SourceParent);
+                movedCount++;
+                lastName = result.TargetName;
                 progress?.Report((i + 1, total, fileName));
-                continue;
             }
-
-            ApplyExplorerActionResult(result);
-
-            if (!result.ShouldRefreshUi ||
-                string.IsNullOrWhiteSpace(result.SourcePath) ||
-                string.IsNullOrWhiteSpace(result.SourceParent) ||
-                string.IsNullOrWhiteSpace(result.DestinationPath) ||
-                string.IsNullOrWhiteSpace(result.DestinationFolder))
-            {
-                progress?.Report((i + 1, total, fileName));
-                continue;
-            }
-
-            bool preserved = PreservePermissionOnArrival(
-                result.SourcePath,
-                result.SourceParent,
-                result.DestinationPath,
-                result.DestinationFolder,
-                removeSourceEntry: true,
-                historySource: "MainWindow.move");
-            if (!preserved)
-            {
-                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
-            }
-            InvalidateSizeCacheUnder(result.SourceParent);
-            movedCount++;
-            lastName = result.TargetName;
-            progress?.Report((i + 1, total, fileName));
+        }
+        finally
+        {
+            EndDeferredPermissionSave();
         }
 
         if (movedCount > 0)
@@ -3247,6 +3611,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return (movedCount, lastName);
+    }
+
+    private void BeginDeferredPermissionSave()
+    {
+        _deferredPermissionSaveDepth++;
+    }
+
+    private void EndDeferredPermissionSave()
+    {
+        if (_deferredPermissionSaveDepth <= 0)
+        {
+            _deferredPermissionSaveDepth = 0;
+            return;
+        }
+
+        _deferredPermissionSaveDepth--;
+        if (_deferredPermissionSaveDepth == 0 && _permissionSavePending)
+        {
+            _permissionSavePending = false;
+            SavePermissionMapCore();
+        }
     }
 
     // --- インラインリネーム ---
@@ -3309,6 +3694,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        string originalPath = item.FullPath;
         ApplyExplorerActionResult(result);
         if (!result.ShouldRefreshUi ||
             string.IsNullOrWhiteSpace(result.DestinationPath) ||
@@ -3317,7 +3703,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        MoveHoldDisplayPermission(item.FullPath, result.DestinationPath);
+        MovePermissionEntries(originalPath, result.DestinationPath);
         SavePermissionMap();
         NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
         InvalidateSizeCacheUnder(result.SourceParent);
@@ -3664,6 +4050,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _isShopOpen = false;
         _isPollingMode = false;
         CancelFolderSizeCalculation();
+        CancelSubfolderCountLoad();
 
         if (wasOpen && removeSmbShare)
         {
@@ -3867,6 +4254,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     source: "Watcher");
             }
 
+            AppendExternalChangeHistory(e);
             NotifyExternalShopChange();
             if (!ShouldSuppressExternalChangeNotification())
             {
@@ -4010,6 +4398,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void VisitShop(string? folderPath)
     {
+        bool isUnc = !string.IsNullOrWhiteSpace(folderPath) && folderPath.StartsWith(@"\\", StringComparison.Ordinal);
+        SwkLogger.Info($"Investigation.VisitShop: mode={_currentMode} path={folderPath ?? "(null)"} isUnc={isUnc}");
         if (string.IsNullOrWhiteSpace(folderPath))
         {
             SetTransientStatus("見に行ける場所がありません。");
@@ -4243,12 +4633,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     .Select(path => ShopItem.FromPath(path, isDirectory: false)))
                 .ToList();
 
-            SwkLogger.Debug($"Display[{_currentMode}]: folder={_currentFolder} effectiveParentPerm={(_effectiveParentPerm.HasValue ? (_effectiveParentPerm.Value.IsSharedOff ? "OFF" : _effectiveParentPerm.Value.IsReadOnly ? (_effectiveParentPerm.Value.Users.Count > 0 ? "指定R" : "全員R") : (_effectiveParentPerm.Value.Users.Count > 0 ? "指定" : "全員")) : "null(全員)")}");
             foreach (ShopItem item in all)
             {
                 if (item.IsDirectory && _folderSizeCache.TryGetValue(item.FullPath, out long cached))
                 {
                     item.SetSize(cached);
+                }
+
+                if (item.IsDirectory && !item.IsHoldFolder && _subfolderCountCache.TryGetValue(item.FullPath, out int cachedCount))
+                {
+                    item.SetSubfolderCount(cachedCount);
                 }
 
                 if (_currentMode == DisplayMode.FriendShop)
@@ -4283,7 +4677,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 {
                     ApplyPermissionToItem(item, _effectiveParentPerm.Value);
                 }
-                SwkLogger.Debug($"Display[{_currentMode}]: item={item.Name}({item.ShareStatusText})", targetName: item.Name, pathText: _currentFolder);
             }
 
             if (_currentMode == DisplayMode.FriendShop)
@@ -4328,6 +4721,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             StartFolderSizeCalculation();
         }
+
+        StartSubfolderCountLoad();
     }
 
     private ShopPermissionManifest? LoadFriendPermissionManifest()
@@ -5013,15 +5408,30 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return true;
         }
 
-        if (removeSourceEntry && hasOwnEntry)
+        if (removeSourceEntry)
         {
-            _permissionMap.Remove(sourcePath);
+            if (hasOwnEntry)
+            {
+                _permissionMap.Remove(sourcePath);
+            }
+
             MoveHoldDisplayPermission(sourcePath, destinationPath);
-            SavePermissionMap();
         }
-        if (effectiveDest != null)
-            AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value, historySource);
-        return false;
+
+        if (effectiveDest == null)
+        {
+            SavePermissionMap();
+            return false;
+        }
+
+        _permissionMap[destinationPath] = effectiveDest.Value;
+        SavePermissionMap();
+        AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value, historySource);
+
+        string enforcedDestPath = destinationPath;
+        var enforcedDestPerm = effectiveDest.Value;
+        _ = Task.Run(() => _pipeClient.SetSubfolderPermission(enforcedDestPath, enforcedDestPerm.IsSharedOff, enforcedDestPerm.IsReadOnly));
+        return true;
     }
 
     private void AppendPermissionChangedByMoveHistory(
@@ -5187,6 +5597,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (ExplorerTargetComboBox.SelectedItem is not ExplorerTarget target) return;
 
         SwkLogger.Debug($"ExplorerTargetComboBox_SelectionChanged: {target.Label}");
+        SwkLogger.Info(
+            $"Investigation.ExplorerTargetChanged: label={target.Label} friendId={target.Friend?.Id ?? "-"} " +
+            $"friendHost={target.Friend?.HostMachineName ?? "-"} share={target.Friend?.ShareName ?? "-"}");
 
         if (target.Friend is not Friend friend)
         {
@@ -5370,6 +5783,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         string label = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
         SwkLogger.Debug($"NavigateToFriendShopAsync: {label} ({friend.ConnectUncPath})");
+        SwkLogger.Info(
+            $"Investigation.NavigateToFriendShopAsync.Start: friend={label} host={friend.HostMachineName} " +
+            $"share={friend.ShareName} knownLiveShop={(knownLiveShop is null ? "no" : "yes")}");
 
         _activeFriendShop = friend;
         _activeFriendShopRootPath = null;
@@ -5441,6 +5857,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(accessiblePath))
         {
             SwkLogger.Warn($"NavigateToFriendShopAsync: not accessible: {string.Join(", ", uncCandidates)}");
+            SwkLogger.Info(
+                $"Investigation.NavigateToFriendShopAsync.Fail: friend={label} candidates={string.Join(" | ", uncCandidates)}");
             FriendShareAccessTracker.ClearVerified(friend);
             UpdateFriendExternalState(friend, liveShop);
             AppendHistory(
@@ -5458,6 +5876,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         SwkLogger.Debug($"NavigateToFriendShopAsync: resolved={accessiblePath}");
+        SwkLogger.Info($"Investigation.NavigateToFriendShopAsync.Success: friend={label} resolved={accessiblePath}");
         FriendShareAccessTracker.MarkVerified(friend, liveShop);
         UpdateFriendExternalState(friend, liveShop);
         _activeFriendShopRootPath = accessiblePath;
@@ -5745,6 +6164,76 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _folderSizeCancellation = null;
     }
 
+    private void StartSubfolderCountLoad()
+    {
+        CancelSubfolderCountLoad();
+
+        List<ShopItem> targets = ShopItems
+            .Where(item => item.IsDirectory && !item.IsHoldFolder)
+            .ToList();
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        CancellationTokenSource cts = new();
+        _subfolderCountCancellation = cts;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (ShopItem item in targets)
+                {
+                    if (cts.IsCancellationRequested) break;
+
+                    int count;
+                    try
+                    {
+                        count = CountSubfoldersUpTo10(item.FullPath);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (cts.IsCancellationRequested) break;
+
+                    _subfolderCountCache[item.FullPath] = count;
+                    await Dispatcher.InvokeAsync(() => item.SetSubfolderCount(count));
+                }
+            }
+            catch
+            {
+            }
+        }, cts.Token);
+    }
+
+    private static int CountSubfoldersUpTo10(string path)
+    {
+        int count = 0;
+        foreach (string _ in Directory.EnumerateDirectories(path))
+        {
+            count++;
+            if (count >= 10) return count;
+        }
+        return count;
+    }
+
+    private void CancelSubfolderCountLoad()
+    {
+        if (_subfolderCountCancellation is null) return;
+        try
+        {
+            _subfolderCountCancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        _subfolderCountCancellation.Dispose();
+        _subfolderCountCancellation = null;
+    }
+
     private void ClearFolderSizeDisplay()
     {
         foreach (ShopItem item in ShopItems)
@@ -5907,6 +6396,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return false;
             current = VisualTreeHelper.GetParent(current);
         }
+        return false;
+    }
+
+    private static bool IsClickOnItemButton(DependencyObject? source)
+    {
+        DependencyObject? current = source;
+        while (current is not null)
+        {
+            if (current is System.Windows.Controls.Button)
+            {
+                return true;
+            }
+
+            if (current is System.Windows.Controls.ListViewItem)
+            {
+                return false;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
         return false;
     }
 
@@ -6188,6 +6698,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private void SavePermissionMap()
+    {
+        if (_deferredPermissionSaveDepth > 0)
+        {
+            _permissionSavePending = true;
+            return;
+        }
+
+        SavePermissionMapCore();
+    }
+
+    private void SavePermissionMapCore()
     {
         try
         {
@@ -6481,6 +7002,7 @@ public sealed class ShopItem : INotifyPropertyChanged
     public long? SizeBytes { get; private set; }
 
     private string _sizeText = string.Empty;
+    private string _subfolderBadge = string.Empty;
     private bool _isDropTarget;
 
     public string SizeText
@@ -6495,6 +7017,27 @@ public sealed class ShopItem : INotifyPropertyChanged
             _sizeText = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SizeText)));
         }
+    }
+
+    public string SubfolderBadgeText
+    {
+        get => _subfolderBadge;
+        private set
+        {
+            if (_subfolderBadge == value) return;
+            _subfolderBadge = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SubfolderBadgeText)));
+        }
+    }
+
+    public void SetSubfolderCount(int count)
+    {
+        SubfolderBadgeText = count switch
+        {
+            < 2 => string.Empty,
+            <= 9 => count.ToString(),
+            _ => "*"
+        };
     }
 
     public bool IsDropTarget

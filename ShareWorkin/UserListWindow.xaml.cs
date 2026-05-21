@@ -424,6 +424,9 @@ public partial class UserListWindow : Window
             return;
         }
 
+        SwkLogger.Info(
+            $"Investigation.ResumeButton_Click: friend={target.DisplayName} host={liveShop.MachineName} share={liveShop.ShareName}");
+
         ReloadButton.IsEnabled = false;
         LoadingBar.Visibility = Visibility.Visible;
         StatusTextBlock.Text = "接続情報を再取得しています…";
@@ -751,11 +754,17 @@ public partial class UserListWindow : Window
         {
             List<string> candidates = BuildFriendUncCandidates(friend, liveShop);
             string password = FriendsRepository.UnprotectPassword(friend.PasswordProtected);
+            string friendLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+            SwkLogger.Info(
+                $"Investigation.TryVerifyFriendShareOnDemand.Start: friend={friendLabel} host={liveShop.MachineName} " +
+                $"share={liveShop.ShareName} allowReconnect={allowReconnect} candidates={string.Join(" | ", candidates)}");
 
             foreach (string path in candidates)
             {
                 if (CanEnumerateShare(path))
                 {
+                    SwkLogger.Info(
+                        $"Investigation.TryVerifyFriendShareOnDemand.SuccessExisting: friend={friendLabel} path={path}");
                     return true;
                 }
 
@@ -764,12 +773,16 @@ public partial class UserListWindow : Window
                     SmbConnectionHelper.EnsureConnection(path, friend.UserName, password, liveShop.MachineName);
                     if (CanEnumerateShare(path))
                     {
+                        SwkLogger.Info(
+                            $"Investigation.TryVerifyFriendShareOnDemand.SuccessReconnect: friend={friendLabel} path={path}");
                         return true;
                     }
                 }
             }
 
             SwkLogger.Debug($"UserListWindow.TryVerifyFriendShareOnDemand failed: friend={friend.Id} candidates={string.Join(", ", candidates)}");
+            SwkLogger.Info(
+                $"Investigation.TryVerifyFriendShareOnDemand.Fail: friend={friendLabel} candidates={string.Join(" | ", candidates)}");
             return false;
         }
         catch (Exception ex)

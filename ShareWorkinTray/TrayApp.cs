@@ -12,7 +12,8 @@ namespace ShareWorkinTray;
 
 public sealed class TrayApp : IDisposable
 {
-    private static readonly string AppHomeDirectory = @"C:\MyApps\ShareWorkin";
+    private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
+        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     private static readonly string SettingsPath = Path.Combine(AppHomeDirectory, "settings.json");
 
     private readonly Forms.NotifyIcon _notifyIcon;

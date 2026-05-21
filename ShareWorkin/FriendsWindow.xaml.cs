@@ -769,6 +769,9 @@ public partial class FriendsWindow : Window
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
             FriendShareAccessTracker.ClearVerified(target);
+            SwkLogger.Info(
+                $"Investigation.ChangeConnectionAsync.VerifyStart: friend={GetFriendLabel(target)} " +
+                $"host={_activeShopInfo.MachineName} share={_activeShopInfo.ShareName}");
             await Task.Run(() => TryVerifyRegisteredShare(target, _activeShopInfo!));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
@@ -851,6 +854,9 @@ public partial class FriendsWindow : Window
             target.LastSeenAt = nowIso;
             target.LastAccessIssue = null;
             FriendShareAccessTracker.ClearVerified(target);
+            SwkLogger.Info(
+                $"Investigation.RefreshExistingFriendAsync.VerifyStart: friend={GetFriendLabel(target)} " +
+                $"host={liveShop.MachineName} share={liveShop.ShareName}");
             await Task.Run(() => TryVerifyRegisteredShare(target, liveShop));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
@@ -935,6 +941,9 @@ public partial class FriendsWindow : Window
             };
             FriendShareAccessTracker.ClearVerified(friend);
             friend.IconKey = PromoteIconKeyToFriendId(_pendingIconKey, friend.Id);
+            SwkLogger.Info(
+                $"Investigation.RegisterFromShopInfoAsync.VerifyStart: friend={GetFriendLabel(friend)} " +
+                $"host={_activeShopInfo.MachineName} share={_activeShopInfo.ShareName}");
             await Task.Run(() => TryVerifyRegisteredShare(friend, _activeShopInfo!));
 
             List<Friend> all = FriendsRepository.LoadAll().ToList();
@@ -1281,12 +1290,19 @@ public partial class FriendsWindow : Window
                 return false;
             }
 
-            foreach (string path in BuildFriendUncCandidates(friend, shopInfo))
+            List<string> candidates = BuildFriendUncCandidates(friend, shopInfo);
+            SwkLogger.Info(
+                $"Investigation.TryVerifyRegisteredShare.Start: friend={GetFriendLabel(friend)} " +
+                $"host={shopInfo.MachineName} share={shopInfo.ShareName} candidates={string.Join(" | ", candidates)}");
+
+            foreach (string path in candidates)
             {
                 if (CanEnumerateShare(path))
                 {
                     FriendShareAccessTracker.MarkVerified(friend, shopInfo);
                     SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare ok (existing session): {path}");
+                    SwkLogger.Info(
+                        $"Investigation.TryVerifyRegisteredShare.SuccessExisting: friend={GetFriendLabel(friend)} path={path}");
                     return true;
                 }
 
@@ -1295,11 +1311,15 @@ public partial class FriendsWindow : Window
                 {
                     FriendShareAccessTracker.MarkVerified(friend, shopInfo);
                     SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare ok: {path}");
+                    SwkLogger.Info(
+                        $"Investigation.TryVerifyRegisteredShare.SuccessReconnect: friend={GetFriendLabel(friend)} path={path}");
                     return true;
                 }
             }
 
             SwkLogger.Debug($"FriendsWindow.TryVerifyRegisteredShare failed: friend={friend.Id}");
+            SwkLogger.Info(
+                $"Investigation.TryVerifyRegisteredShare.Fail: friend={GetFriendLabel(friend)} candidates={string.Join(" | ", candidates)}");
             return false;
         }
         catch (Exception ex)

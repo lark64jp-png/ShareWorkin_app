@@ -48,7 +48,13 @@ public static class SwkLogger
                 File.AppendAllText(filePath, line, Encoding.UTF8);
             }
 
-            SwkHistoryJournal.AppendLog(level, message, targetName: targetName, pathText: pathText);
+            // Debug/Info を履歴ジャーナルへも毎回複製すると、
+            // 一覧更新のたびに追加I/Oが増え、体感遅延につながる。
+            // 利用者確認に値する警告以上だけ履歴側へ流す。
+            if (level >= SwkLogLevel.Warn)
+            {
+                SwkHistoryJournal.AppendLog(level, message, targetName: targetName, pathText: pathText);
+            }
         }
         catch
         {
