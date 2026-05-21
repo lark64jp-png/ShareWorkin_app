@@ -410,9 +410,9 @@
                                                         <TextBlock Text="{Binding SubfolderBadgeText}"
                                                                    HorizontalAlignment="Right"
                                                                    VerticalAlignment="Bottom"
-                                                                   FontSize="7"
-                                                                   FontWeight="Bold"
-                                                                   Foreground="{Binding IconStrokeBrush}"
+                                                                   FontSize="8"
+                                                                   FontWeight="Black"
+                                                                   Foreground="#8B5E00"
                                                                    Padding="0" />
                                                     </Grid>
                                                     <TextBlock Text="{Binding Name}"
