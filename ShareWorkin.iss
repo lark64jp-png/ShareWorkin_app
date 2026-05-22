@@ -383,6 +383,24 @@ begin
     'タスクマネージャーから手動で終了してください。', mbError, MB_OK);
 end;
 
+function WaitForProcessStart(FileName: String; TimeoutMs: Integer): Boolean;
+var
+  ElapsedMs: Integer;
+begin
+  Result := False;
+  ElapsedMs := 0;
+  while ElapsedMs < TimeoutMs do
+  begin
+    if IsProcessRunning(FileName) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(200);
+    ElapsedMs := ElapsedMs + 200;
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
@@ -554,6 +572,19 @@ begin
     MsgBox('ShareWorkinTray の起動に失敗しました。' + #13#10 +
       'インストール直後に共有を開けない場合があります。' + #13#10 +
       'Windows の警告表示が出ていないか確認してください。',
+      mbError, MB_OK);
+  end;
+end;
+
+function LaunchInstalledAppOrWarn(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{app}\' + APP_EXE), '', ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
+  if not Result then
+  begin
+    MsgBox(APP_NAME + ' はインストールされましたが、画面の起動に失敗しました。' + #13#10 +
+      'デスクトップまたはスタートメニューの ShareWorkin を開いてください。',
       mbError, MB_OK);
   end;
 end;
@@ -1065,6 +1096,7 @@ var
   FirewallReady: Boolean;
   TaskReady: Boolean;
   TrayReady: Boolean;
+  TrayProcessReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1091,18 +1123,33 @@ begin
 
       TaskReady := CreateScheduledTaskOrWarn();
       if TaskReady then
-        TrayReady := RunScheduledTaskOrWarn()
+      begin
+        TrayReady := RunScheduledTaskOrWarn();
+        TrayProcessReady := TrayReady and WaitForProcessStart(TRAY_EXE, 12000);
+      end
       else
+      begin
         TrayReady := False;
+        TrayProcessReady := False;
+      end;
 
-      if FirewallReady and TaskReady and TrayReady then
+      if FirewallReady and TaskReady and TrayReady and TrayProcessReady then
+      begin
         MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
-          '数秒待ってから、デスクトップまたはスタートメニューの ShareWorkin を開いてください。',
-          mbInformation, MB_OK)
+          'Tray の起動を確認したので、このあと ShareWorkin を開きます。',
+          mbInformation, MB_OK);
+        LaunchInstalledAppOrWarn();
+      end
       else
+      begin
+        if TrayReady and not TrayProcessReady then
+          MsgBox('ShareWorkinTray の起動確認が間に合いませんでした。' + #13#10 +
+            'Windows 11 の確認表示や保護機能で遅れている可能性があります。',
+            mbError, MB_OK);
         MsgBox(APP_NAME + ' のファイル配置は完了しましたが、Windows 11 の保護設定または起動設定により、共有開始の準備が不完全です。' + #13#10 +
           '管理者として再実行し、Windows の警告や確認画面を許可してください。',
           mbError, MB_OK);
+      end;
     end;
   end;
 end;
