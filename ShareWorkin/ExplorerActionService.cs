@@ -103,6 +103,254 @@ public sealed class CreateFolderRequest
 
 public static class ExplorerActionService
 {
+    public static ExplorerActionResult ValidateMoveTarget(MoveItemRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
+        {
+            return Blocked("Move", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath));
+        }
+
+        if (request.IsHoldFolderPath(request.SourcePath))
+        {
+            return Blocked("Move", "保留は移せません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - hold folder: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
+        }
+
+        bool sourceIsDirectory = Directory.Exists(request.SourcePath);
+        bool sourceIsFile = File.Exists(request.SourcePath);
+        if (!sourceIsDirectory && !sourceIsFile)
+        {
+            return Blocked("Move", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
+        }
+
+        string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
+        if (string.Equals(
+                Path.GetFullPath(sourceParent),
+                Path.GetFullPath(request.DestinationFolder),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return Blocked("Move", "同じ場所には移せません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - same location: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: sourceParent);
+        }
+
+        if (request.IsHoldFolderPath(request.DestinationFolder))
+        {
+            return Blocked("Move", "保留へは保留操作でしまってください。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - destination is hold folder: {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
+        }
+
+        if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
+        {
+            return Blocked("Move", "その中へは移せません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
+        }
+
+        string sourceName = Path.GetFileName(request.SourcePath);
+        string destinationPath = Path.Combine(request.DestinationFolder, sourceName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            return Blocked("Move", "同じ名前があるので移せません。",
+                $"Explorer[{request.ModeLabel}]: Move validation blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"移動元: {sourceParent}");
+        }
+
+        return new ExplorerActionResult
+        {
+            State = ExplorerActionState.Success,
+            EventType = "Move",
+            TargetName = sourceName,
+            PathText = request.DestinationFolder,
+            SourcePath = request.SourcePath,
+            SourceParent = sourceParent,
+            DestinationPath = destinationPath,
+            DestinationFolder = request.DestinationFolder,
+        };
+    }
+
+    public static ExplorerActionResult ValidateCopyTarget(CopyItemRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
+        {
+            return Blocked("Copy", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath));
+        }
+
+        if (request.IsHoldFolderPath(request.SourcePath))
+        {
+            return Blocked("Copy", "保留はコピーできません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - hold folder: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
+        }
+
+        bool sourceIsDirectory = Directory.Exists(request.SourcePath);
+        bool sourceIsFile = File.Exists(request.SourcePath);
+        if (!sourceIsDirectory && !sourceIsFile)
+        {
+            return Blocked("Copy", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
+        }
+
+        string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
+        if (string.Equals(
+                Path.GetFullPath(sourceParent),
+                Path.GetFullPath(request.DestinationFolder),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return Blocked("Copy", "同じ場所にはコピーできません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - same location: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: sourceParent);
+        }
+
+        if (request.IsHoldFolderPath(request.DestinationFolder))
+        {
+            return Blocked("Copy", "保留へは保留操作でしまってください。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - destination is hold folder: {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
+        }
+
+        if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
+        {
+            return Blocked("Copy", "その中へはコピーできません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
+        }
+
+        string sourceName = Path.GetFileName(request.SourcePath);
+        string destinationPath = Path.Combine(request.DestinationFolder, sourceName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            return Blocked("Copy", "同じ名前があるのでコピーできません。",
+                $"Explorer[{request.ModeLabel}]: Copy validation blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"コピー元: {sourceParent}");
+        }
+
+        return new ExplorerActionResult
+        {
+            State = ExplorerActionState.Success,
+            EventType = "Copy",
+            TargetName = sourceName,
+            PathText = request.DestinationFolder,
+            SourcePath = request.SourcePath,
+            SourceParent = sourceParent,
+            DestinationPath = destinationPath,
+            DestinationFolder = request.DestinationFolder,
+        };
+    }
+
+    public static ExplorerActionResult ValidatePlaceTarget(PlaceExternalItemRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
+        {
+            return Blocked("Place", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Place validation blocked - destination not found: {request.DestinationFolder}",
+                targetName: string.IsNullOrWhiteSpace(request.SourcePath) ? null : Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder);
+        }
+
+        bool sourceIsDirectory = Directory.Exists(request.SourcePath);
+        bool sourceIsFile = File.Exists(request.SourcePath);
+        if (!sourceIsDirectory && !sourceIsFile)
+        {
+            return Blocked("Place", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Place validation blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder);
+        }
+
+        string sourceName = Path.GetFileName(request.SourcePath);
+        string destinationPath = Path.Combine(request.DestinationFolder, sourceName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            return Blocked("Place", $"{sourceName} は同じ名前があるので置けません。",
+                $"Explorer[{request.ModeLabel}]: Place validation blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.DestinationFolder,
+                note: $"配置元: {request.SourcePath}");
+        }
+
+        return new ExplorerActionResult
+        {
+            State = ExplorerActionState.Success,
+            EventType = "Place",
+            TargetName = sourceName,
+            PathText = request.DestinationFolder,
+            SourcePath = request.SourcePath,
+            DestinationPath = destinationPath,
+            DestinationFolder = request.DestinationFolder,
+        };
+    }
+
+    public static ExplorerActionResult ValidateHoldTarget(HoldItemRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SourcePath))
+        {
+            return Blocked("Hold", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Hold validation blocked - empty source");
+        }
+
+        bool sourceIsDirectory = Directory.Exists(request.SourcePath);
+        bool sourceIsFile = File.Exists(request.SourcePath);
+        if (!sourceIsDirectory && !sourceIsFile)
+        {
+            return Blocked("Hold", "その場所が見つかりません。",
+                $"Explorer[{request.ModeLabel}]: Hold validation blocked - source not found: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: Path.GetDirectoryName(request.SourcePath));
+        }
+
+        string sourceName = Path.GetFileName(request.SourcePath);
+        string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
+        string destinationPath = Path.Combine(request.HoldFolderPath, sourceName);
+        if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
+        {
+            return Blocked("Hold", $"{sourceName} は同じ名前があるので保留にできません。",
+                $"Explorer[{request.ModeLabel}]: Hold validation blocked - same name: {destinationPath}",
+                targetName: sourceName,
+                pathText: request.HoldFolderPath,
+                note: $"保留前: {sourceParent}");
+        }
+
+        return new ExplorerActionResult
+        {
+            State = ExplorerActionState.Success,
+            EventType = "Hold",
+            TargetName = sourceName,
+            PathText = request.HoldFolderPath,
+            SourcePath = request.SourcePath,
+            SourceParent = sourceParent,
+            DestinationPath = destinationPath,
+            DestinationFolder = request.HoldFolderPath,
+        };
+    }
+
     public static ExplorerActionResult MoveItem(MoveItemRequest request)
     {
         SwkLogger.Info($"Explorer[{request.ModeLabel}]: Move attempt: {request.SourcePath} -> {request.DestinationFolder}");
@@ -137,15 +385,10 @@ public static class ExplorerActionService
                 Path.GetFullPath(request.DestinationFolder),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return new ExplorerActionResult
-            {
-                State = ExplorerActionState.NoChange,
-                EventType = "Move",
-                Source = "ExplorerActionService.MoveItem",
-                SourcePath = request.SourcePath,
-                SourceParent = sourceParent,
-                DestinationFolder = request.DestinationFolder,
-            };
+            return Blocked("Move", "同じ場所には移せません。",
+                $"Explorer[{request.ModeLabel}]: Move blocked - same location: {request.SourcePath}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: sourceParent);
         }
 
         if (request.IsHoldFolderPath(request.DestinationFolder))

@@ -366,7 +366,12 @@
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   ToolTip="ダブルクリックで中に入るか、開きます。">
                             <ListView.ContextMenu>
-                                <ContextMenu Opened="ShopItemsContextMenu_Opened">
+                                <ContextMenu Opened="ShopItemsContextMenu_Opened"
+                                             Closed="ShopItemsContextMenu_Closed"
+                                             Placement="MousePoint"
+                                             HorizontalOffset="18"
+                                             VerticalOffset="10"
+                                             PreviewMouseLeftButtonDown="ShopItemsContextMenu_PreviewMouseLeftButtonDown">
                                     <MenuItem x:Name="MoveShopItemMenuItem"
                                               Header="リネーム"
                                               Click="RenameShopItemMenuItem_Click" />

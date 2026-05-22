@@ -36,8 +36,7 @@ public partial class MainWindow : Window
     private const string HoldFolderName = "保留";
     private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
     private const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
-    private static readonly bool EnableExplorerOleDropTarget = false;
-    private static readonly bool EnableExternalDragDiagnostics = false;
+    private static readonly bool EnableExplorerOleDropTarget = true;
 
     // Explorer からのドロップを受けやすくするため、WM_DROPFILES 系メッセージも許可しておく。
     [DllImport("user32.dll")] private static extern bool ChangeWindowMessageFilterEx(
@@ -156,6 +155,9 @@ public partial class MainWindow : Window
     private bool _suppressDropdownChange;
     private bool _clickSelectionPending;
     private bool _itemWasSelectedAtPress;
+    private bool _shopItemsContextMenuCommandArmed;
+    private bool _suppressInternalDragUntilLeftButtonRelease;
+    private DateTime _ignoreShopItemsCommandsUntilUtc = DateTime.MinValue;
     private ShopSortField _sortField = ShopSortField.Name;
     private ListSortDirection _sortDirection = ListSortDirection.Ascending;
     private ShopItem? _permissionPopupTarget;
@@ -220,7 +222,6 @@ public partial class MainWindow : Window
             ?.InformationalVersion;
         AppVersionTextBlock.Text = FormatVersionLabel(ver);
         AllowDrop = true;
-        RegisterExternalDragDiagnostics();
         SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
     }
@@ -243,28 +244,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_SourceInitialized(object? sender, EventArgs e)
     {
-        if (EnableExternalDragDiagnostics)
-        {
-            LogDragDropEnvironment();
-        }
         InitializeExternalDragDrop();
-    }
-
-    private void LogDragDropEnvironment()
-    {
-        try
-        {
-            string processPath = Environment.ProcessPath ?? string.Empty;
-            int processId = Environment.ProcessId;
-            bool isAdmin = IsRunningAsAdmin();
-            SwkLogger.Info(
-                $"DragDrop environment: pid={processId}, isAdmin={isAdmin}, " +
-                $"allowDrop={AllowDrop}, exe={processPath}");
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Warn($"LogDragDropEnvironment failed: {ex.Message}");
-        }
     }
 
     private void InitializeExternalDragDrop()
@@ -282,61 +262,6 @@ public partial class MainWindow : Window
         _externalDragDropInitialized = true;
     }
 
-    private void RegisterExternalDragDiagnostics()
-    {
-        if (!EnableExternalDragDiagnostics)
-        {
-            return;
-        }
-
-        AddHandler(System.Windows.DragDrop.PreviewDragEnterEvent,
-            new System.Windows.DragEventHandler(Window_PreviewDragEnter), handledEventsToo: true);
-        AddHandler(System.Windows.DragDrop.PreviewDragOverEvent,
-            new System.Windows.DragEventHandler(Window_PreviewDragOver), handledEventsToo: true);
-        AddHandler(System.Windows.DragDrop.PreviewDropEvent,
-            new System.Windows.DragEventHandler(Window_PreviewDrop), handledEventsToo: true);
-    }
-
-    private void Window_PreviewDragEnter(object sender, System.Windows.DragEventArgs e)
-    {
-        if (!EnableExternalDragDiagnostics)
-        {
-            return;
-        }
-
-        SwkLogger.Info(
-            $"Window PreviewDragEnter: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
-            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
-            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, handled={e.Handled}");
-    }
-
-    private void Window_PreviewDragOver(object sender, System.Windows.DragEventArgs e)
-    {
-        if (!EnableExternalDragDiagnostics)
-        {
-            return;
-        }
-
-        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
-        SwkLogger.Info(
-            $"Window PreviewDragOver: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
-            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
-            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, dest={destination}, handled={e.Handled}");
-    }
-
-    private void Window_PreviewDrop(object sender, System.Windows.DragEventArgs e)
-    {
-        if (!EnableExternalDragDiagnostics)
-        {
-            return;
-        }
-
-        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
-        SwkLogger.Info(
-            $"Window PreviewDrop: fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
-            $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
-            $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, dest={destination}, handled={e.Handled}");
-    }
 
     private void AllowExternalDragDrop()
     {
@@ -389,7 +314,6 @@ public partial class MainWindow : Window
         }
 
         string capturedDestination = destination;
-        SwkLogger.Info($"WM_DROPFILES accepted: count={paths.Count} -> {capturedDestination}");
         _ = Dispatcher.InvokeAsync(async () =>
         {
             BeginProcessing();
@@ -419,10 +343,6 @@ public partial class MainWindow : Window
         if (hr != 0)
         {
             SwkLogger.Warn($"RegisterDragDrop failed: hr=0x{hr:X8}");
-        }
-        else
-        {
-            SwkLogger.Info("RegisterDragDrop ok");
         }
     }
 
@@ -538,7 +458,6 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                SwkLogger.Info($"OLE drop accepted: count={paths.Length} -> {destinationFolder}");
                 await PlaceExternalFilesAsync(paths, destinationFolder);
             }
         }
@@ -1126,6 +1045,32 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         });
     }
 
+    private void AppendUpdateUiHistory(
+        string message,
+        string eventType,
+        HistoryOutcome outcome,
+        string? targetName = null,
+        string? pathText = null,
+        string? note = null,
+        string? source = null,
+        string? sourcePath = null,
+        string? destinationPath = null,
+        string? destinationFolder = null)
+    {
+        AppendHistory(
+            HistoryChannel.Update,
+            message,
+            eventType,
+            outcome,
+            targetName: targetName,
+            pathText: pathText,
+            note: note,
+            source: source,
+            sourcePath: sourcePath,
+            destinationPath: destinationPath,
+            destinationFolder: destinationFolder);
+    }
+
     private static string? NormalizeHistoryTargetName(
         string? targetName,
         string? destinationPath,
@@ -1149,7 +1094,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return string.IsNullOrWhiteSpace(fileName) ? candidate : fileName;
     }
 
-    private void ApplyExplorerActionResult(ExplorerActionResult result)
+    private void ApplyExplorerActionResult(ExplorerActionResult result, bool showAlertDialog = true)
     {
         if (string.IsNullOrWhiteSpace(result.LogMessage) is false)
         {
@@ -1166,6 +1111,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(result.UserMessage) is false)
         {
             SetTransientStatus(result.UserMessage);
+
+            if (showAlertDialog &&
+                (result.State == ExplorerActionState.Blocked || result.State == ExplorerActionState.Failure))
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    result.UserMessage,
+                    "ShareWorkin",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
 
         if (result.ShouldWriteHistory)
@@ -1183,6 +1139,78 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 destinationPath: result.DestinationPath,
                 destinationFolder: result.DestinationFolder);
         }
+    }
+
+    private bool TryValidateBatchOperation(
+        IReadOnlyList<string> sourcePaths,
+        string operationLabel,
+        Func<string, ExplorerActionResult> validate)
+    {
+        if (sourcePaths.Count <= 1)
+        {
+            return true;
+        }
+
+        HashSet<string> targetNames = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string sourcePath in sourcePaths)
+        {
+            string targetName = NormalizeHistoryTargetName(null, null, sourcePath) ?? sourcePath;
+            if (!string.IsNullOrWhiteSpace(targetName) && !targetNames.Add(targetName))
+            {
+                ShowBatchOperationCancelledWarning(
+                    operationLabel,
+                    targetName,
+                    "同じ名前の項目が含まれているため、まとめて処理できません。");
+                return false;
+            }
+
+            ExplorerActionResult validation = validate(sourcePath);
+            if (validation.State == ExplorerActionState.Success)
+            {
+                continue;
+            }
+
+            ShowBatchOperationCancelledWarning(
+                operationLabel,
+                validation.TargetName ?? targetName,
+                string.IsNullOrWhiteSpace(validation.UserMessage)
+                    ? "まとめて処理できない項目が含まれています。"
+                    : validation.UserMessage);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ShowBatchOperationCancelledWarning(string operationLabel, string? targetName, string detailMessage)
+    {
+        const string statusMessage = "操作を中断しました。";
+        SetTransientStatus(statusMessage);
+        AppendUpdateUiHistory(
+            "複数項目の操作を中断しました。",
+            "BatchCancelled",
+            HistoryOutcome.Warning,
+            targetName: targetName,
+            pathText: _currentFolder,
+            note: $"操作: {operationLabel} / 理由: {detailMessage}",
+            source: "MainWindow.batch");
+
+        string message =
+            $"{operationLabel}できない項目が含まれていたため、今回の操作は中断しました。\r\n" +
+            "他の項目も処理していません。";
+
+        if (!string.IsNullOrWhiteSpace(targetName))
+        {
+            message += $"\r\n\r\n対象: {targetName}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(detailMessage))
+        {
+            message += $"\r\n理由: {detailMessage}";
+        }
+
+        SwkLogger.Warn($"Batch {operationLabel} cancelled: target={targetName ?? "-"} detail={detailMessage}");
+        System.Windows.MessageBox.Show(this, message, "ShareWorkin", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private static string GetFriendLabel(Friend friend) =>
@@ -2323,6 +2351,29 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (ShopItemsListView.ContextMenu?.IsOpen == true)
+        {
+            ShopItem? clickedItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
+            ShopItemsListView.ContextMenu.IsOpen = false;
+            SuppressShopItemsCommandsBriefly();
+
+            if (clickedItem is null)
+            {
+                ShopItemsListView.SelectedItems.Clear();
+            }
+            else if (!ShopItemsListView.SelectedItems.Contains(clickedItem))
+            {
+                ShopItemsListView.SelectedItem = clickedItem;
+            }
+
+            _clickSelectionPending = false;
+            _itemWasSelectedAtPress = false;
+            _dragStartItem = null;
+            EndRubberBand();
+            e.Handled = true;
+            return;
+        }
+
         _dragStartPoint = e.GetPosition(null);
         _dragStartItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
         _itemWasSelectedAtPress = false;
@@ -2399,6 +2450,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_suppressInternalDragUntilLeftButtonRelease)
+        {
+            _suppressInternalDragUntilLeftButtonRelease = false;
+            _clickSelectionPending = false;
+            _itemWasSelectedAtPress = false;
+            _dragStartItem = null;
+            EndRubberBand();
+            return;
+        }
+
         bool wasSelected = _itemWasSelectedAtPress;
         ShopItem? pressedItem = _dragStartItem;
         _itemWasSelectedAtPress = false;
@@ -2422,6 +2483,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (e.LeftButton != MouseButtonState.Pressed)
         {
+            EndRubberBand();
+            return;
+        }
+
+        if (_suppressInternalDragUntilLeftButtonRelease)
+        {
+            _clickSelectionPending = false;
+            _itemWasSelectedAtPress = false;
+            _dragStartItem = null;
             EndRubberBand();
             return;
         }
@@ -2487,6 +2557,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
+        _suppressInternalDragUntilLeftButtonRelease = true;
+        _clickSelectionPending = false;
+        _itemWasSelectedAtPress = false;
+        EndRubberBand();
+
         ShopItem? item = GetShopItemFromSource(e.OriginalSource as DependencyObject);
         if (item is null)
         {
@@ -2531,6 +2606,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void PasteFromWindowsMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         PasteExternalFilesFromClipboard();
     }
 
@@ -2539,6 +2619,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
             SetTransientStatus("コピー先のフォルダーが見つかりません。");
+            AppendUpdateUiHistory(
+                "Windows の貼り付けを始められませんでした。",
+                "PasteFromWindows",
+                HistoryOutcome.Warning,
+                pathText: _currentFolder,
+                note: "コピー先のフォルダーが見つかりません。",
+                source: "MainWindow.paste");
             return;
         }
 
@@ -2548,6 +2635,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!System.Windows.Clipboard.ContainsFileDropList())
             {
                 SetTransientStatus("Windows のコピー内容がありません。");
+                AppendUpdateUiHistory(
+                    "Windows の貼り付けを始められませんでした。",
+                    "PasteFromWindows",
+                    HistoryOutcome.Warning,
+                    pathText: _currentFolder,
+                    note: "Windows のコピー内容がありません。",
+                    source: "MainWindow.paste");
                 return;
             }
 
@@ -2557,6 +2651,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             SwkLogger.Warn($"PasteExternalFilesFromClipboard failed: {ex.Message}");
             SetTransientStatus("Windows のコピー内容を読み取れませんでした。");
+            AppendUpdateUiHistory(
+                "Windows の貼り付けを始められませんでした。",
+                "PasteFromWindows",
+                HistoryOutcome.Warning,
+                pathText: _currentFolder,
+                note: $"Windows のコピー内容を読み取れませんでした。({ex.Message})",
+                source: "MainWindow.paste");
             return;
         }
 
@@ -2566,6 +2667,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (paths.Count == 0)
         {
             SetTransientStatus("Windows のコピー内容がありません。");
+            AppendUpdateUiHistory(
+                "Windows の貼り付けを始められませんでした。",
+                "PasteFromWindows",
+                HistoryOutcome.Warning,
+                pathText: _currentFolder,
+                note: "Windows のコピー内容がありません。",
+                source: "MainWindow.paste");
             return;
         }
 
@@ -2702,15 +2810,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
-        if (EnableExternalDragDiagnostics)
-        {
-            SwkLogger.Info(
-                $"WPF DragEnter: current={_currentFolder}, exists={Directory.Exists(_currentFolder ?? string.Empty)}, " +
-                $"mode={_currentMode}, fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
-                $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
-                $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, key={e.KeyStates}");
-        }
-
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
         string? dragDestinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
@@ -2752,11 +2851,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragLeave(object sender, System.Windows.DragEventArgs e)
     {
-        if (EnableExternalDragDiagnostics)
-        {
-            SwkLogger.Info($"WPF DragLeave: mouseOver={ShopItemsListView.IsMouseOver}, handled={e.Handled}");
-        }
-
         if (!ShopItemsListView.IsMouseOver)
         {
             ClearDropTargetHighlight();
@@ -2766,15 +2860,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async void ShopItemsListView_Drop(object sender, System.Windows.DragEventArgs e)
     {
-        if (EnableExternalDragDiagnostics)
-        {
-            SwkLogger.Info(
-                $"WPF Drop: current={_currentFolder}, mode={_currentMode}, " +
-                $"fileDrop={e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop)}, " +
-                $"internal1={e.Data.GetDataPresent(InternalDragPathFormat)}, " +
-                $"internalN={e.Data.GetDataPresent(InternalDragPathsFormat)}, key={e.KeyStates}");
-        }
-
         // DragOver で特定済みのフォルダを Drop 前にキャプチャ（ClearDropTargetHighlight で消える前に）
         ShopItem? highlightedFolder = _dropTargetItem;
         ClearDropTargetHighlight();
@@ -2838,6 +2923,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!Directory.Exists(destinationFolder)) return;
 
+        string modeLabel = _currentMode.ToString();
+
         if (_currentMode == DisplayMode.FriendShop && !IsDirectoryWritable(destinationFolder))
         {
             SwkLogger.Info($"Explorer[{_currentMode}]: Place blocked - not writable: {destinationFolder}");
@@ -2845,11 +2932,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        if (!TryValidateBatchOperation(
+                paths,
+                "配置",
+                sourcePath => ExplorerActionService.ValidatePlaceTarget(new PlaceExternalItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                })))
+        {
+            return;
+        }
+
         int placedCount = 0;
         string? lastPlacedName = null;
         var progress = await CreateFileProgressAsync("コピー");
         int total = paths.Count;
-        string modeLabel = _currentMode.ToString();
         BeginDeferredPermissionSave();
         try
         {
@@ -2868,7 +2968,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     BeforeWrite = SuppressExternalChangeNotifications,
                 }));
 
-                ApplyExplorerActionResult(result);
+                ApplyExplorerActionResult(result, showAlertDialog: false);
 
                 if (result.ShouldRefreshUi &&
                     !string.IsNullOrWhiteSpace(result.DestinationPath) &&
@@ -2957,8 +3057,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task MoveInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        var progress = await CreateFileProgressAsync("移動");
-        (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(sourcePaths, destinationFolder, progress);
+            var progress = await CreateFileProgressAsync("移動");
+            (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
+                sourcePaths,
+                destinationFolder,
+                progress);
 
         if (movedCount > 0)
         {
@@ -3029,6 +3132,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
+
+        if (!TryValidateBatchOperation(
+                sourcePaths,
+                "コピー",
+                sourcePath => ExplorerActionService.ValidateCopyTarget(new CopyItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    IsHoldFolderPath = IsHoldFolderPath,
+                    IsUnderFolder = IsUnderFolder,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                })))
+        {
+            return;
+        }
+
         var progress = await CreateFileProgressAsync("コピー");
         BeginDeferredPermissionSave();
         try
@@ -3057,7 +3178,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                ApplyExplorerActionResult(result);
+                ApplyExplorerActionResult(result, showAlertDialog: false);
                 if (!result.ShouldRefreshUi ||
                     string.IsNullOrWhiteSpace(result.SourcePath) ||
                     string.IsNullOrWhiteSpace(result.SourceParent) ||
@@ -3113,6 +3234,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsContextMenu_Opened(object sender, RoutedEventArgs e)
     {
+        _suppressInternalDragUntilLeftButtonRelease = true;
+        _clickSelectionPending = false;
+        _itemWasSelectedAtPress = false;
+        _dragStartItem = null;
+        _shopItemsContextMenuCommandArmed = false;
+        EndRubberBand();
+
         ShopItem? selected = ShopItemsListView.SelectedItem as ShopItem;
         int selectedCount = ShopItemsListView.SelectedItems.Count;
         bool inHoldMode = _currentMode == DisplayMode.Hold;
@@ -3156,8 +3284,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private void ShopItemsContextMenu_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _shopItemsContextMenuCommandArmed = FindAncestor<MenuItem>(e.OriginalSource as DependencyObject) is not null;
+    }
+
     private void RenameShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         if (ShopItemsListView.SelectedItem is not ShopItem item)
         {
             return;
@@ -3217,16 +3355,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private async void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
-        await MoveSelectedItemsToFolderAsync();
+        await MoveSelectedItemsToFolderAsync(sender);
 
-    private async Task MoveSelectedItemsToFolderAsync()
+    private async Task MoveSelectedItemsToFolderAsync(object? sender = null)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
             .ToList();
         if (items.Count == 0) return;
 
-        MoveDestinationDialog dialog = new(_shopFolder, items[0].FullPath)
+        List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
+
+        MoveDestinationDialog dialog = new(_shopFolder, sourcePaths)
         {
             Owner = this
         };
@@ -3236,21 +3381,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? destinationFolder = dialog.SelectedFolderPath;
         if (string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder)) return;
 
-        string sourceParent = Path.GetDirectoryName(items[0].FullPath) ?? string.Empty;
-        if (string.Equals(
-                Path.GetFullPath(destinationFolder),
-                Path.GetFullPath(sourceParent),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
         BeginProcessing();
         try
         {
             var progress = await CreateFileProgressAsync("移動");
             (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
-                items.Select(static item => item.FullPath).ToList(), destinationFolder, progress);
+                sourcePaths,
+                destinationFolder,
+                progress);
 
             if (movedCount > 0)
             {
@@ -3269,6 +3407,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async void HoldShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
             .ToList();
@@ -3305,6 +3448,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
 
+        if (!TryValidateBatchOperation(
+                sourcePaths,
+                "保留",
+                sourcePath => ExplorerActionService.ValidateHoldTarget(new HoldItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    HoldFolderPath = holdFolderPath,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                })))
+        {
+            return;
+        }
+
         for (int i = 0; i < total; i++)
         {
             string sourcePath = sourcePaths[i];
@@ -3336,7 +3494,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 BeforeWrite = SuppressExternalChangeNotifications,
             }));
 
-            ApplyExplorerActionResult(result);
+            ApplyExplorerActionResult(result, showAlertDialog: false);
 
             if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
             {
@@ -3370,6 +3528,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async void DeleteShopItemMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         List<ShopItem> items = ShopItemsListView.SelectedItems.Cast<ShopItem>()
             .Where(i => !i.IsHoldFolder)
             .ToList();
@@ -3409,7 +3572,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     BeforeWrite = SuppressExternalChangeNotifications,
                 }));
 
-                ApplyExplorerActionResult(result);
+                ApplyExplorerActionResult(result, showAlertDialog: false);
 
                 if (result.ShouldRefreshUi && !string.IsNullOrWhiteSpace(result.SourceParent))
                 {
@@ -3438,6 +3601,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void AddFolderMenuItem_Click(object sender, RoutedEventArgs e)
     {
+        if (!ShouldProcessShopItemsContextMenuCommand(sender))
+        {
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_currentFolder))
         {
             return;
@@ -3552,7 +3720,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         RenameShopItemMenuItem_Click(sender, e);
 
     private async void ActionBarMoveButton_Click(object sender, RoutedEventArgs e) =>
-        await MoveSelectedItemsToFolderAsync();
+        await MoveSelectedItemsToFolderAsync(sender);
 
     private void ActionBarHoldButton_Click(object sender, RoutedEventArgs e) =>
         HoldShopItemMenuItem_Click(sender, e);
@@ -3577,7 +3745,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             var progress = await CreateFileProgressAsync("戻し");
             (movedCount, lastName) = await ExecuteMoveExplorerActionsAsync(
-                items.Select(static item => item.FullPath).ToList(), _shopFolder!, progress);
+                items.Select(static item => item.FullPath).ToList(),
+                _shopFolder!,
+                progress);
         }
         finally
         {
@@ -3603,6 +3773,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
+
+        if (!TryValidateBatchOperation(
+                sourcePaths,
+                "移動",
+                sourcePath => ExplorerActionService.ValidateMoveTarget(new MoveItemRequest
+                {
+                    ModeLabel = modeLabel,
+                    SourcePath = sourcePath,
+                    DestinationFolder = destinationFolder,
+                    IsHoldFolderPath = IsHoldFolderPath,
+                    IsUnderFolder = IsUnderFolder,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                })))
+        {
+            return (0, null);
+        }
+
         BeginDeferredPermissionSave();
         try
         {
@@ -3630,7 +3818,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                ApplyExplorerActionResult(result);
+                ApplyExplorerActionResult(result, showAlertDialog: false);
 
                 if (!result.ShouldRefreshUi ||
                     string.IsNullOrWhiteSpace(result.SourcePath) ||
@@ -4474,12 +4662,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(folderPath))
         {
             SetTransientStatus("見に行ける場所がありません。");
+            AppendUpdateUiHistory(
+                "フォルダーを開けませんでした。",
+                "VisitShop",
+                HistoryOutcome.Warning,
+                pathText: folderPath,
+                note: "見に行ける場所がありません。",
+                source: "MainWindow.visit");
             return;
         }
 
         if (!Directory.Exists(folderPath))
         {
             SetTransientStatus("その場所が見つかりません。");
+            AppendUpdateUiHistory(
+                "フォルダーを開けませんでした。",
+                "VisitShop",
+                HistoryOutcome.Warning,
+                pathText: folderPath,
+                note: "その場所が見つかりません。",
+                source: "MainWindow.visit");
             return;
         }
 
@@ -4494,7 +4696,69 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             SetTransientStatus("その場所へ行けませんでした。");
+            AppendUpdateUiHistory(
+                "フォルダーを開けませんでした。",
+                "VisitShop",
+                HistoryOutcome.Warning,
+                pathText: folderPath,
+                note: $"その場所へ行けませんでした。({ex.Message})",
+                source: "MainWindow.visit");
         }
+    }
+
+    private void ShopItemsContextMenu_Closed(object sender, RoutedEventArgs e)
+    {
+        if (!_shopItemsContextMenuCommandArmed)
+        {
+            SuppressShopItemsCommandsBriefly();
+        }
+
+        _clickSelectionPending = false;
+        _itemWasSelectedAtPress = false;
+        _dragStartItem = null;
+        _shopItemsContextMenuCommandArmed = false;
+        EndRubberBand();
+    }
+
+    private bool ShouldProcessShopItemsContextMenuCommand(object? sender)
+    {
+        if (sender is not MenuItem)
+        {
+            if (DateTime.UtcNow < _ignoreShopItemsCommandsUntilUtc)
+            {
+                _ignoreShopItemsCommandsUntilUtc = DateTime.MinValue;
+                return false;
+            }
+
+            return true;
+        }
+
+        bool armed = _shopItemsContextMenuCommandArmed;
+        _shopItemsContextMenuCommandArmed = false;
+        _ignoreShopItemsCommandsUntilUtc = DateTime.MinValue;
+        return armed;
+    }
+
+    private void SuppressShopItemsCommandsBriefly()
+    {
+        _ignoreShopItemsCommandsUntilUtc = DateTime.UtcNow.AddMilliseconds(400);
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? source)
+        where T : DependencyObject
+    {
+        DependencyObject? current = source;
+        while (current is not null)
+        {
+            if (current is T matched)
+            {
+                return matched;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private void SearchFromShopRoot(string searchText)
@@ -4512,6 +4776,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(searchRoot) || !Directory.Exists(searchRoot))
         {
             SetTransientStatus("検索できるお店がありません。");
+            AppendUpdateUiHistory(
+                $"「{query}」を検索できませんでした。",
+                "Search",
+                HistoryOutcome.Warning,
+                pathText: searchRoot,
+                note: "検索できるお店がありません。",
+                source: "MainWindow.search");
             return;
         }
 
@@ -4519,6 +4790,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (string.IsNullOrWhiteSpace(match))
         {
             SetTransientStatus("見つかりませんでした。");
+            AppendUpdateUiHistory(
+                $"「{query}」は見つかりませんでした。",
+                "Search",
+                HistoryOutcome.Info,
+                pathText: searchRoot,
+                note: $"検索語: {query}",
+                source: "MainWindow.search");
             return;
         }
 
@@ -4581,6 +4859,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!File.Exists(path) && !Directory.Exists(path))
         {
             SetTransientStatus("その場所が見つかりません。");
+            AppendUpdateUiHistory(
+                "項目を開けませんでした。",
+                "OpenPath",
+                HistoryOutcome.Warning,
+                pathText: Path.GetDirectoryName(path),
+                sourcePath: path,
+                note: "その場所が見つかりません。",
+                source: "MainWindow.open");
             return;
         }
 
@@ -4595,6 +4881,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             SetTransientStatus("開けませんでした。");
+            AppendUpdateUiHistory(
+                "項目を開けませんでした。",
+                "OpenPath",
+                HistoryOutcome.Warning,
+                pathText: Path.GetDirectoryName(path),
+                sourcePath: path,
+                note: $"開けませんでした。({ex.Message})",
+                source: "MainWindow.open");
         }
     }
 
@@ -4607,6 +4901,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!Directory.Exists(folderPath))
         {
             SetTransientStatus("その場所が見つかりません。");
+            AppendUpdateUiHistory(
+                "移動先を開けませんでした。",
+                "Navigate",
+                HistoryOutcome.Warning,
+                pathText: Path.GetDirectoryName(folderPath),
+                destinationPath: folderPath,
+                note: "その場所が見つかりません。",
+                source: "MainWindow.navigate");
             return;
         }
 
@@ -6390,10 +6692,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
-            if (EnableExternalDragDiagnostics)
-            {
-                SwkLogger.Info($"CanAcceptDrop: reject - current folder missing: {_currentFolder}");
-            }
             return false;
         }
 
@@ -6404,37 +6702,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (!hasSupportedData)
         {
-            if (EnableExternalDragDiagnostics)
-            {
-                SwkLogger.Info("CanAcceptDrop: reject - unsupported data formats");
-            }
             return false;
         }
 
         string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
         if (string.IsNullOrWhiteSpace(destination) || !Directory.Exists(destination))
         {
-            if (EnableExternalDragDiagnostics)
-            {
-                SwkLogger.Info($"CanAcceptDrop: reject - destination missing: {destination}");
-            }
             return false;
         }
 
         if (_currentMode == DisplayMode.FriendShop &&
             e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
         {
-            bool writable = IsDirectoryWritable(destination);
-            if (EnableExternalDragDiagnostics)
-            {
-                SwkLogger.Info($"CanAcceptDrop: FriendShop destination={destination}, writable={writable}");
-            }
-            return writable;
-        }
-
-        if (EnableExternalDragDiagnostics)
-        {
-            SwkLogger.Info($"CanAcceptDrop: accept - destination={destination}, mode={_currentMode}");
+            return IsDirectoryWritable(destination);
         }
 
         return true;

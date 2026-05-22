@@ -8,20 +8,25 @@ namespace ShareWorkin;
 public partial class MoveDestinationDialog : Window
 {
     private readonly string? _shopFolder;
-    private readonly string _sourcePath;
-    private readonly string _sourceParent;
-    private readonly string _sourceFullPath;
+    private readonly HashSet<string> _sourceParents;
+    private readonly HashSet<string> _sourceFullPaths;
 
     public string? SelectedFolderPath { get; private set; }
 
-    public MoveDestinationDialog(string? shopFolder, string sourcePath)
+    public MoveDestinationDialog(string? shopFolder, IReadOnlyList<string> sourcePaths)
     {
         InitializeComponent();
 
         _shopFolder = shopFolder;
-        _sourcePath = sourcePath;
-        _sourceParent = Path.GetDirectoryName(sourcePath) ?? string.Empty;
-        _sourceFullPath = Path.GetFullPath(sourcePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        _sourceParents = sourcePaths
+            .Select(path => Path.GetDirectoryName(path) ?? string.Empty)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _sourceFullPaths = sourcePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         BuildTree();
     }
@@ -123,18 +128,14 @@ public partial class MoveDestinationDialog : Window
 
     private bool IsSourceFolder(string path)
     {
-        string full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return string.Equals(full, _sourceFullPath, StringComparison.OrdinalIgnoreCase);
+        return _sourceFullPaths.Contains(NormalizePath(path));
     }
 
     private void DestinationTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (e.NewValue is TreeViewItem { Tag: string path } && Directory.Exists(path))
         {
-            bool isSourceParent = string.Equals(
-                Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                Path.GetFullPath(_sourceParent).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                StringComparison.OrdinalIgnoreCase);
+            bool isSourceParent = _sourceParents.Contains(NormalizePath(path));
             MoveButton.IsEnabled = !isSourceParent;
             SelectedFolderPath = path;
         }
@@ -160,4 +161,7 @@ public partial class MoveDestinationDialog : Window
         DialogResult = false;
         Close();
     }
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }
