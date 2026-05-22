@@ -57,6 +57,9 @@ if (Test-Path -LiteralPath $publishDir) {
 
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 $cleanupPatterns = @(
+    "ShareWorkin_v1.19_install*.exe",
+    "ShareWorkin_v1.19_SHA256*.txt",
+    "ShareWorkin_v1.19_Setup.zip",
     "ShareWorkin_v1.18_install*.exe",
     "ShareWorkin_v1.18_SHA256*.txt",
     "ShareWorkin_v1.18_Setup.zip",

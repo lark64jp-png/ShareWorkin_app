@@ -260,6 +260,16 @@ public partial class HistoryWindow : Window
             return new MediaSolidColorBrush(MediaColor.FromRgb(255, 242, 236));
         }
 
+        if (string.Equals(entry.EventType, "Delete", StringComparison.OrdinalIgnoreCase))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 228, 228));
+        }
+
+        if (string.Equals(entry.EventType, "Hold", StringComparison.OrdinalIgnoreCase))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(255, 242, 236));
+        }
+
         if (string.Equals(entry.EventType, "PermissionCascade", StringComparison.OrdinalIgnoreCase))
         {
             return new MediaSolidColorBrush(MediaColor.FromRgb(255, 248, 222));

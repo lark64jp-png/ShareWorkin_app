@@ -108,8 +108,6 @@
 
                 <DataGrid Grid.Row="0"
                           x:Name="HistoryDataGrid"
-                          RowBackground="White"
-                          AlternatingRowBackground="#FAF8F3"
                           Margin="8,8,8,0"
                           AutoGenerateColumns="False"
                           IsReadOnly="True"
