@@ -47,6 +47,14 @@ public partial class MainWindow : Window
     private const uint WM_DROPFILES = 0x0233;
     private const uint WM_COPYGLOBALDATA = 0x0049;
     private const uint WM_COPYDATA = 0x004A;
+    private const uint SHCNE_RENAMEITEM = 0x00000001;
+    private const uint SHCNE_CREATE = 0x00000002;
+    private const uint SHCNE_DELETE = 0x00000004;
+    private const uint SHCNE_ATTRIBUTES = 0x00000800;
+    private const uint SHCNE_UPDATEDIR = 0x00001000;
+    private const uint SHCNE_UPDATEITEM = 0x00002000;
+    private const uint SHCNE_RENAMEFOLDER = 0x00020000;
+    private const uint SHCNF_PATHW = 0x0005;
 
     [DllImport("shell32.dll")]
     private static extern void DragAcceptFiles(IntPtr hwnd, bool accept);
@@ -54,6 +62,8 @@ public partial class MainWindow : Window
     private static extern uint DragQueryFile(IntPtr hDrop, uint iFile, System.Text.StringBuilder? lpszFile, uint cch);
     [DllImport("shell32.dll")]
     private static extern void DragFinish(IntPtr hDrop);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(uint wEventId, uint uFlags, string? dwItem1, string? dwItem2);
     [DllImport("ole32.dll")]
     private static extern int RevokeDragDrop(IntPtr hwnd);
     [DllImport("ole32.dll")]
@@ -125,6 +135,8 @@ public partial class MainWindow : Window
     private string? _shopFolder;
     private string? _currentFolder;
     private string? _activeFriendShopRootPath;
+    private string? _pcOwnerSid;
+    private string? _pcOwnerAccount;
     private string? _pendingFocusName;
     private ShopItem? _dropTargetItem;
     private Popup? _dragPreviewPopup;
@@ -137,6 +149,8 @@ public partial class MainWindow : Window
     private System.Windows.Point _rubberBandOrigin;
     private System.Windows.Threading.DispatcherTimer? _renameTimer;
     private ShopItem? _renameTimerTarget;
+    private DispatcherTimer? _deferredRefreshTimer;
+    private string? _deferredRefreshFolderPath;
     private string _breadcrumbFullText = string.Empty;
     private DateTime _suppressExternalChangeNotificationsUntil = DateTime.MinValue;
     private DateTime _lastExternalChangeNotificationAt = DateTime.MinValue;
@@ -906,10 +920,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static void SetPrivateHoldFolderPermissions(string folderPath)
     {
-        string? ownerSid = WindowsIdentity.GetCurrent().User?.Value;
+        string? ownerSid = PcOwnerIdentity.GetEffectiveOwnerSid();
         if (string.IsNullOrWhiteSpace(ownerSid))
         {
-            throw new InvalidOperationException("Current Windows user could not be resolved.");
+            throw new InvalidOperationException("PC owner could not be resolved.");
         }
 
         using Process process = new()
@@ -923,6 +937,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         };
 
         process.StartInfo.ArgumentList.Add(folderPath);
+        process.StartInfo.ArgumentList.Add("/setowner");
+        process.StartInfo.ArgumentList.Add($"*{ownerSid}");
         process.StartInfo.ArgumentList.Add("/inheritance:r");
         process.StartInfo.ArgumentList.Add("/grant:r");
         process.StartInfo.ArgumentList.Add($"*{ownerSid}:(OI)(CI)F");
@@ -1138,6 +1154,121 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 sourcePath: result.SourcePath,
                 destinationPath: result.DestinationPath,
                 destinationFolder: result.DestinationFolder);
+        }
+
+        if (result.State == ExplorerActionState.Success)
+        {
+            NotifyShellOfExplorerAction(result);
+        }
+    }
+
+    private void NotifyShellOfExplorerAction(ExplorerActionResult result)
+    {
+        try
+        {
+            switch (result.EventType)
+            {
+                case "Rename":
+                {
+                    bool isDirectory = !string.IsNullOrWhiteSpace(result.DestinationPath) &&
+                        Directory.Exists(result.DestinationPath);
+                    SHChangeNotify(
+                        isDirectory ? SHCNE_RENAMEFOLDER : SHCNE_RENAMEITEM,
+                        SHCNF_PATHW,
+                        result.SourcePath,
+                        result.DestinationPath);
+                    break;
+                }
+                case "CreateFolder":
+                case "CreateFile":
+                    SHChangeNotify(SHCNE_CREATE, SHCNF_PATHW, result.DestinationPath, null);
+                    break;
+                case "Delete":
+                    SHChangeNotify(SHCNE_DELETE, SHCNF_PATHW, result.SourcePath, null);
+                    break;
+            }
+
+            string? parent = result.DestinationFolder ??
+                             result.SourceParent ??
+                             Path.GetDirectoryName(result.SourcePath ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, parent, null);
+                SHChangeNotify(SHCNE_ATTRIBUTES, SHCNF_PATHW, parent, null);
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.DestinationPath))
+            {
+                SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, result.DestinationPath, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"NotifyShellOfExplorerAction skipped: {ex.Message}");
+        }
+    }
+
+    private void CancelDeferredRefresh()
+    {
+        _deferredRefreshTimer?.Stop();
+        _deferredRefreshFolderPath = null;
+    }
+
+    private void ScheduleRefreshShopItemsIfCurrentFolder(string folderPath, TimeSpan delay)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return;
+        }
+
+        string targetFolderPath;
+        try
+        {
+            targetFolderPath = Path.GetFullPath(folderPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        if (_deferredRefreshTimer is null)
+        {
+            _deferredRefreshTimer = new DispatcherTimer();
+            _deferredRefreshTimer.Tick += DeferredRefreshTimer_Tick;
+        }
+
+        _deferredRefreshFolderPath = targetFolderPath;
+        _deferredRefreshTimer.Stop();
+        _deferredRefreshTimer.Interval = delay;
+        _deferredRefreshTimer.Start();
+    }
+
+    private void DeferredRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_deferredRefreshTimer is null)
+        {
+            return;
+        }
+
+        _deferredRefreshTimer.Stop();
+        string? targetFolderPath = _deferredRefreshFolderPath;
+        _deferredRefreshFolderPath = null;
+        if (string.IsNullOrWhiteSpace(targetFolderPath) ||
+            string.IsNullOrWhiteSpace(_currentFolder))
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.Equals(Path.GetFullPath(_currentFolder), targetFolderPath, StringComparison.OrdinalIgnoreCase))
+            {
+                RefreshShopItems();
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Debug($"DeferredRefreshTimer_Tick skipped: {ex.Message}");
         }
     }
 
@@ -1453,13 +1584,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task ExecuteRefreshAsync()
     {
+        using var _ = Processing();
+        CancelDeferredRefresh();
         ShopItems.Clear();
 
         if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null)
         {
-            // Shop/Hold mode: 万が一の再取得
+            // Shop/Hold mode: キャッシュと監視も立て直して確実に再取得
             if (!string.IsNullOrWhiteSpace(_currentFolder))
+            {
+                InvalidateSizeCacheUnder(_currentFolder);
+                InvalidateSubfolderCountCacheUnder(_currentFolder);
+                StartContentsSensor(_currentFolder);
                 RefreshShopItems();
+            }
+            if (_isShopOpen)
+            {
+                ReinitializeShopChangeMonitoring();
+            }
             return;
         }
 
@@ -1496,6 +1638,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (accessible)
         {
             InvalidateSizeCacheUnder(_currentFolder!);
+            InvalidateSubfolderCountCacheUnder(_currentFolder!);
+            StartContentsSensor(_currentFolder!);
             RefreshShopItems();
             return;
         }
@@ -3352,6 +3496,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         InvalidateSizeCacheUnder(result.SourceParent);
         _pendingFocusName = newName;
         RefreshShopItems();
+        ScheduleRefreshShopItemsIfCurrentFolder(result.SourceParent, TimeSpan.FromMilliseconds(300));
     }
 
     private async void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
@@ -3956,6 +4101,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         InvalidateSizeCacheUnder(result.SourceParent);
         _pendingFocusName = newName;
         RefreshShopItems();
+        ScheduleRefreshShopItemsIfCurrentFolder(result.SourceParent, TimeSpan.FromMilliseconds(300));
     }
 
     private void InlineRenameBox_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -4224,28 +4370,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        DisposeWatcher();
-        _pollingTimer.Stop();
-
-        try
-        {
-            _arrivalSensor = new FileSystemWatcher(_shopFolder)
-            {
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.CreationTime,
-                IncludeSubdirectories = true,
-                EnableRaisingEvents = true
-            };
-            _arrivalSensor.Created += ArrivalSensor_Created;
-            _arrivalSensor.Deleted += ArrivalSensor_Created;
-            _arrivalSensor.Renamed += ArrivalSensor_Renamed;
-            _arrivalSensor.Error += ArrivalSensor_Error;
-            _isPollingMode = false;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        {
-            DisposeWatcher();
-            BeginPolling();
-        }
+        ReinitializeShopChangeMonitoring();
 
         _isShopOpen = true;
         _wasOpenAtLastShutdown = true;
@@ -4305,6 +4430,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         DisposeWatcher();
         _pollingTimer.Stop();
+        CancelDeferredRefresh();
         bool wasOpen = _isShopOpen;
         _isShopOpen = false;
         _isPollingMode = false;
@@ -4356,6 +4482,37 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _arrivalSensor.Error -= ArrivalSensor_Error;
         _arrivalSensor.Dispose();
         _arrivalSensor = null;
+    }
+
+    private void ReinitializeShopChangeMonitoring()
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
+        {
+            return;
+        }
+
+        DisposeWatcher();
+        _pollingTimer.Stop();
+
+        try
+        {
+            _arrivalSensor = new FileSystemWatcher(_shopFolder)
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.CreationTime,
+                IncludeSubdirectories = true,
+                EnableRaisingEvents = true
+            };
+            _arrivalSensor.Created += ArrivalSensor_Created;
+            _arrivalSensor.Deleted += ArrivalSensor_Created;
+            _arrivalSensor.Renamed += ArrivalSensor_Renamed;
+            _arrivalSensor.Error += ArrivalSensor_Error;
+            _isPollingMode = false;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            DisposeWatcher();
+            BeginPolling();
+        }
     }
 
     private void DisposeContentsWatcher()
@@ -4523,6 +4680,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     SharePolicyRepairReason.ExternalCreated);
             }
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
+            ScheduleRefreshShopItemsIfCurrentFolder(
+                Path.GetDirectoryName(e.FullPath) ?? string.Empty,
+                TimeSpan.FromMilliseconds(300));
         });
     }
 
@@ -5622,6 +5782,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     SharePolicyRepairReason.ExternalCreated);
             }
             RefreshShopItems();
+            ScheduleRefreshShopItemsIfCurrentFolder(_currentFolder ?? string.Empty, TimeSpan.FromMilliseconds(300));
         });
     }
 
@@ -6669,6 +6830,34 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private void InvalidateSubfolderCountCacheUnder(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(folderPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException)
+        {
+            return;
+        }
+
+        string prefix = fullPath + Path.DirectorySeparatorChar;
+        List<string> toRemove = _subfolderCountCache.Keys
+            .Where(key => string.Equals(key, fullPath, StringComparison.OrdinalIgnoreCase) ||
+                          key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (string key in toRemove)
+        {
+            _subfolderCountCache.Remove(key);
+        }
+    }
+
     private void SetTransientStatus(string message)
     {
         StatusTextBlock.Text = message;
@@ -7032,6 +7221,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ApplyLoadedSettings(AppSettings? settings)
     {
+        bool needsOwnerPersistence = string.IsNullOrWhiteSpace(settings?.PcOwnerSid) ||
+                                     string.IsNullOrWhiteSpace(settings?.PcOwnerAccount);
         _shopFolder = settings?.ShopFolder ?? settings?.WatchFolder;
         MyShopTextBox.Text = _shopFolder ?? string.Empty;
         _notificationMode = ResolveNotificationMode(settings);
@@ -7042,6 +7233,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _shareAccessRight = ParseAccessLevel(settings?.AccessLevel);
         SelectAccessLevel(_shareAccessRight);
         _loadedReservedForV22 = settings?.ReservedForV22;
+        _pcOwnerSid = settings?.PcOwnerSid ?? PcOwnerIdentity.TryGetCurrentUserSid();
+        _pcOwnerAccount = settings?.PcOwnerAccount ?? PcOwnerIdentity.TryGetCurrentUserAccount();
+        PcOwnerIdentity.Configure(_pcOwnerSid, _pcOwnerAccount);
+
+        if (needsOwnerPersistence && !string.IsNullOrWhiteSpace(_pcOwnerSid))
+        {
+            SaveSettings();
+        }
     }
 
     private static ShareAccessRight ParseAccessLevel(string? value)
@@ -7261,6 +7460,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 AccessLevel = _shareAccessRight == ShareAccessRight.Read ? "Read" : "Full",
                 ShareMode = "Everyone",
                 Version = SettingsVersion,
+                PcOwnerSid = _pcOwnerSid,
+                PcOwnerAccount = _pcOwnerAccount,
                 ReservedForV22 = _loadedReservedForV22
             };
             string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
@@ -7612,6 +7813,14 @@ public sealed class AppSettings
     [JsonPropertyName("shareMode")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ShareMode { get; set; }
+
+    [JsonPropertyName("pcOwnerSid")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PcOwnerSid { get; set; }
+
+    [JsonPropertyName("pcOwnerAccount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PcOwnerAccount { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WatchFolder { get; set; }

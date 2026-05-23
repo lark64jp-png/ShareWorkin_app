@@ -24,6 +24,8 @@ public sealed class TrayApp : IDisposable
     private bool _isShopOpen;
     private string? _shopFolder;
     private string? _activeShareName;
+    private string? _pcOwnerSid;
+    private string? _pcOwnerAccount;
     private bool _wasOpenAtLastShutdown;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private string? _lastBalloonFolder;
@@ -82,25 +84,44 @@ public sealed class TrayApp : IDisposable
     {
         try
         {
-            if (!File.Exists(SettingsPath)) return;
-            using var fs = File.OpenRead(SettingsPath);
-            using var doc = JsonDocument.Parse(fs);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("ShopFolder", out var sf) && sf.ValueKind != JsonValueKind.Null)
-                _shopFolder = sf.GetString();
-            else if (root.TryGetProperty("WatchFolder", out var wf) && wf.ValueKind != JsonValueKind.Null)
-                _shopFolder = wf.GetString();
-            if (root.TryGetProperty("isOpenAtLastShutdown", out var open) ||
-                root.TryGetProperty("IsOpenAtLastShutdown", out open))
-                _wasOpenAtLastShutdown = open.GetBoolean();
-            if (root.TryGetProperty("accessLevel", out var al) ||
-                root.TryGetProperty("AccessLevel", out al))
-                _shareAccessRight = string.Equals(al.GetString(), "Read", StringComparison.OrdinalIgnoreCase)
-                    ? ShareAccessRight.Read : ShareAccessRight.Full;
+            if (File.Exists(SettingsPath))
+            {
+                using var fs = File.OpenRead(SettingsPath);
+                using var doc = JsonDocument.Parse(fs);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("ShopFolder", out var sf) && sf.ValueKind != JsonValueKind.Null)
+                    _shopFolder = sf.GetString();
+                else if (root.TryGetProperty("WatchFolder", out var wf) && wf.ValueKind != JsonValueKind.Null)
+                    _shopFolder = wf.GetString();
+                if (root.TryGetProperty("isOpenAtLastShutdown", out var open) ||
+                    root.TryGetProperty("IsOpenAtLastShutdown", out open))
+                    _wasOpenAtLastShutdown = open.GetBoolean();
+                if (root.TryGetProperty("accessLevel", out var al) ||
+                    root.TryGetProperty("AccessLevel", out al))
+                    _shareAccessRight = string.Equals(al.GetString(), "Read", StringComparison.OrdinalIgnoreCase)
+                        ? ShareAccessRight.Read : ShareAccessRight.Full;
+                if (root.TryGetProperty("pcOwnerSid", out var ownerSid) && ownerSid.ValueKind != JsonValueKind.Null)
+                    _pcOwnerSid = ownerSid.GetString();
+                if (root.TryGetProperty("pcOwnerAccount", out var ownerAccount) && ownerAccount.ValueKind != JsonValueKind.Null)
+                    _pcOwnerAccount = ownerAccount.GetString();
+            }
+
+            bool needsOwnerPersistence = string.IsNullOrWhiteSpace(_pcOwnerSid) ||
+                                         string.IsNullOrWhiteSpace(_pcOwnerAccount);
+            _pcOwnerSid ??= PcOwnerIdentity.TryGetCurrentUserSid();
+            _pcOwnerAccount ??= PcOwnerIdentity.TryGetCurrentUserAccount();
+            PcOwnerIdentity.Configure(_pcOwnerSid, _pcOwnerAccount);
+            if (needsOwnerPersistence && !string.IsNullOrWhiteSpace(_pcOwnerSid))
+            {
+                PersistPcOwnerIdentity();
+            }
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {
             SwkLogger.Warn($"TrayApp.LoadSettings error: {ex.Message}");
+            _pcOwnerSid ??= PcOwnerIdentity.TryGetCurrentUserSid();
+            _pcOwnerAccount ??= PcOwnerIdentity.TryGetCurrentUserAccount();
+            PcOwnerIdentity.Configure(_pcOwnerSid, _pcOwnerAccount);
         }
     }
 
@@ -274,9 +295,43 @@ public sealed class TrayApp : IDisposable
             obj["isOpenAtLastShutdown"] = isOpen;
             obj.Remove("IsOpenAtLastShutdown");
             if (shopFolder != null) obj["ShopFolder"] = shopFolder;
+            if (!string.IsNullOrWhiteSpace(_pcOwnerSid)) obj["pcOwnerSid"] = _pcOwnerSid;
+            if (!string.IsNullOrWhiteSpace(_pcOwnerAccount)) obj["pcOwnerAccount"] = _pcOwnerAccount;
             File.WriteAllText(SettingsPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { SwkLogger.Warn($"TrayApp.PatchSettingsOpenState error: {ex.Message}"); }
+    }
+
+    private void PersistPcOwnerIdentity()
+    {
+        try
+        {
+            JsonObject obj;
+            if (File.Exists(SettingsPath))
+            {
+                obj = JsonNode.Parse(File.ReadAllText(SettingsPath)) as JsonObject ?? new JsonObject();
+            }
+            else
+            {
+                obj = new JsonObject();
+            }
+
+            if (!string.IsNullOrWhiteSpace(_pcOwnerSid))
+            {
+                obj["pcOwnerSid"] = _pcOwnerSid;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_pcOwnerAccount))
+            {
+                obj["pcOwnerAccount"] = _pcOwnerAccount;
+            }
+
+            File.WriteAllText(SettingsPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TrayApp.PersistPcOwnerIdentity error: {ex.Message}");
+        }
     }
 
     private void StartShopContentsWatcher(string shopFolder)

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 
 namespace ShareWorkin.SMB;
@@ -242,6 +241,12 @@ public static class SmbNtfsManager
             }
             if (process.ExitCode == 0)
             {
+                if (!SetPathOwnerToPcOwner(path))
+                {
+                    SwkLogger.Warn($"TakeOwnershipPath: failed to align owner to PC owner ({path})");
+                    return false;
+                }
+
                 SwkLogger.Info("TakeOwnershipPath ok");
                 return true;
             }
@@ -268,20 +273,11 @@ public static class SmbNtfsManager
         SwkLogger.Info($"IsolateShopRoot start: {shopRootPath}");
 
         // 骨格仕様書 v0.1 条文 1.5: 店主のローカル権限を奪わない。継承を切る場合は
-        // SYSTEM/Administrators/swkguest に加えて、現在ログオン中の店主 SID にも Full を付与する。
-        string? ownerSid;
-        try
-        {
-            ownerSid = WindowsIdentity.GetCurrent().User?.Value;
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Error("IsolateShopRoot: failed to read current user SID", ex);
-            return false;
-        }
+        // SYSTEM/Administrators/swkguest に加えて、PC オーナー SID にも Full を付与する。
+        string? ownerSid = ResolvePcOwnerSid("IsolateShopRoot");
         if (string.IsNullOrEmpty(ownerSid))
         {
-            SwkLogger.Warn("IsolateShopRoot: current user SID is empty");
+            SwkLogger.Warn("IsolateShopRoot: PC owner SID is empty");
             return false;
         }
 
@@ -335,19 +331,10 @@ public static class SmbNtfsManager
             return ResetPathToInherited(subfolderPath);
         }
 
-        string? ownerSid;
-        try
-        {
-            ownerSid = WindowsIdentity.GetCurrent().User?.Value;
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Error("SetSubfolderPermission: failed to read current user SID", ex);
-            return false;
-        }
+        string? ownerSid = ResolvePcOwnerSid("SetSubfolderPermission");
         if (string.IsNullOrEmpty(ownerSid))
         {
-            SwkLogger.Warn("SetSubfolderPermission: current user SID is empty");
+            SwkLogger.Warn("SetSubfolderPermission: PC owner SID is empty");
             return false;
         }
 
@@ -493,5 +480,35 @@ public static class SmbNtfsManager
             SwkLogger.Error($"icacls exception: {label}", ex);
             return false;
         }
+    }
+
+    private static string? ResolvePcOwnerSid(string operationLabel)
+    {
+        string? ownerSid = PcOwnerIdentity.GetEffectiveOwnerSid();
+        if (string.IsNullOrWhiteSpace(ownerSid))
+        {
+            SwkLogger.Warn($"{operationLabel}: PC owner SID is not configured");
+            return null;
+        }
+
+        return ownerSid;
+    }
+
+    private static bool SetPathOwnerToPcOwner(string path)
+    {
+        string? ownerSid = ResolvePcOwnerSid("SetPathOwnerToPcOwner");
+        if (string.IsNullOrWhiteSpace(ownerSid))
+        {
+            return false;
+        }
+
+        List<string> args = [path, "/setowner", $"*{ownerSid}"];
+        if (Directory.Exists(path))
+        {
+            args.Add("/T");
+            args.Add("/C");
+        }
+
+        return RunIcacls(args, "Set PC owner");
     }
 }

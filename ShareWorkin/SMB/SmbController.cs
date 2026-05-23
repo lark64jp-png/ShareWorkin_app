@@ -66,7 +66,7 @@ public static class SmbController
         }
 
         // 草案6 §A を運用に合わせて更新:
-        // ローカル PC 内のお店配下は、開店時に現在の Windows 利用者の管理下へ自動で揃える。
+        // ローカル PC 内のお店配下は、開店時に PC オーナーの管理下へ自動で揃える。
         // Tray 復元でもここで止まらないよう、承認待ちは返さず takeown を実行する。
         AclRepairPreflight aclRepair = SmbNtfsManager.PreflightAclRepair(request.ShopRootPath);
         if (aclRepair.NeedsOwnershipChange)
@@ -93,7 +93,7 @@ public static class SmbController
             }
         }
 
-        SwkLogger.Info("OpenShopSequence: aligning ownership to current user");
+        SwkLogger.Info("OpenShopSequence: aligning ownership to PC owner");
         if (!SmbNtfsManager.TakeOwnershipRecursive(request.ShopRootPath))
         {
             return Fail("お店のアクセス設定を整えられませんでした。", before, null);
