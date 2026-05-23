@@ -231,6 +231,37 @@ public partial class UserListWindow : Window
                 rows.Add(UserListRow.ForWindowsPcOnly(c));
         }
 
+        foreach (SwkNotificationListener.ShopInfo shopInfo in shopInfos)
+        {
+            string host = NormalizeHostName(shopInfo.MachineName);
+            if (string.IsNullOrEmpty(host))
+            {
+                host = shopInfo.IpAddress ?? string.Empty;
+            }
+            if (string.IsNullOrEmpty(host)) continue;
+            if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
+
+            string liveShopKey = $"{NormalizeHostName(shopInfo.MachineName)}|{shopInfo.ShareName}";
+            if (!representedLiveShopKeys.Add(liveShopKey))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(shopInfo.IpAddress) ||
+                !System.Net.IPAddress.TryParse(shopInfo.IpAddress, out System.Net.IPAddress? ipAddress))
+            {
+                continue;
+            }
+
+            LanCandidate candidate = new(ipAddress, shopInfo.MachineName);
+            if (IsCandidateCoveredByRegisteredFriend(candidate, shopInfo, friends))
+            {
+                continue;
+            }
+
+            rows.Add(UserListRow.ForNewShop(candidate, shopInfo));
+        }
+
         rows.Sort(static (a, b) =>
         {
             int byKind = ((int)a.Kind).CompareTo((int)b.Kind);

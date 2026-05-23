@@ -114,16 +114,29 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var result = new List<ShopInfo>();
-        if (candidates.Count == 0) return result;
 
         try
         {
             using var udp = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+            udp.EnableBroadcast = true;
 
             var probe = new { type = "ShopProbe", clientMachineName = Environment.MachineName };
             byte[] probeBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(probe));
 
             int sentCount = 0;
+            foreach (IPAddress address in EnumerateBroadcastTargets())
+            {
+                try
+                {
+                    await udp.SendAsync(probeBytes, new IPEndPoint(address, SwkNotificationBroadcaster.UdpDiscoveryPort), cancellationToken);
+                    sentCount++;
+                }
+                catch (Exception ex)
+                {
+                    SwkLogger.Debug($"ProbeHostsAsync broadcast failed to {address}: {ex.Message}");
+                }
+            }
+
             foreach (LanCandidate c in candidates)
             {
                 try
@@ -199,6 +212,32 @@ public sealed class SwkNotificationListener : IAsyncDisposable
             SwkLogger.Warn($"ProbeHostsAsync failed: {ex.Message}");
             return result;
         }
+    }
+
+    private static IReadOnlyList<IPAddress> EnumerateBroadcastTargets()
+    {
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase)
+        {
+            IPAddress.Broadcast.ToString()
+        };
+        List<IPAddress> targets = new()
+        {
+            IPAddress.Broadcast
+        };
+
+        foreach (IPNetwork2 subnet in LanScanner.EnumerateLocalSubnets())
+        {
+            IPAddress? broadcast = subnet.GetBroadcastAddress();
+            if (broadcast is null) continue;
+
+            string key = broadcast.ToString();
+            if (seen.Add(key))
+            {
+                targets.Add(broadcast);
+            }
+        }
+
+        return targets;
     }
 
     public sealed class InviteCodeResult

@@ -215,4 +215,27 @@ public sealed class IPNetwork2
             yield return new IPAddress(bytes);
         }
     }
+
+    public IPAddress? GetBroadcastAddress()
+    {
+        if (Address.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return null;
+        }
+
+        byte[] addressBytes = Address.GetAddressBytes();
+        uint addr = ((uint)addressBytes[0] << 24) | ((uint)addressBytes[1] << 16) | ((uint)addressBytes[2] << 8) | addressBytes[3];
+        uint mask = PrefixLength == 0 ? 0u : 0xFFFFFFFFu << (32 - PrefixLength);
+        uint network = addr & mask;
+        uint broadcast = network | ~mask;
+
+        byte[] bytes =
+        {
+            (byte)((broadcast >> 24) & 0xFF),
+            (byte)((broadcast >> 16) & 0xFF),
+            (byte)((broadcast >> 8) & 0xFF),
+            (byte)(broadcast & 0xFF),
+        };
+        return new IPAddress(bytes);
+    }
 }
