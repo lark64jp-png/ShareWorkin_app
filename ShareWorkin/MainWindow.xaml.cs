@@ -109,6 +109,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _pollingTimer;
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
+    private readonly Dictionary<string, DateTime> _recentExternalReceiveAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (bool IsReadOnly, bool IsSharedOff)> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<string> _backStack = new();
@@ -987,28 +988,37 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 Path.GetFullPath(_shopFolder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 StringComparison.OrdinalIgnoreCase))
         {
+            SwkLogger.Debug(
+                $"EnsureHoldFolderForShopChange skipped: isOpen={_isShopOpen} mode={_currentMode} " +
+                $"shopFolder={_shopFolder ?? "-"} currentFolder={_currentFolder ?? "-"}");
             return false;
         }
 
         string holdFolderPath = GetHoldFolderPath();
         bool wasMissing = !Directory.Exists(holdFolderPath);
+        SwkLogger.Debug(
+            $"EnsureHoldFolderForShopChange start: hold={holdFolderPath} wasMissing={wasMissing} notifyWhenRecreated={notifyWhenRecreated}");
         if (!TryEnsureHoldFolder())
         {
+            SwkLogger.Warn($"EnsureHoldFolderForShopChange failed: hold={holdFolderPath}");
             SetTransientStatus("保留を準備できません。");
             return false;
         }
 
         if (notifyWhenRecreated && wasMissing)
         {
+            SwkLogger.Info($"EnsureHoldFolderForShopChange recreated: hold={holdFolderPath}");
             NotifyShopMaintenance("保留を作り直しました。", "保留ホルダーは再作成されます。");
         }
 
+        SwkLogger.Debug($"EnsureHoldFolderForShopChange complete: hold={holdFolderPath} recreated={wasMissing}");
         return wasMissing;
     }
 
     private void SuppressExternalChangeNotifications()
     {
         _suppressExternalChangeNotificationsUntil = DateTime.Now.AddSeconds(3);
+        SwkLogger.Debug($"ExternalChange.Suppress: until={_suppressExternalChangeNotificationsUntil:O}");
     }
 
     private bool ShouldSuppressExternalChangeNotification()
@@ -1024,6 +1034,66 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             NotificationMode.ExternalOnly => externalOnly,
             _ => false,
         };
+    }
+
+    private static string FormatWatcherEvent(FileSystemEventArgs e)
+        => $"type={e.ChangeType} path={e.FullPath}";
+
+    private static string FormatWatcherEvent(RenamedEventArgs e)
+        => $"type={e.ChangeType} old={e.OldFullPath} new={e.FullPath}";
+
+    private bool TryRegisterExternalReceive(string fullPath, string source)
+    {
+        if (string.IsNullOrWhiteSpace(fullPath) ||
+            !File.Exists(fullPath) ||
+            IsHoldFolderPath(fullPath))
+        {
+            SwkLogger.Debug($"TryRegisterExternalReceive skipped: path={fullPath ?? "-"} source={source}");
+            return false;
+        }
+
+        DateTime now = DateTime.Now;
+        if (_recentExternalReceiveAt.TryGetValue(fullPath, out DateTime lastAt) &&
+            now - lastAt < TimeSpan.FromSeconds(10))
+        {
+            SwkLogger.Debug(
+                $"TryRegisterExternalReceive skipped: duplicate path={fullPath} source={source} lastAt={lastAt:O}");
+            return false;
+        }
+
+        foreach (string stalePath in _recentExternalReceiveAt
+                     .Where(pair => now - pair.Value >= TimeSpan.FromMinutes(3))
+                     .Select(pair => pair.Key)
+                     .ToList())
+        {
+            _recentExternalReceiveAt.Remove(stalePath);
+        }
+
+        _recentExternalReceiveAt[fullPath] = now;
+        ArrivedItem item = new(
+            Path.GetFileName(fullPath),
+            Path.GetDirectoryName(fullPath) ?? string.Empty,
+            now);
+        ArrivedItems.Insert(0, item);
+        while (ArrivedItems.Count > MaxArrivedItemCount)
+        {
+            ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
+        }
+
+        AppendHistory(
+            HistoryChannel.Update,
+            $"{item.Name} を受け取りました。",
+            "Receive",
+            HistoryOutcome.Success,
+            HistoryDirection.Incoming,
+            targetName: item.Name,
+            pathText: item.FolderPath,
+            destinationPath: fullPath,
+            destinationFolder: item.FolderPath,
+            source: source);
+        QueueNotification(item);
+        SwkLogger.Info($"TryRegisterExternalReceive appended: path={fullPath} source={source}");
+        return true;
     }
 
     private void AppendHistory(
@@ -1042,6 +1112,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? destinationFolder = null)
     {
         string? normalizedTargetName = NormalizeHistoryTargetName(targetName, destinationPath, sourcePath);
+        SwkLogger.Debug(
+            $"AppendHistory: channel={channel} eventType={eventType} outcome={outcome} " +
+            $"direction={direction} target={normalizedTargetName ?? "-"} path={pathText ?? "-"} source={source ?? "-"}");
         HistoryRepository.Append(new HistoryEntry
         {
             Channel = channel,
@@ -1377,43 +1450,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void NotifyExternalShopChange()
     {
-        if (ShouldSuppressExternalChangeNotification() || !CanShowNotification(externalOnly: true))
+        bool suppressed = ShouldSuppressExternalChangeNotification();
+        bool canNotify = CanShowNotification(externalOnly: true);
+        if (suppressed || !canNotify)
         {
+            SwkLogger.Debug(
+                $"NotifyExternalShopChange skipped: suppressed={suppressed} canNotify={canNotify} mode={_notificationMode}");
             return;
         }
 
         DateTime now = DateTime.Now;
         if (now - _lastExternalChangeNotificationAt < TimeSpan.FromSeconds(2))
         {
+            SwkLogger.Debug(
+                $"NotifyExternalShopChange skipped: quietPeriod last={_lastExternalChangeNotificationAt:O} now={now:O}");
             return;
         }
 
         _lastExternalChangeNotificationAt = now;
+        SwkLogger.Info("NotifyExternalShopChange firing: お店の中身が変更されました。");
         NotifyShopMaintenance("お店の中身が変更されました。", "お店の中身が変更されました。");
     }
 
     private void AppendExternalChangeHistory(FileSystemEventArgs e)
     {
-        if (ShouldSuppressExternalChangeNotification() ||
+        bool suppressed = ShouldSuppressExternalChangeNotification();
+        bool isHoldPath = !string.IsNullOrWhiteSpace(e.FullPath) && IsHoldFolderPath(e.FullPath);
+        if (suppressed ||
             string.IsNullOrWhiteSpace(e.FullPath) ||
-            IsHoldFolderPath(e.FullPath))
+            isHoldPath)
         {
+            SwkLogger.Debug(
+                $"AppendExternalChangeHistory skipped: {FormatWatcherEvent(e)} suppressed={suppressed} isHoldPath={isHoldPath}");
             return;
         }
 
         string itemName = e.Name ?? Path.GetFileName(e.FullPath);
         if (string.IsNullOrWhiteSpace(itemName))
         {
+            SwkLogger.Debug($"AppendExternalChangeHistory skipped: empty item name {FormatWatcherEvent(e)}");
             return;
         }
 
         string folder = Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty;
+        SwkLogger.Debug($"AppendExternalChangeHistory start: {FormatWatcherEvent(e)} folder={folder}");
         switch (e.ChangeType)
         {
             case WatcherChangeTypes.Created:
                 // File creation is already captured by the receive history path.
                 if (!Directory.Exists(e.FullPath))
                 {
+                    SwkLogger.Debug(
+                        $"AppendExternalChangeHistory file-create skipped: handled by receive path path={e.FullPath}");
                     return;
                 }
 
@@ -1427,6 +1515,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     destinationPath: e.FullPath,
                     destinationFolder: folder,
                     source: "Watcher.External");
+                SwkLogger.Info($"AppendExternalChangeHistory appended: event=ExternalCreateFolder path={e.FullPath}");
                 break;
 
             case WatcherChangeTypes.Deleted:
@@ -1440,6 +1529,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     note: $"削除前: {e.FullPath}",
                     sourcePath: e.FullPath,
                     source: "Watcher.External");
+                SwkLogger.Info($"AppendExternalChangeHistory appended: event=ExternalDelete path={e.FullPath}");
                 break;
         }
     }
@@ -4602,26 +4692,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         foreach (string path in newcomers)
         {
-            ArrivedItem item = new(
-                Path.GetFileName(path),
-                Path.GetDirectoryName(path) ?? string.Empty,
-                DateTime.Now);
-            ArrivedItems.Insert(0, item);
-            while (ArrivedItems.Count > MaxArrivedItemCount)
-            {
-                ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
-            }
-            AppendHistory(
-                HistoryChannel.Update,
-                $"{item.Name} を受け取りました。",
-                "Receive",
-                HistoryOutcome.Success,
-                HistoryDirection.Incoming,
-                targetName: item.Name,
-                pathText: item.FolderPath,
-                destinationPath: path,
-                destinationFolder: item.FolderPath,
-                source: "Polling");
+            TryRegisterExternalReceive(path, "Polling");
         }
 
         if (newcomers.Count > 0 || removed.Count > 0)
@@ -4645,39 +4716,25 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         Dispatcher.Invoke(() =>
         {
+            SwkLogger.Debug($"ArrivalSensor_Created: {FormatWatcherEvent(e)}");
             if (e.ChangeType == WatcherChangeTypes.Created && !Directory.Exists(e.FullPath))
             {
-                ArrivedItem item = new(
-                    e.Name ?? Path.GetFileName(e.FullPath),
-                    Path.GetDirectoryName(e.FullPath) ?? string.Empty,
-                    DateTime.Now);
-                ArrivedItems.Insert(0, item);
-
-                while (ArrivedItems.Count > MaxArrivedItemCount)
-                {
-                    ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
-                }
-                AppendHistory(
-                    HistoryChannel.Update,
-                    $"{item.Name} を受け取りました。",
-                    "Receive",
-                    HistoryOutcome.Success,
-                    HistoryDirection.Incoming,
-                    targetName: item.Name,
-                    pathText: item.FolderPath,
-                    destinationPath: e.FullPath,
-                    destinationFolder: item.FolderPath,
-                    source: "Watcher");
+                TryRegisterExternalReceive(e.FullPath, "Watcher");
             }
 
             AppendExternalChangeHistory(e);
             NotifyExternalShopChange();
             if (!ShouldSuppressExternalChangeNotification())
             {
+                SwkLogger.Debug($"ArrivalSensor_Created aftercare mark: path={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
                     SharePolicyRepairReason.ExternalCreated);
+            }
+            else
+            {
+                SwkLogger.Debug($"ArrivalSensor_Created suppressed after detection: path={e.FullPath}");
             }
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
             ScheduleRefreshShopItemsIfCurrentFolder(
@@ -4690,6 +4747,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         Dispatcher.Invoke(() =>
         {
+            SwkLogger.Debug($"ArrivalSensor_Renamed: {FormatWatcherEvent(e)}");
             NotifyExternalShopChange();
             if (!ShouldSuppressExternalChangeNotification())
             {
@@ -4706,10 +4764,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     destinationPath: e.FullPath,
                     destinationFolder: folder,
                     source: "Watcher");
+                SwkLogger.Info($"ArrivalSensor_Renamed history-appended: old={e.OldFullPath} new={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     folder,
                     SharePolicyRepairReason.ExternalRenamed);
+            }
+            else
+            {
+                SwkLogger.Debug($"ArrivalSensor_Renamed suppressed: old={e.OldFullPath} new={e.FullPath}");
             }
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
         });
@@ -4741,9 +4804,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!CanShowNotification(externalOnly: true))
         {
+            SwkLogger.Debug($"QueueNotification skipped: canNotify=false item={item.Name} folder={item.FolderPath}");
             return;
         }
 
+        SwkLogger.Debug($"QueueNotification enqueue: item={item.Name} folder={item.FolderPath}");
         _pendingNotificationItems.Add(item);
         _notificationTimer.Stop();
         _notificationTimer.Start();
@@ -4754,9 +4819,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SetTransientStatus(statusMessage);
         if (!CanShowNotification(externalOnly: true))
         {
+            SwkLogger.Debug(
+                $"NotifyShopMaintenance skipped: canNotify=false status={statusMessage} text={notificationText}");
             return;
         }
 
+        SwkLogger.Info($"NotifyShopMaintenance: status={statusMessage} text={notificationText}");
         AppendHistory(
             HistoryChannel.Notification,
             notificationText,
@@ -4775,10 +4843,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (_pendingNotificationItems.Count == 0)
         {
+            SwkLogger.Debug("ShowNotification skipped: queue-empty");
             return;
         }
 
         string notifFolder = _pendingNotificationItems[0].FolderPath;
+        SwkLogger.Info($"ShowNotification: count={_pendingNotificationItems.Count} folder={notifFolder}");
         _pendingNotificationItems.Clear();
         AppendHistory(
             HistoryChannel.Notification,
@@ -5762,6 +5832,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         Dispatcher.Invoke(() =>
         {
+            SwkLogger.Debug($"ContentsSensor_Changed: {FormatWatcherEvent(e)} currentFolder={_currentFolder ?? "-"}");
             if (!string.IsNullOrWhiteSpace(_currentFolder))
             {
                 InvalidateSizeCacheUnder(_currentFolder);
@@ -5770,16 +5841,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             bool shouldNotifyChange =
                 e.ChangeType == WatcherChangeTypes.Deleted ||
                 e.ChangeType == WatcherChangeTypes.Created;
+            SwkLogger.Debug(
+                $"ContentsSensor_Changed decision: recreatedHoldFolder={recreatedHoldFolder} shouldNotifyChange={shouldNotifyChange}");
             if (!recreatedHoldFolder && shouldNotifyChange)
             {
                 NotifyExternalShopChange();
             }
             if (e.ChangeType == WatcherChangeTypes.Created && !ShouldSuppressExternalChangeNotification())
             {
+                SwkLogger.Debug($"ContentsSensor_Changed aftercare mark: path={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
                     SharePolicyRepairReason.ExternalCreated);
+            }
+            else if (e.ChangeType == WatcherChangeTypes.Created)
+            {
+                SwkLogger.Debug($"ContentsSensor_Changed create suppressed: path={e.FullPath}");
             }
             RefreshShopItems();
             ScheduleRefreshShopItemsIfCurrentFolder(_currentFolder ?? string.Empty, TimeSpan.FromMilliseconds(300));
@@ -5790,6 +5868,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         Dispatcher.Invoke(() =>
         {
+            SwkLogger.Debug($"ContentsSensor_Renamed: {FormatWatcherEvent(e)} currentFolder={_currentFolder ?? "-"}");
             if (!string.IsNullOrWhiteSpace(_currentFolder))
             {
                 InvalidateSizeCacheUnder(_currentFolder);
@@ -5798,10 +5877,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             NotifyExternalShopChange();
             if (!ShouldSuppressExternalChangeNotification())
             {
+                SwkLogger.Debug($"ContentsSensor_Renamed aftercare mark: old={e.OldFullPath} new={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
                     SharePolicyRepairReason.ExternalRenamed);
+            }
+            else
+            {
+                SwkLogger.Debug($"ContentsSensor_Renamed suppressed: old={e.OldFullPath} new={e.FullPath}");
             }
             RefreshShopItems();
         });
@@ -5819,6 +5903,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             IsHoldFolderPath(affectedPath))
         {
             return;
+        }
+
+        if (reason == SharePolicyRepairReason.ExternalCreated && File.Exists(affectedPath))
+        {
+            TryRegisterExternalReceive(affectedPath, "Aftercare.ExternalCreated");
         }
 
         _pipeClient.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
