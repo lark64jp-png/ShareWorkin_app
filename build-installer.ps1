@@ -1,6 +1,7 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Runtime = "win-x64"
+    [string]$Runtime = "win-x64",
+    [switch]$AllowDirtyGit
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,38 @@ $installer = Join-Path $root "ShareWorkin_v1.20_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 $appVersion = "1.20"
 $informationalVersion = $appVersion
+
+function Test-GitRepository([string]$Path) {
+    try {
+        $result = (git -C $Path rev-parse --is-inside-work-tree 2>$null).Trim()
+        return $result -eq "true"
+    }
+    catch {
+        return $false
+    }
+}
+
+if (-not (Test-GitRepository $root)) {
+    throw "Git repository was not found at '$root'. Run git init or clone the repository, then commit your changes before building the installer."
+}
+
+try {
+    $headCommit = (git -C $root rev-parse --verify HEAD 2>$null).Trim()
+}
+catch {
+    $headCommit = ""
+}
+
+if (-not $headCommit) {
+    throw "Git commit was not found at '$root'. Create at least one commit before building the installer."
+}
+
+if (-not $AllowDirtyGit) {
+    $dirty = git -C $root status --porcelain
+    if ($dirty) {
+        throw "Uncommitted Git changes were found. Commit your changes before building the installer, or use -AllowDirtyGit only when you intentionally want to bypass this guard."
+    }
+}
 
 try {
     $gitShort = (git -C $root rev-parse --short HEAD 2>$null).Trim()
