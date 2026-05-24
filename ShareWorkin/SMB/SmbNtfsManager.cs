@@ -387,6 +387,44 @@ public static class SmbNtfsManager
         return RunIcacls(args, "Reset path to inherited");
     }
 
+    public static bool SetPrivateHoldFolderPermissions(string folderPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(folderPath);
+        if (!Directory.Exists(folderPath))
+        {
+            SwkLogger.Warn($"SetPrivateHoldFolderPermissions skipped: path not found ({folderPath})");
+            return false;
+        }
+
+        string? ownerSid = ResolvePcOwnerSid("SetPrivateHoldFolderPermissions");
+        if (string.IsNullOrWhiteSpace(ownerSid))
+        {
+            return false;
+        }
+
+        if (!RunIcacls(new[] { folderPath, "/setowner", $"*{ownerSid}" }, "Hold owner"))
+        {
+            return false;
+        }
+
+        if (!RunIcacls(new[] { folderPath, "/inheritance:r" }, "Hold disable inheritance"))
+        {
+            return false;
+        }
+
+        if (!RunIcacls(new[] { folderPath, "/grant:r", $"*{ownerSid}:{PermFull}" }, "Hold grant owner"))
+        {
+            return false;
+        }
+
+        if (!RunIcacls(new[] { folderPath, "/grant:r", $"{SidSystem}:{PermFull}" }, "Hold grant SYSTEM"))
+        {
+            return false;
+        }
+
+        return RunIcacls(new[] { folderPath, "/grant:r", $"{SidAdministrators}:{PermFull}" }, "Hold grant Administrators");
+    }
+
     private static bool ResetChildrenToInherited(string folderPath)
     {
         if (!Directory.Exists(folderPath))

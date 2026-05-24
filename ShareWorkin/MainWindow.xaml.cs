@@ -934,40 +934,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static void SetPrivateHoldFolderPermissions(string folderPath)
     {
-        string? ownerSid = PcOwnerIdentity.GetEffectiveOwnerSid();
-        if (string.IsNullOrWhiteSpace(ownerSid))
-        {
-            throw new InvalidOperationException("PC owner could not be resolved.");
-        }
-
-        using Process process = new()
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "icacls.exe",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            }
-        };
-
-        process.StartInfo.ArgumentList.Add(folderPath);
-        process.StartInfo.ArgumentList.Add("/setowner");
-        process.StartInfo.ArgumentList.Add($"*{ownerSid}");
-        process.StartInfo.ArgumentList.Add("/inheritance:r");
-        process.StartInfo.ArgumentList.Add("/grant:r");
-        process.StartInfo.ArgumentList.Add($"*{ownerSid}:(OI)(CI)F");
-        process.StartInfo.ArgumentList.Add("/grant:r");
-        process.StartInfo.ArgumentList.Add("*S-1-5-18:(OI)(CI)F");
-        process.StartInfo.ArgumentList.Add("/grant:r");
-        process.StartInfo.ArgumentList.Add("*S-1-5-32-544:(OI)(CI)F");
-
-        if (!process.Start())
-        {
-            throw new InvalidOperationException("icacls could not be started.");
-        }
-
-        process.WaitForExit();
-        if (process.ExitCode != 0)
+        if (!SmbNtfsManager.SetPrivateHoldFolderPermissions(folderPath))
         {
             throw new UnauthorizedAccessException("Hold folder permissions could not be set.");
         }
