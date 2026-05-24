@@ -407,6 +407,54 @@ public partial class MainWindow : Window
         return _currentFolder;
     }
 
+    internal void UpdateExternalDropTargetHighlightFromScreenPoint(System.Windows.Point screenPoint)
+    {
+        if (string.IsNullOrWhiteSpace(_currentFolder))
+        {
+            ClearDropTargetHighlight();
+            return;
+        }
+
+        try
+        {
+            if (!ShopItemsListView.IsVisible)
+            {
+                ClearDropTargetHighlight();
+                return;
+            }
+
+            System.Windows.Point localPoint = ShopItemsListView.PointFromScreen(screenPoint);
+            if (double.IsNaN(localPoint.X) || double.IsNaN(localPoint.Y))
+            {
+                ClearDropTargetHighlight();
+                return;
+            }
+
+            HitTestResult? hit = VisualTreeHelper.HitTest(ShopItemsListView, localPoint);
+            ShopItem? item = GetShopItemFromSource(hit?.VisualHit as DependencyObject);
+            if (item is not null && item.IsDirectory)
+            {
+                if (ReferenceEquals(item, _dropTargetItem))
+                {
+                    return;
+                }
+
+                ClearDropTargetHighlight();
+                item.IsDropTarget = true;
+                _dropTargetItem = item;
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            SwkLogger.Debug($"UpdateExternalDropTargetHighlightFromScreenPoint failed: {ex.Message}");
+        }
+
+        ClearDropTargetHighlight();
+    }
+
+    internal void ClearExternalDropTargetHighlight() => ClearDropTargetHighlight();
+
     internal int GetOleDropEffect(Forms.IDataObject data, DragDropKeyStates keyStates, string destinationFolder)
     {
         if (string.IsNullOrWhiteSpace(destinationFolder))
@@ -3361,6 +3409,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         string modeLabel = _currentMode.ToString();
+        bool alertShown = false;
         SwkLogger.Info(
             $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={paths.Count} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
 
@@ -3410,7 +3459,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     BeforeWrite = SuppressExternalChangeNotifications,
                 }));
 
-                ApplyExplorerActionResult(result, showAlertDialog: false);
+                bool shouldShowAlert = !alertShown;
+                ApplyExplorerActionResult(result, showAlertDialog: shouldShowAlert);
+                if (shouldShowAlert &&
+                    !string.IsNullOrWhiteSpace(result.UserMessage) &&
+                    (result.State == ExplorerActionState.Blocked || result.State == ExplorerActionState.Failure))
+                {
+                    alertShown = true;
+                }
                 SwkLogger.Info(
                     $"Trace.ExternalFlow.Sender.Result: state={result.State} event={result.EventType} target={result.TargetName ?? "-"} " +
                     $"source={result.Source ?? "-"} sourcePath={result.SourcePath ?? "-"} destPath={result.DestinationPath ?? "-"} " +
@@ -3629,6 +3685,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
+        bool alertShown = false;
 
         if (!TryValidateBatchOperation(
                 sourcePaths,
@@ -3676,7 +3733,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                ApplyExplorerActionResult(result, showAlertDialog: false);
+                bool shouldShowAlert = !alertShown;
+                ApplyExplorerActionResult(result, showAlertDialog: shouldShowAlert);
+                if (shouldShowAlert &&
+                    !string.IsNullOrWhiteSpace(result.UserMessage) &&
+                    (result.State == ExplorerActionState.Blocked || result.State == ExplorerActionState.Failure))
+                {
+                    alertShown = true;
+                }
                 if (!result.ShouldRefreshUi ||
                     string.IsNullOrWhiteSpace(result.SourcePath) ||
                     string.IsNullOrWhiteSpace(result.SourceParent) ||
@@ -4325,6 +4389,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? lastName = null;
         int total = sourcePaths.Count;
         string modeLabel = _currentMode.ToString();
+        bool alertShown = false;
 
         if (!TryValidateBatchOperation(
                 sourcePaths,
@@ -4370,7 +4435,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                ApplyExplorerActionResult(result, showAlertDialog: false);
+                bool shouldShowAlert = !alertShown;
+                ApplyExplorerActionResult(result, showAlertDialog: shouldShowAlert);
+                if (shouldShowAlert &&
+                    !string.IsNullOrWhiteSpace(result.UserMessage) &&
+                    (result.State == ExplorerActionState.Blocked || result.State == ExplorerActionState.Failure))
+                {
+                    alertShown = true;
+                }
 
                 if (!result.ShouldRefreshUi ||
                     string.IsNullOrWhiteSpace(result.SourcePath) ||
@@ -8688,6 +8760,8 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
         ref int pdwEffect)
     {
         _currentData = new Forms.DataObject(pDataObj);
+        _ = _owner.Dispatcher.InvokeAsync(() =>
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
         pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
         _lastEffect = pdwEffect;
         return 0;
@@ -8695,6 +8769,8 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
 
     public int DragOver(int grfKeyState, POINTL pt, ref int pdwEffect)
     {
+        _ = _owner.Dispatcher.InvokeAsync(() =>
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
         pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
         _lastEffect = pdwEffect;
         return 0;
@@ -8703,6 +8779,7 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
     public int DragLeave()
     {
         _currentData = null;
+        _ = _owner.Dispatcher.InvokeAsync(_owner.ClearExternalDropTargetHighlight);
         _lastEffect = (int)System.Windows.DragDropEffects.None;
         return 0;
     }
@@ -8715,6 +8792,8 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
     {
         var data = new Forms.DataObject(pDataObj);
         DragDropKeyStates keyStates = (DragDropKeyStates)grfKeyState;
+        _ = _owner.Dispatcher.InvokeAsync(() =>
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
         pdwEffect = ResolveEffect(data, keyStates, pt);
         _lastEffect = pdwEffect;
         _ = _owner.Dispatcher.InvokeAsync(() =>

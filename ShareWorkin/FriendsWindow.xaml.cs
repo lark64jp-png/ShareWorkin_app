@@ -144,7 +144,7 @@ public partial class FriendsWindow : Window
                 string targetShare = _activeFriend.ShareName;
                 TitleTextBlock.Text = "接続先を切替";
                 SubtitleTextBlock.Text =
-                    $"「{friendName}」の接続先を共有「{targetShare}」として「{targetHost}」へ切り替えます。下の接続未確定リストで候補を選んだ状態です。";
+                    $"「{friendName}」の接続先を共有「{targetShare}」として「{targetHost}」へ切り替え、名前・メモ・アイコンもまとめて更新します。下の接続未確定リストで候補を選んだ状態です。";
             }
             else if (_activeShopInfo != null)
             {
@@ -162,7 +162,7 @@ public partial class FriendsWindow : Window
                 {
                     TitleTextBlock.Text = "接続先を切替";
                     SubtitleTextBlock.Text =
-                        $"「{friendName}」の接続先を共有「{shopShare}」の「{shopHost}」{shopIp}へ切り替えます。下の接続未確定リストで選んだ候補に再接続します。";
+                        $"「{friendName}」の接続先を共有「{shopShare}」の「{shopHost}」{shopIp}へ切り替え、名前・メモ・アイコンもまとめて更新します。下の接続未確定リストで選んだ候補に再接続します。";
                 }
             }
             else if (activeFriendIsLive)
@@ -239,7 +239,7 @@ public partial class FriendsWindow : Window
 
         OkButton.Content = action switch
         {
-            CommitAction.Switch => "切替",
+            CommitAction.Switch => "切替更新",
             CommitAction.Register => "登録",
             _ => "更新",
         };
@@ -702,7 +702,7 @@ public partial class FriendsWindow : Window
             if (_activeShopInfo != null)
             {
                 OkButton.IsEnabled = false;
-                StatusTextBlock.Text = "接続先を切替中…";
+                StatusTextBlock.Text = "接続先と情報を更新中…";
                 _ = ChangeConnectionAsync(name, memo);
                 return;
             }
@@ -789,7 +789,7 @@ public partial class FriendsWindow : Window
                 $"FriendsWindow.ChangeConnectionAsync: id={target.Id} newHost={target.HostMachineName}");
             AppendFriendHistory(
                 target,
-                $"{GetFriendLabel(target)} の接続先を更新しました。",
+                $"{GetFriendLabel(target)} の接続先と情報を更新しました。",
                 "Switch",
                 HistoryDirection.Outgoing,
                 HistoryOutcome.Success,
@@ -1019,7 +1019,9 @@ public partial class FriendsWindow : Window
             $"FriendsWindow.UpdateExistingFriend: id={target.Id} newHost={_activeNewCandidate?.Address}");
         AppendFriendHistory(
             target,
-            $"{GetFriendLabel(target)} の情報を更新しました。",
+            (_activeNewCandidate != null
+                ? $"{GetFriendLabel(target)} の接続先と情報を更新しました。"
+                : $"{GetFriendLabel(target)} の情報を更新しました。"),
             "UpdateFriend",
             HistoryDirection.Outgoing,
             HistoryOutcome.Success,
