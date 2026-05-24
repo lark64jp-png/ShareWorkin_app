@@ -1092,6 +1092,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             destinationFolder: item.FolderPath,
             source: source);
         QueueNotification(item);
+        string loggedPath = NormalizeHistoryPathText(
+            item.FolderPath,
+            sourcePath: null,
+            destinationPath: fullPath,
+            destinationFolder: item.FolderPath) ?? item.FolderPath;
+        SwkLogger.Info($"Receive success: {item.Name} -> {loggedPath} source={source}");
         SwkLogger.Info($"TryRegisterExternalReceive appended: path={fullPath} source={source}");
         return true;
     }
@@ -1111,10 +1117,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? destinationPath = null,
         string? destinationFolder = null)
     {
+        Friend? historyFriend = friend ?? ResolveHistoryFriend(pathText, sourcePath, destinationPath, destinationFolder);
         string? normalizedTargetName = NormalizeHistoryTargetName(targetName, destinationPath, sourcePath);
+        string? normalizedPathText = NormalizeHistoryPathText(
+            pathText,
+            historyFriend,
+            sourcePath,
+            destinationPath,
+            destinationFolder);
         SwkLogger.Debug(
             $"AppendHistory: channel={channel} eventType={eventType} outcome={outcome} " +
-            $"direction={direction} target={normalizedTargetName ?? "-"} path={pathText ?? "-"} source={source ?? "-"}");
+            $"direction={direction} target={normalizedTargetName ?? "-"} path={normalizedPathText ?? "-"} source={source ?? "-"}");
         HistoryRepository.Append(new HistoryEntry
         {
             Channel = channel,
@@ -1122,10 +1135,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             EventType = eventType,
             Outcome = outcome,
             Direction = direction,
-            FriendId = friend?.Id,
-            FriendName = friend is null ? null : GetFriendLabel(friend),
+            FriendId = historyFriend?.Id,
+            FriendName = historyFriend is null ? null : GetFriendLabel(historyFriend),
             TargetName = normalizedTargetName,
-            PathText = pathText,
+            PathText = normalizedPathText,
             Note = note,
             Source = source,
             SourcePath = sourcePath,
@@ -1419,6 +1432,169 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static string GetFriendLabel(Friend friend) =>
         string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+
+    private Friend? ResolveHistoryFriend(
+        string? pathText = null,
+        string? sourcePath = null,
+        string? destinationPath = null,
+        string? destinationFolder = null)
+    {
+        if (_activeFriendShop is null || _currentMode != DisplayMode.FriendShop)
+        {
+            return null;
+        }
+
+        string[] candidates =
+        [
+            pathText ?? string.Empty,
+            sourcePath ?? string.Empty,
+            destinationPath ?? string.Empty,
+            destinationFolder ?? string.Empty,
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            if (TryMapToCanonicalFriendPath(candidate, _activeFriendShop, out _))
+            {
+                return _activeFriendShop;
+            }
+        }
+
+        return null;
+    }
+
+    private string? NormalizeHistoryPathText(
+        string? pathText,
+        Friend? friend = null,
+        string? sourcePath = null,
+        string? destinationPath = null,
+        string? destinationFolder = null)
+    {
+        string? candidate = !string.IsNullOrWhiteSpace(pathText)
+            ? pathText
+            : !string.IsNullOrWhiteSpace(destinationFolder)
+                ? destinationFolder
+                : !string.IsNullOrWhiteSpace(destinationPath)
+                    ? Path.GetDirectoryName(destinationPath)
+                    : !string.IsNullOrWhiteSpace(sourcePath)
+                        ? Path.GetDirectoryName(sourcePath)
+                        : null;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return candidate;
+        }
+
+        if (friend is not null &&
+            TryMapToCanonicalFriendPath(candidate, friend, out string? canonicalFriendPath))
+        {
+            return canonicalFriendPath;
+        }
+
+        if (TryMapToLocalSharePath(candidate, out string? canonicalLocalPath))
+        {
+            return canonicalLocalPath;
+        }
+
+        return candidate;
+    }
+
+    private bool TryMapToCanonicalFriendPath(string path, Friend friend, out string canonicalPath)
+    {
+        canonicalPath = path;
+        if (string.IsNullOrWhiteSpace(path) ||
+            string.IsNullOrWhiteSpace(friend.HostMachineName) ||
+            string.IsNullOrWhiteSpace(friend.ShareName))
+        {
+            return false;
+        }
+
+        List<string> roots =
+        [
+            $@"\\{friend.HostMachineName}\{friend.ShareName}",
+        ];
+
+        if (!string.IsNullOrWhiteSpace(friend.LastKnownAddress))
+        {
+            roots.Add($@"\\{friend.LastKnownAddress}\{friend.ShareName}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.ConnectUncPath))
+        {
+            roots.Add(friend.ConnectUncPath);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_activeFriendShopRootPath))
+        {
+            roots.Add(_activeFriendShopRootPath);
+        }
+
+        string canonicalRoot = $@"\\{friend.HostMachineName}\{friend.ShareName}";
+        foreach (string root in roots
+                     .Where(static root => !string.IsNullOrWhiteSpace(root))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!TryBuildCanonicalPathFromRoot(path, root, canonicalRoot, out canonicalPath))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryMapToLocalSharePath(string path, out string canonicalPath)
+    {
+        canonicalPath = path;
+        if (string.IsNullOrWhiteSpace(path) ||
+            string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return false;
+        }
+
+        string shareName = DeriveShareName(_shopFolder);
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            return false;
+        }
+
+        string canonicalRoot = $@"\\{Environment.MachineName}\{shareName}";
+        return TryBuildCanonicalPathFromRoot(path, _shopFolder, canonicalRoot, out canonicalPath);
+    }
+
+    private static bool TryBuildCanonicalPathFromRoot(
+        string path,
+        string sourceRoot,
+        string canonicalRoot,
+        out string canonicalPath)
+    {
+        canonicalPath = path;
+        if (string.IsNullOrWhiteSpace(path) ||
+            string.IsNullOrWhiteSpace(sourceRoot) ||
+            string.IsNullOrWhiteSpace(canonicalRoot))
+        {
+            return false;
+        }
+
+        string normalizedPath = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string normalizedSourceRoot = sourceRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!normalizedPath.Equals(normalizedSourceRoot, StringComparison.OrdinalIgnoreCase) &&
+            !normalizedPath.StartsWith(normalizedSourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !normalizedPath.StartsWith(normalizedSourceRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string relative = normalizedPath.Length == normalizedSourceRoot.Length
+            ? string.Empty
+            : normalizedPath[normalizedSourceRoot.Length..]
+                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        canonicalPath = string.IsNullOrWhiteSpace(relative)
+            ? canonicalRoot
+            : $@"{canonicalRoot}\{relative.Replace('/', '\\')}";
+        return true;
+    }
 
     private void ShowHistoryDialog(HistoryChannel channel, string title)
     {
