@@ -193,6 +193,11 @@ public partial class HistoryWindow : Window
         "PermissionCascade" => "共有設定変更（連動）",
         "Copy" => "コピー",
         "Log" => "記録",
+        "InteractionNotify" => "交流通知",
+        "InteractionNotifyUnverified" => "交流通知（未照合）",
+        "InteractionDispatchSkipped" => "交流通知未送達",
+        "InteractionDispatchFailed" => "交流通知送達失敗",
+        "OutOfSyncDetected" => "同期外差分",
         _ => eventType
     };
 
@@ -248,6 +253,18 @@ public partial class HistoryWindow : Window
         if (string.Equals(entry.EventType, "PermissionChanged", StringComparison.OrdinalIgnoreCase))
         {
             return "共有設定の変化を示す行です。移動や配置の結果確認に向いています。";
+        }
+
+        if (string.Equals(entry.EventType, "InteractionDispatchSkipped", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(entry.EventType, "InteractionDispatchFailed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "交流通知を相手へ届けられなかった行です。相手の公開状態や通信状態の確認に向いています。";
+        }
+
+        if (string.Equals(entry.EventType, "InteractionNotify", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(entry.EventType, "InteractionNotifyUnverified", StringComparison.OrdinalIgnoreCase))
+        {
+            return "交流通知の履歴です。更新履歴ではなく通知履歴で確認する種類の行です。";
         }
 
         if (IsExternalObservation(entry))
@@ -310,8 +327,14 @@ public partial class HistoryWindow : Window
             return true;
         }
 
+        if (string.Equals(entry.EventType, "OutOfSyncDetected", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         if (string.Equals(entry.Source, "Watcher", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(entry.Source, "Polling", StringComparison.OrdinalIgnoreCase))
+            string.Equals(entry.Source, "Polling", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(entry.Source, "Aftercare.ExternalCreated", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }

@@ -110,6 +110,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly Dictionary<string, DateTime> _recentExternalReceiveAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _recentIncomingInteractionAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (bool IsReadOnly, bool IsSharedOff)> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<string> _backStack = new();
@@ -1044,12 +1045,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return false;
         }
 
+        if (_recentIncomingInteractionAt.TryGetValue(fullPath, out DateTime incomingAt) &&
+            now - incomingAt < TimeSpan.FromSeconds(30))
+        {
+            SwkLogger.Info(
+                $"Trace.ExternalFlow.Receive.Skip: path={fullPath} source={source} reason=matched-confirmed-interaction");
+            return false;
+        }
+
         foreach (string stalePath in _recentExternalReceiveAt
                      .Where(pair => now - pair.Value >= TimeSpan.FromMinutes(3))
                      .Select(pair => pair.Key)
                      .ToList())
         {
             _recentExternalReceiveAt.Remove(stalePath);
+        }
+
+        foreach (string stalePath in _recentIncomingInteractionAt
+                     .Where(pair => now - pair.Value >= TimeSpan.FromMinutes(3))
+                     .Select(pair => pair.Key)
+                     .ToList())
+        {
+            _recentIncomingInteractionAt.Remove(stalePath);
         }
 
         _recentExternalReceiveAt[fullPath] = now;
@@ -5388,23 +5405,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? senderNote = isVerified
             ? null
             : BuildUnverifiedSenderNote(entry);
-        AppendHistory(
-            HistoryChannel.Update,
-            updateMessage,
-            isVerified ? "InteractionReceive" : "InteractionReceiveUnverified",
-            isVerified ? HistoryOutcome.Success : HistoryOutcome.Warning,
-            HistoryDirection.Incoming,
-            friend: friend,
-            targetName: entry.TargetName,
-            pathText: entry.TargetFolder,
-            note: BuildInteractionReceiveNote(senderNote, entry.Message),
-            interactionEventId: entry.EventId,
-            source: entry.SourceRoute,
-            destinationPath: entry.TargetFullPath,
-            destinationFolder: entry.TargetFolder);
 
         if (isVerified && !string.IsNullOrWhiteSpace(entry.TargetName) && !string.IsNullOrWhiteSpace(entry.TargetFolder))
         {
+            if (!string.IsNullOrWhiteSpace(entry.TargetFullPath))
+            {
+                _recentIncomingInteractionAt[entry.TargetFullPath] = DateTime.Now;
+            }
+
             ArrivedItems.Insert(0, new ArrivedItem(entry.TargetName, entry.TargetFolder, DateTime.Now));
             while (ArrivedItems.Count > MaxArrivedItemCount)
             {
