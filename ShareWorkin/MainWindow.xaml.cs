@@ -332,7 +332,12 @@ public partial class MainWindow : Window
         _ = Dispatcher.InvokeAsync(async () =>
         {
             BeginProcessing();
-            try { await PlaceExternalFilesAsync(paths, capturedDestination); }
+            try
+            {
+                SwkLogger.Info(
+                    $"Trace.ExternalFlow.Sender.Entry: route=WM_DROPFILES count={paths.Count} names={DescribeExternalPaths(paths)} dest={capturedDestination}");
+                await PlaceExternalFilesAsync(paths, capturedDestination);
+            }
             finally { EndProcessing(); }
         });
     }
@@ -473,6 +478,8 @@ public partial class MainWindow : Window
                     return;
                 }
 
+                SwkLogger.Info(
+                    $"Trace.ExternalFlow.Sender.Entry: route=OLE count={paths.Length} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
                 await PlaceExternalFilesAsync(paths, destinationFolder);
             }
         }
@@ -1044,11 +1051,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private bool TryRegisterExternalReceive(string fullPath, string source)
     {
+        SwkLogger.Info($"Trace.ExternalFlow.Receive.Entry: path={fullPath ?? "-"} source={source}");
         if (string.IsNullOrWhiteSpace(fullPath) ||
             !File.Exists(fullPath) ||
             IsHoldFolderPath(fullPath))
         {
             SwkLogger.Debug($"TryRegisterExternalReceive skipped: path={fullPath ?? "-"} source={source}");
+            SwkLogger.Info($"Trace.ExternalFlow.Receive.Skip: path={fullPath ?? "-"} source={source} reason=missing-or-hold");
             return false;
         }
 
@@ -1058,6 +1067,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             SwkLogger.Debug(
                 $"TryRegisterExternalReceive skipped: duplicate path={fullPath} source={source} lastAt={lastAt:O}");
+            SwkLogger.Info($"Trace.ExternalFlow.Receive.Skip: path={fullPath} source={source} reason=duplicate");
             return false;
         }
 
@@ -1099,6 +1109,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             destinationFolder: item.FolderPath) ?? item.FolderPath;
         SwkLogger.Info($"Receive success: {item.Name} -> {loggedPath} source={source}");
         SwkLogger.Info($"TryRegisterExternalReceive appended: path={fullPath} source={source}");
+        SwkLogger.Info($"Trace.ExternalFlow.Receive.Success: target={item.Name} path={loggedPath} source={source}");
         return true;
     }
 
@@ -1432,6 +1443,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static string GetFriendLabel(Friend friend) =>
         string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
+
+    private static string DescribeExternalPaths(IReadOnlyList<string> paths)
+        => paths.Count == 0 ? "-" : string.Join(" | ", paths.Select(static path => Path.GetFileName(path)));
 
     private Friend? ResolveHistoryFriend(
         string? pathText = null,
@@ -3321,6 +3335,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             string[] paths = (string[])e.Data.GetData(System.Windows.DataFormats.FileDrop);
+            SwkLogger.Info(
+                $"Trace.ExternalFlow.Sender.Entry: route=WPF_DROP count={paths.Length} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
             await PlaceExternalFilesAsync(paths, destinationFolder);
         }
         finally
@@ -3334,10 +3350,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!Directory.Exists(destinationFolder)) return;
 
         string modeLabel = _currentMode.ToString();
+        SwkLogger.Info(
+            $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={paths.Count} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
 
         if (_currentMode == DisplayMode.FriendShop && !IsDirectoryWritable(destinationFolder))
         {
             SwkLogger.Info($"Explorer[{_currentMode}]: Place blocked - not writable: {destinationFolder}");
+            SwkLogger.Info($"Trace.ExternalFlow.Sender.Blocked: mode={modeLabel} dest={destinationFolder} reason=not-writable");
             SetTransientStatus("このフォルダーにはコピーできません。");
             return;
         }
@@ -3353,6 +3372,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     BeforeWrite = SuppressExternalChangeNotifications,
                 })))
         {
+            SwkLogger.Info($"Trace.ExternalFlow.Sender.Blocked: mode={modeLabel} dest={destinationFolder} reason=validation");
             return;
         }
 
@@ -3379,6 +3399,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 }));
 
                 ApplyExplorerActionResult(result, showAlertDialog: false);
+                SwkLogger.Info(
+                    $"Trace.ExternalFlow.Sender.Result: state={result.State} event={result.EventType} target={result.TargetName ?? "-"} " +
+                    $"source={result.Source ?? "-"} sourcePath={result.SourcePath ?? "-"} destPath={result.DestinationPath ?? "-"} " +
+                    $"destFolder={result.DestinationFolder ?? "-"} refresh={result.ShouldRefreshUi}");
 
                 if (result.ShouldRefreshUi &&
                     !string.IsNullOrWhiteSpace(result.DestinationPath) &&
@@ -3388,6 +3412,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     MaybeAppendPermissionInheritedOnArrival(result.DestinationPath!, result.DestinationFolder!, "MainWindow.place");
                     placedCount++;
                     lastPlacedName = result.TargetName;
+                }
+                else
+                {
+                    SwkLogger.Info(
+                        $"Trace.ExternalFlow.Sender.NoAftercare: target={result.TargetName ?? fileName} state={result.State} " +
+                        $"destPath={result.DestinationPath ?? "-"} destFolder={result.DestinationFolder ?? "-"}");
                 }
 
                 progress.Report((i + 1, total, fileName));
@@ -4893,8 +4923,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Dispatcher.Invoke(() =>
         {
             SwkLogger.Debug($"ArrivalSensor_Created: {FormatWatcherEvent(e)}");
+            SwkLogger.Info($"Trace.ExternalFlow.Receive.Sensor: sensor=Arrival change={e.ChangeType} path={e.FullPath}");
             if (e.ChangeType == WatcherChangeTypes.Created && !Directory.Exists(e.FullPath))
             {
+                SwkLogger.Info($"Trace.ExternalFlow.Receive.Branch: sensor=Arrival action=TryRegisterExternalReceive source=Watcher path={e.FullPath}");
                 TryRegisterExternalReceive(e.FullPath, "Watcher");
             }
 
@@ -4903,6 +4935,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!ShouldSuppressExternalChangeNotification())
             {
                 SwkLogger.Debug($"ArrivalSensor_Created aftercare mark: path={e.FullPath}");
+                SwkLogger.Info($"Trace.ExternalFlow.Receive.Branch: sensor=Arrival action=NoteFutureSharePolicyRepair path={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
@@ -6009,6 +6042,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Dispatcher.Invoke(() =>
         {
             SwkLogger.Debug($"ContentsSensor_Changed: {FormatWatcherEvent(e)} currentFolder={_currentFolder ?? "-"}");
+            SwkLogger.Info($"Trace.ExternalFlow.Receive.Sensor: sensor=Contents change={e.ChangeType} path={e.FullPath}");
             if (!string.IsNullOrWhiteSpace(_currentFolder))
             {
                 InvalidateSizeCacheUnder(_currentFolder);
@@ -6026,6 +6060,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (e.ChangeType == WatcherChangeTypes.Created && !ShouldSuppressExternalChangeNotification())
             {
                 SwkLogger.Debug($"ContentsSensor_Changed aftercare mark: path={e.FullPath}");
+                SwkLogger.Info($"Trace.ExternalFlow.Receive.Branch: sensor=Contents action=NoteFutureSharePolicyRepair path={e.FullPath}");
                 NoteFutureSharePolicyRepair(
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
@@ -6083,6 +6118,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (reason == SharePolicyRepairReason.ExternalCreated && File.Exists(affectedPath))
         {
+            SwkLogger.Info(
+                $"Trace.ExternalFlow.Receive.Aftercare: action=TryRegisterExternalReceive source=Aftercare.ExternalCreated path={affectedPath} folder={policySourceFolder}");
             TryRegisterExternalReceive(affectedPath, "Aftercare.ExternalCreated");
         }
 
