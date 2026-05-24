@@ -312,12 +312,28 @@ public partial class HistoryWindow : Window
             return new MediaSolidColorBrush(MediaColor.FromRgb(238, 245, 252));
         }
 
-        if (entry.Outcome == HistoryOutcome.Success)
+        if (IsOtherPartyUpdate(entry))
         {
             return new MediaSolidColorBrush(MediaColor.FromRgb(243, 249, 240));
         }
 
         return MediaBrushes.White;
+    }
+
+    private static bool IsOtherPartyUpdate(HistoryEntry entry)
+    {
+        if (entry.Direction == HistoryDirection.Incoming)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.FriendName) &&
+            entry.Direction != HistoryDirection.Outgoing)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsExternalObservation(HistoryEntry entry)

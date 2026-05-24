@@ -125,15 +125,21 @@
                         <Style TargetType="DataGridRow">
                             <Setter Property="Background" Value="{Binding RowBackground}" />
                             <Setter Property="Foreground" Value="{Binding RowForeground}" />
+                            <Setter Property="BorderBrush" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="1" />
                             <Setter Property="ToolTip" Value="{Binding AttentionText}" />
                             <Style.Triggers>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="BorderBrush" Value="#6B7F99" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                </Trigger>
                             </Style.Triggers>
                         </Style>
                     </DataGrid.RowStyle>
                     <DataGrid.Resources>
-                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#C8D8F0" />
+                        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent" />
                         <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#2F2A22" />
-                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#C8D8F0" />
+                        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent" />
                         <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#2F2A22" />
                     </DataGrid.Resources>
                     <DataGrid.ContextMenu>
