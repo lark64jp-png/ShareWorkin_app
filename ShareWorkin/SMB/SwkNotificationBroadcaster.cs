@@ -40,6 +40,8 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     /// </summary>
     public Action<string, string>? OnShopClosingReceived { get; set; }
 
+    public Action<SwkNotificationProtocol.InteractionEventNotice>? OnInteractionEventReceived { get; set; }
+
     public SwkNotificationBroadcaster(string shareName)
     {
         _shareName = shareName ?? throw new ArgumentNullException(nameof(shareName));
@@ -153,6 +155,10 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
                 {
                     await HandleInviteCodeRequestAsync(sslStream, doc, cancellationToken);
                 }
+                else if (type == "InteractionEventNotice")
+                {
+                    await HandleInteractionEventNoticeAsync(sslStream, doc, cancellationToken);
+                }
             }
             catch (Exception ex)
             {
@@ -248,6 +254,103 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         catch (Exception ex)
         {
             SwkLogger.Warn($"HandleInviteCodeRequestAsync error: {ex.Message}");
+        }
+    }
+
+    private async Task HandleInteractionEventNoticeAsync(
+        SslStream stream,
+        JsonDocument requestDoc,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            string? receiverShareName = requestDoc.RootElement.TryGetProperty("receiverShareName", out JsonElement shareElement)
+                ? shareElement.GetString()
+                : null;
+            if (!string.Equals(receiverShareName, _shareName, StringComparison.OrdinalIgnoreCase))
+            {
+                await WriteJsonAsync(stream, new SwkNotificationProtocol.InteractionEventResponse
+                {
+                    Result = "NotFound",
+                    ErrorMessage = "対象共有が一致しません。"
+                }, cancellationToken);
+                return;
+            }
+
+            string? eventId = requestDoc.RootElement.TryGetProperty("eventId", out JsonElement eventElement)
+                ? eventElement.GetString()
+                : null;
+            string? eventType = requestDoc.RootElement.TryGetProperty("eventType", out JsonElement typeElement)
+                ? typeElement.GetString()
+                : null;
+            string? senderMachineName = requestDoc.RootElement.TryGetProperty("senderMachineName", out JsonElement machineElement)
+                ? machineElement.GetString()
+                : null;
+            string? targetName = requestDoc.RootElement.TryGetProperty("targetName", out JsonElement targetElement)
+                ? targetElement.GetString()
+                : null;
+
+            if (string.IsNullOrWhiteSpace(eventId) ||
+                string.IsNullOrWhiteSpace(eventType) ||
+                string.IsNullOrWhiteSpace(senderMachineName) ||
+                string.IsNullOrWhiteSpace(targetName))
+            {
+                await WriteJsonAsync(stream, new SwkNotificationProtocol.InteractionEventResponse
+                {
+                    Result = "Invalid",
+                    ErrorMessage = "交流イベント通知に必要な情報が不足しています。"
+                }, cancellationToken);
+                return;
+            }
+
+            var notice = new SwkNotificationProtocol.InteractionEventNotice
+            {
+                EventId = eventId,
+                EventType = eventType,
+                SenderMachineName = senderMachineName,
+                SenderDisplayName = requestDoc.RootElement.TryGetProperty("senderDisplayName", out JsonElement displayElement)
+                    ? displayElement.GetString()
+                    : null,
+                SenderSwkInstanceId = requestDoc.RootElement.TryGetProperty("senderSwkInstanceId", out JsonElement instanceElement)
+                    ? instanceElement.GetString()
+                    : null,
+                SenderShareName = requestDoc.RootElement.TryGetProperty("senderShareName", out JsonElement senderShareElement)
+                    ? senderShareElement.GetString()
+                    : null,
+                ReceiverShareName = receiverShareName!,
+                TargetName = targetName,
+                TargetRelativePath = requestDoc.RootElement.TryGetProperty("targetRelativePath", out JsonElement relativeElement)
+                    ? relativeElement.GetString()
+                    : null,
+                TargetKind = requestDoc.RootElement.TryGetProperty("targetKind", out JsonElement kindElement)
+                    ? kindElement.GetString()
+                    : null,
+                NotificationType = requestDoc.RootElement.TryGetProperty("notificationType", out JsonElement notificationElement)
+                    ? notificationElement.GetString()
+                    : null,
+                Message = requestDoc.RootElement.TryGetProperty("message", out JsonElement messageElement)
+                    ? messageElement.GetString()
+                    : null,
+                IssuedAt = requestDoc.RootElement.TryGetProperty("issuedAt", out JsonElement issuedElement)
+                    ? issuedElement.GetString() ?? DateTime.UtcNow.ToString("o")
+                    : DateTime.UtcNow.ToString("o")
+            };
+
+            OnInteractionEventReceived?.Invoke(notice);
+            await WriteJsonAsync(stream, new SwkNotificationProtocol.InteractionEventResponse
+            {
+                Result = "Ok"
+            }, cancellationToken);
+            SwkLogger.Info($"InteractionEventNotice accepted: sender={senderMachineName} target={targetName} share={_shareName}");
+        }
+        catch (Exception ex)
+        {
+            await WriteJsonAsync(stream, new SwkNotificationProtocol.InteractionEventResponse
+            {
+                Result = "Error",
+                ErrorMessage = ex.Message
+            }, cancellationToken);
+            SwkLogger.Warn($"HandleInteractionEventNoticeAsync error: {ex.Message}");
         }
     }
 

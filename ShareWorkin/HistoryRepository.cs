@@ -63,6 +63,9 @@ public sealed class HistoryEntry
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
 
+    [JsonPropertyName("interactionEventId")]
+    public string? InteractionEventId { get; set; }
+
     [JsonPropertyName("note")]
     public string? Note { get; set; }
 
@@ -112,6 +115,7 @@ public static class HistoryRepository
                 targetName: entry.TargetName,
                 pathText: entry.PathText,
                 note: entry.Note,
+                interactionEventId: entry.InteractionEventId,
                 sourcePath: entry.SourcePath,
                 destinationPath: entry.DestinationPath,
                 destinationFolder: entry.DestinationFolder,
@@ -314,6 +318,7 @@ public static class HistoryRepository
             TargetName = record.TargetName,
             PathText = record.PathText,
             Message = BuildJournalMessage(record),
+            InteractionEventId = record.InteractionEventId,
             Note = record.Note,
             Source = record.Source,
             SourcePath = record.SourcePath,

@@ -61,6 +61,7 @@ public sealed class TrayApp : IDisposable
     {
         LoadSettings();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
+        SmbController.OnInteractionEventReceived = HandleIncomingInteractionReceived;
         _notifyIcon.Visible = true;
         PipeServer.Start();
         RestoreOpenShopIfNeeded();
@@ -210,6 +211,135 @@ public sealed class TrayApp : IDisposable
             machineName,
             shareName
         }));
+    }
+
+    private void HandleIncomingInteractionReceived(SwkNotificationProtocol.InteractionEventNotice notice)
+    {
+        SwkIncomingInteractionRecord entry = BuildIncomingInteractionRecord(notice);
+        SwkIncomingInteractionInbox.Append(entry);
+
+        if (PipeServer.HasConnectedClient)
+        {
+            _ = PipeServer.PushMessageAsync(JsonSerializer.Serialize(new
+            {
+                type = "INCOMING_INTERACTION",
+                entry
+            }));
+            return;
+        }
+
+        string targetName = string.IsNullOrWhiteSpace(entry.TargetName) ? "項目" : entry.TargetName;
+        string balloonText = entry.IsSenderVerified
+            ? $"{ResolveVerifiedSenderLabel(entry)} から {targetName} が届きました。"
+            : $"未照合の送信元から {targetName} が届きました。";
+        ShowBalloonTip("ShareWorkin の受信", balloonText, entry.TargetFolder ?? _shopFolder);
+        SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, DateTime.UtcNow);
+    }
+
+    private SwkIncomingInteractionRecord BuildIncomingInteractionRecord(SwkNotificationProtocol.InteractionEventNotice notice)
+    {
+        Friend? verifiedFriend = ResolveVerifiedIncomingInteractionFriend(notice.SenderSwkInstanceId);
+        string? relativePath = NormalizeRelativePath(notice.TargetRelativePath);
+        string? fullPath = BuildFullPath(_shopFolder, relativePath);
+        string? folder = !string.IsNullOrWhiteSpace(fullPath)
+            ? (string.Equals(notice.TargetKind, "Folder", StringComparison.OrdinalIgnoreCase)
+                ? fullPath
+                : Path.GetDirectoryName(fullPath))
+            : _shopFolder;
+
+        return new SwkIncomingInteractionRecord
+        {
+            EventId = notice.EventId,
+            OccurredAt = notice.IssuedAt,
+            EventType = notice.EventType,
+            SenderMachineName = notice.SenderMachineName,
+            SenderDisplayName = notice.SenderDisplayName,
+            SenderSwkInstanceId = notice.SenderSwkInstanceId,
+            SenderShareName = notice.SenderShareName,
+            ReceiverShareName = notice.ReceiverShareName,
+            TargetName = notice.TargetName,
+            TargetRelativePath = relativePath,
+            TargetFullPath = fullPath,
+            TargetFolder = folder,
+            TargetKind = notice.TargetKind,
+            NotificationType = notice.NotificationType,
+            Message = notice.Message,
+            SourceRoute = "Tray.IncomingInteraction",
+            ReceivedAt = DateTime.UtcNow.ToString("o"),
+            IsSenderVerified = verifiedFriend is not null,
+            VerifiedFriendId = verifiedFriend?.Id,
+            VerifiedFriendName = ResolveFriendLabel(verifiedFriend)
+        };
+    }
+
+    private static Friend? ResolveVerifiedIncomingInteractionFriend(string? senderSwkInstanceId)
+    {
+        if (string.IsNullOrWhiteSpace(senderSwkInstanceId))
+        {
+            return null;
+        }
+
+        return FriendsRepository.LoadAll().FirstOrDefault(friend =>
+            string.Equals(friend.RemoteSwkInstanceId, senderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ResolveVerifiedSenderLabel(SwkIncomingInteractionRecord entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.VerifiedFriendName))
+        {
+            return entry.VerifiedFriendName;
+        }
+
+        return "相手";
+    }
+
+    private static string? ResolveFriendLabel(Friend? friend)
+    {
+        if (friend is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.DisplayName))
+        {
+            return friend.DisplayName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.ProfileLabel))
+        {
+            return friend.ProfileLabel;
+        }
+
+        if (!string.IsNullOrWhiteSpace(friend.HostMachineName))
+        {
+            return friend.HostMachineName;
+        }
+
+        return friend.ShareName;
+    }
+
+    private static string? NormalizeRelativePath(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return null;
+        }
+
+        return relativePath
+            .Replace('/', Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static string? BuildFullPath(string? shopFolder, string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(shopFolder))
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(relativePath)
+            ? shopFolder
+            : Path.Combine(shopFolder, relativePath);
     }
 
     public void ShowBalloonTip(string title, string text, string? folder)

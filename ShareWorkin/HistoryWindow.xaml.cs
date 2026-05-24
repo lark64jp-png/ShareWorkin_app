@@ -56,7 +56,7 @@ public partial class HistoryWindow : Window
         {
             EntryId = e.Id,
             TimeText = e.OccurredAt.ToString("yyyy/MM/dd HH:mm:ss"),
-            UserText = string.IsNullOrWhiteSpace(e.FriendName) ? "自分" : e.FriendName,
+            UserText = BuildUserText(e),
             PathText = BuildPathText(e),
             EventTypeText = GetEventTypeText(e.EventType),
             FileNameText = string.IsNullOrWhiteSpace(e.TargetName) ? "-" : e.TargetName,
@@ -195,6 +195,16 @@ public partial class HistoryWindow : Window
         "Log" => "記録",
         _ => eventType
     };
+
+    private static string BuildUserText(HistoryEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.FriendName))
+        {
+            return entry.FriendName!;
+        }
+
+        return entry.Direction == HistoryDirection.Incoming ? "不明" : "自分";
+    }
 
     private static string BuildPathText(HistoryEntry entry)
     {

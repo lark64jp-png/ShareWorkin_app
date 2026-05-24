@@ -41,6 +41,9 @@ public sealed class SwkHistoryJournalRecord
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
 
+    [JsonPropertyName("interactionEventId")]
+    public string? InteractionEventId { get; set; }
+
     [JsonPropertyName("outcome")]
     public string Outcome { get; set; } = "Info";
 
@@ -83,6 +86,7 @@ public static class SwkHistoryJournal
         string? targetName = null,
         string? pathText = null,
         string? note = null,
+        string? interactionEventId = null,
         string? sourcePath = null,
         string? destinationPath = null,
         string? destinationFolder = null,
@@ -100,6 +104,7 @@ public static class SwkHistoryJournal
             TargetName = targetName,
             PathText = pathText,
             Note = note,
+            InteractionEventId = interactionEventId,
             SourcePath = sourcePath,
             DestinationPath = destinationPath,
             DestinationFolder = destinationFolder,

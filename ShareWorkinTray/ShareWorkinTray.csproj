@@ -9,10 +9,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ShareWorkinTray</AssemblyName>
     <RootNamespace>ShareWorkinTray</RootNamespace>
-    <Version>1.20.0</Version>
-    <FileVersion>1.20.0.0</FileVersion>
-    <AssemblyVersion>1.20.0.0</AssemblyVersion>
-    <InformationalVersion>1.20</InformationalVersion>
+    <Version>1.21.0</Version>
+    <FileVersion>1.21.0.0</FileVersion>
+    <AssemblyVersion>1.21.0.0</AssemblyVersion>
+    <InformationalVersion>1.21</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\ShareWorkin\app.ico</ApplicationIcon>
     <AssemblyTitle>ShareWorkinTray</AssemblyTitle>

@@ -249,6 +249,12 @@ public sealed class SwkNotificationListener : IAsyncDisposable
         public bool Success => string.IsNullOrEmpty(ErrorMessage) && !string.IsNullOrEmpty(Password);
     }
 
+    public sealed class InteractionEventSendResult
+    {
+        public string? ErrorMessage { get; init; }
+        public bool Success => string.IsNullOrWhiteSpace(ErrorMessage);
+    }
+
     /// <summary>
     /// 発見済みのお店に対して招待コードを要求する。
     /// inviteId が非 null = 手動招待コード経由(店主側で InviteRegistry 照合 + 一回性)。
@@ -403,6 +409,93 @@ public sealed class SwkNotificationListener : IAsyncDisposable
                 CertThumbprint = capturedThumbprint,
                 ErrorMessage = ex.Message
             };
+        }
+    }
+
+    public async Task<InteractionEventSendResult> SendInteractionEventAsync(
+        ShopInfo shop,
+        SwkNotificationProtocol.InteractionEventNotice notice,
+        string? expectedThumbprint,
+        CancellationToken cancellationToken)
+    {
+        string? capturedThumbprint = null;
+
+        try
+        {
+            string connectTarget = shop.IpAddress ?? shop.MachineName;
+            using var client = new TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+            await client.ConnectAsync(connectTarget, shop.Port, cts.Token);
+
+            using var sslStream = new SslStream(client.GetStream(), leaveInnerStreamOpen: false);
+            var sslOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = shop.MachineName,
+                EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13,
+                RemoteCertificateValidationCallback = (s, cert, ch, errors) =>
+                {
+                    if (cert is null) return false;
+
+                    string thumb;
+                    try
+                    {
+                        thumb = cert is X509Certificate2 c2
+                            ? c2.Thumbprint
+                            : new X509Certificate2(cert).Thumbprint;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+
+                    capturedThumbprint = thumb;
+                    return string.IsNullOrWhiteSpace(expectedThumbprint) ||
+                           string.Equals(thumb, expectedThumbprint, StringComparison.OrdinalIgnoreCase);
+                }
+            };
+
+            await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
+
+            string? notificationJson = await ReadJsonAsync(sslStream, cancellationToken);
+            if (string.IsNullOrWhiteSpace(notificationJson))
+            {
+                return new InteractionEventSendResult { ErrorMessage = "応答なし" };
+            }
+
+            await WriteJsonAsync(sslStream, notice, cancellationToken);
+            string? responseJson = await ReadJsonAsync(sslStream, cancellationToken);
+            if (string.IsNullOrWhiteSpace(responseJson))
+            {
+                return new InteractionEventSendResult { ErrorMessage = "応答なし" };
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(responseJson);
+            string? result = doc.RootElement.TryGetProperty("result", out JsonElement resultElement)
+                ? resultElement.GetString()
+                : null;
+            if (!string.Equals(result, "Ok", StringComparison.OrdinalIgnoreCase))
+            {
+                string? errorMessage = doc.RootElement.TryGetProperty("errorMessage", out JsonElement errorElement)
+                    ? errorElement.GetString()
+                    : result;
+                return new InteractionEventSendResult { ErrorMessage = errorMessage ?? "送信失敗" };
+            }
+
+            return new InteractionEventSendResult();
+        }
+        catch (System.Security.Authentication.AuthenticationException)
+        {
+            return new InteractionEventSendResult
+            {
+                ErrorMessage = "店主の証明書が以前と違います。乗っ取りの可能性があるため接続を中止しました。"
+            };
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"SendInteractionEventAsync failed: {ex.Message}");
+            return new InteractionEventSendResult { ErrorMessage = ex.Message };
         }
     }
 

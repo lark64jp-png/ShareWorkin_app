@@ -186,6 +186,7 @@ public partial class MainWindow : Window
     private bool _permissionPopupInitialSharedOff;
     private readonly ObservableCollection<string> _permissionAllowed = new();
     private readonly ObservableCollection<string> _permissionUnset = new();
+    private string? _pendingInteractionMessage;
     private int _processingDepth;
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
@@ -212,6 +213,10 @@ public partial class MainWindow : Window
         _pipeClient.FriendShopClosingReceived += (machine, share) =>
             _ = Dispatcher.InvokeAsync(
                 () => HandleFriendShopClosingReceived(machine, share),
+                DispatcherPriority.Background);
+        _pipeClient.IncomingInteractionReceived += entry =>
+            _ = Dispatcher.InvokeAsync(
+                () => AcceptIncomingInteraction(entry),
                 DispatcherPriority.Background);
 
         _notificationTimer = new DispatcherTimer { Interval = NotificationQuietTime };
@@ -535,6 +540,7 @@ public partial class MainWindow : Window
         {
             _isShopOpen = _wasOpenAtLastShutdown;
         }
+        ImportPendingIncomingInteractions();
         ShowMainWindow();
         UpdateShopState(_isShopOpen);
         _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
@@ -1092,22 +1098,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         AppendHistory(
             HistoryChannel.Update,
-            $"{item.Name} を受け取りました。",
-            "Receive",
-            HistoryOutcome.Success,
-            HistoryDirection.Incoming,
+            $"{item.Name} を同期外差分として検知しました。",
+            "OutOfSyncDetected",
+            HistoryOutcome.Info,
             targetName: item.Name,
             pathText: item.FolderPath,
+            note: "正規交流イベントに対応しないため、通知・受信履歴には載せません。",
             destinationPath: fullPath,
             destinationFolder: item.FolderPath,
             source: source);
-        QueueNotification(item);
         string loggedPath = NormalizeHistoryPathText(
             item.FolderPath,
             sourcePath: null,
             destinationPath: fullPath,
             destinationFolder: item.FolderPath) ?? item.FolderPath;
-        SwkLogger.Info($"Receive success: {item.Name} -> {loggedPath} source={source}");
+        SwkLogger.Info($"Out-of-sync detected: {item.Name} -> {loggedPath} source={source}");
         SwkLogger.Info($"TryRegisterExternalReceive appended: path={fullPath} source={source}");
         SwkLogger.Info($"Trace.ExternalFlow.Receive.Success: target={item.Name} path={loggedPath} source={source}");
         return true;
@@ -1123,16 +1128,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? targetName = null,
         string? pathText = null,
         string? note = null,
+        string? interactionEventId = null,
         string? source = null,
         string? sourcePath = null,
         string? destinationPath = null,
         string? destinationFolder = null)
     {
-        Friend? historyFriend = friend ?? ResolveHistoryFriend(pathText, sourcePath, destinationPath, destinationFolder);
+        Friend? historyFriend = friend;
+        Friend? pathFriend = friend ?? ResolveHistoryPathFriend(pathText, sourcePath, destinationPath, destinationFolder);
         string? normalizedTargetName = NormalizeHistoryTargetName(targetName, destinationPath, sourcePath);
         string? normalizedPathText = NormalizeHistoryPathText(
             pathText,
-            historyFriend,
+            pathFriend,
             sourcePath,
             destinationPath,
             destinationFolder);
@@ -1146,6 +1153,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             EventType = eventType,
             Outcome = outcome,
             Direction = direction,
+            InteractionEventId = interactionEventId,
             FriendId = historyFriend?.Id,
             FriendName = historyFriend is null ? null : GetFriendLabel(historyFriend),
             TargetName = normalizedTargetName,
@@ -1209,6 +1217,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ApplyExplorerActionResult(ExplorerActionResult result, bool showAlertDialog = true)
     {
+        InteractionEventEntry? interactionEvent = null;
+        Friend? interactionFriend = null;
+        if (result.State == ExplorerActionState.Success &&
+            TryCreateConfirmedInteraction(result, out InteractionEventEntry? preparedInteractionEvent, out Friend? preparedFriend))
+        {
+            interactionEvent = preparedInteractionEvent;
+            interactionFriend = preparedFriend;
+        }
+
         if (string.IsNullOrWhiteSpace(result.LogMessage) is false)
         {
             if (result.State == ExplorerActionState.Failure)
@@ -1244,6 +1261,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 result.HistoryMessage!,
                 result.EventType,
                 result.HistoryOutcome,
+                interactionEventId: interactionEvent?.Id,
                 targetName: result.TargetName,
                 pathText: result.PathText,
                 note: result.Note,
@@ -1251,6 +1269,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 sourcePath: result.SourcePath,
                 destinationPath: result.DestinationPath,
                 destinationFolder: result.DestinationFolder);
+        }
+
+        if (interactionEvent is not null)
+        {
+            RecordConfirmedInteraction(interactionEvent, interactionFriend);
         }
 
         if (result.State == ExplorerActionState.Success)
@@ -1447,7 +1470,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private static string DescribeExternalPaths(IReadOnlyList<string> paths)
         => paths.Count == 0 ? "-" : string.Join(" | ", paths.Select(static path => Path.GetFileName(path)));
 
-    private Friend? ResolveHistoryFriend(
+    private Friend? ResolveHistoryPathFriend(
         string? pathText = null,
         string? sourcePath = null,
         string? destinationPath = null,
@@ -1658,8 +1681,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         _lastExternalChangeNotificationAt = now;
-        SwkLogger.Info("NotifyExternalShopChange firing: お店の中身が変更されました。");
-        NotifyShopMaintenance("お店の中身が変更されました。", "お店の中身が変更されました。");
+        SwkLogger.Info("NotifyExternalShopChange observed: external change stays out of notification/main history flow.");
     }
 
     private void AppendExternalChangeHistory(FileSystemEventArgs e)
@@ -3349,6 +3371,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!Directory.Exists(destinationFolder)) return;
 
+        if (!TryConfirmInteractionAction("置く", paths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        {
+            return;
+        }
+
         string modeLabel = _currentMode.ToString();
         SwkLogger.Info(
             $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={paths.Count} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
@@ -3381,6 +3408,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         var progress = await CreateFileProgressAsync("コピー");
         int total = paths.Count;
         BeginDeferredPermissionSave();
+        _pendingInteractionMessage = interactionMessage;
         try
         {
             for (int i = 0; i < total; i++)
@@ -3425,6 +3453,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         finally
         {
+            _pendingInteractionMessage = null;
             EndDeferredPermissionSave();
         }
 
@@ -3452,122 +3481,166 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task MoveInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
+        if (!TryConfirmInteractionAction("移す", [Path.GetFileName(sourcePath)], out string? interactionMessage))
+        {
+            return;
+        }
+
         string modeLabel = _currentMode.ToString();
-        ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
+        _pendingInteractionMessage = interactionMessage;
+        try
         {
-            ModeLabel = modeLabel,
-            SourcePath = sourcePath,
-            DestinationFolder = destinationFolder,
-            IsHoldFolderPath = IsHoldFolderPath,
-            IsUnderFolder = IsUnderFolder,
-            GetShareStatus = GetItemShareStatus,
-            BeforeWrite = SuppressExternalChangeNotifications,
-        }));
+            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.MoveItem(new MoveItemRequest
+            {
+                ModeLabel = modeLabel,
+                SourcePath = sourcePath,
+                DestinationFolder = destinationFolder,
+                IsHoldFolderPath = IsHoldFolderPath,
+                IsUnderFolder = IsUnderFolder,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            }));
 
-        if (result.State == ExplorerActionState.NoChange)
-        {
-            return;
-        }
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                return;
+            }
 
-        ApplyExplorerActionResult(result);
-        if (!result.ShouldRefreshUi ||
-            string.IsNullOrWhiteSpace(result.SourceParent) ||
-            string.IsNullOrWhiteSpace(result.DestinationFolder) ||
-            string.IsNullOrWhiteSpace(result.DestinationPath) ||
-            string.IsNullOrWhiteSpace(result.SourcePath))
-        {
-            return;
-        }
+            ApplyExplorerActionResult(result);
+            if (!result.ShouldRefreshUi ||
+                string.IsNullOrWhiteSpace(result.SourceParent) ||
+                string.IsNullOrWhiteSpace(result.DestinationFolder) ||
+                string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                string.IsNullOrWhiteSpace(result.SourcePath))
+            {
+                return;
+            }
 
-        bool preserved = PreservePermissionOnArrival(
-            result.SourcePath,
-            result.SourceParent,
-            result.DestinationPath,
-            result.DestinationFolder,
-            removeSourceEntry: true,
-            historySource: "MainWindow.move");
-        if (!preserved)
-        {
-            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+            bool preserved = PreservePermissionOnArrival(
+                result.SourcePath,
+                result.SourceParent,
+                result.DestinationPath,
+                result.DestinationFolder,
+                removeSourceEntry: true,
+                historySource: "MainWindow.move");
+            if (!preserved)
+            {
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
+            }
+            InvalidateSizeCacheUnder(result.SourceParent);
+            InvalidateSizeCacheUnder(result.DestinationFolder);
+            RefreshShopItems();
         }
-        InvalidateSizeCacheUnder(result.SourceParent);
-        InvalidateSizeCacheUnder(result.DestinationFolder);
-        RefreshShopItems();
+        finally
+        {
+            _pendingInteractionMessage = null;
+        }
     }
 
     private async Task MoveInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-            var progress = await CreateFileProgressAsync("移動");
+        if (!TryConfirmInteractionAction("移す", sourcePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        {
+            return;
+        }
+
+        var progress = await CreateFileProgressAsync("移動");
+        _pendingInteractionMessage = interactionMessage;
+        try
+        {
             (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
                 sourcePaths,
                 destinationFolder,
                 progress);
 
-        if (movedCount > 0)
+            if (movedCount > 0)
+            {
+                string statusMessage = movedCount == 1 && lastName is not null
+                    ? $"{lastName} を移しました。"
+                    : $"{movedCount} つ移しました。";
+                SetTransientStatus(statusMessage);
+                InvalidateSizeCacheUnder(destinationFolder);
+                RefreshShopItems();
+            }
+        }
+        finally
         {
-            string statusMessage = movedCount == 1 && lastName is not null
-                ? $"{lastName} を移しました。"
-                : $"{movedCount} つ移しました。";
-            SetTransientStatus(statusMessage);
-            InvalidateSizeCacheUnder(destinationFolder);
-            RefreshShopItems();
+            _pendingInteractionMessage = null;
         }
     }
 
     private async Task CopyInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
+        if (!TryConfirmInteractionAction("コピーする", [Path.GetFileName(sourcePath)], out string? interactionMessage))
+        {
+            return;
+        }
+
         string modeLabel = _currentMode.ToString();
-        ExplorerActionResult result = await Task.Run(() => ExplorerActionService.CopyItem(new CopyItemRequest
+        _pendingInteractionMessage = interactionMessage;
+        try
         {
-            ModeLabel = modeLabel,
-            SourcePath = sourcePath,
-            DestinationFolder = destinationFolder,
-            IsHoldFolderPath = IsHoldFolderPath,
-            IsUnderFolder = IsUnderFolder,
-            GetShareStatus = GetItemShareStatus,
-            BeforeWrite = SuppressExternalChangeNotifications,
-        }));
+            ExplorerActionResult result = await Task.Run(() => ExplorerActionService.CopyItem(new CopyItemRequest
+            {
+                ModeLabel = modeLabel,
+                SourcePath = sourcePath,
+                DestinationFolder = destinationFolder,
+                IsHoldFolderPath = IsHoldFolderPath,
+                IsUnderFolder = IsUnderFolder,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            }));
 
-        if (result.State == ExplorerActionState.NoChange)
-        {
-            return;
-        }
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                return;
+            }
 
-        ApplyExplorerActionResult(result);
-        if (!result.ShouldRefreshUi ||
-            string.IsNullOrWhiteSpace(result.SourcePath) ||
-            string.IsNullOrWhiteSpace(result.SourceParent) ||
-            string.IsNullOrWhiteSpace(result.DestinationPath) ||
-            string.IsNullOrWhiteSpace(result.DestinationFolder))
-        {
-            return;
-        }
+            ApplyExplorerActionResult(result);
+            if (!result.ShouldRefreshUi ||
+                string.IsNullOrWhiteSpace(result.SourcePath) ||
+                string.IsNullOrWhiteSpace(result.SourceParent) ||
+                string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                string.IsNullOrWhiteSpace(result.DestinationFolder))
+            {
+                return;
+            }
 
-        bool preserved = PreservePermissionOnArrival(
-            result.SourcePath,
-            result.SourceParent,
-            result.DestinationPath,
-            result.DestinationFolder,
-            removeSourceEntry: false,
-            historySource: "MainWindow.copy");
-        if (!preserved)
-        {
-            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
-            MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
+            bool preserved = PreservePermissionOnArrival(
+                result.SourcePath,
+                result.SourceParent,
+                result.DestinationPath,
+                result.DestinationFolder,
+                removeSourceEntry: false,
+                historySource: "MainWindow.copy");
+            if (!preserved)
+            {
+                NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Placed);
+                MaybeAppendPermissionInheritedOnArrival(result.DestinationPath, result.DestinationFolder, "MainWindow.copy");
+            }
+            InvalidateSizeCacheUnder(result.DestinationFolder);
+            if (string.Equals(
+                    Path.GetFullPath(result.DestinationFolder),
+                    Path.GetFullPath(_currentFolder ?? string.Empty),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingFocusName = result.TargetName;
+            }
+            RefreshShopItems();
         }
-        InvalidateSizeCacheUnder(result.DestinationFolder);
-        if (string.Equals(
-                Path.GetFullPath(result.DestinationFolder),
-                Path.GetFullPath(_currentFolder ?? string.Empty),
-                StringComparison.OrdinalIgnoreCase))
+        finally
         {
-            _pendingFocusName = result.TargetName;
+            _pendingInteractionMessage = null;
         }
-        RefreshShopItems();
     }
 
     private async Task CopyInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
+        if (!TryConfirmInteractionAction("コピーする", sourcePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        {
+            return;
+        }
+
         int copiedCount = 0;
         string? lastName = null;
         int total = sourcePaths.Count;
@@ -3592,6 +3665,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         var progress = await CreateFileProgressAsync("コピー");
         BeginDeferredPermissionSave();
+        _pendingInteractionMessage = interactionMessage;
         try
         {
             for (int i = 0; i < total; i++)
@@ -3649,6 +3723,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         finally
         {
+            _pendingInteractionMessage = null;
             EndDeferredPermissionSave();
         }
 
@@ -3762,37 +3837,50 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        ExplorerActionResult result = ExplorerActionService.RenameItem(new RenameItemRequest
-        {
-            ModeLabel = _currentMode.ToString(),
-            SourcePath = item.FullPath,
-            NewName = newName,
-            IsDirectory = item.IsDirectory,
-            GetShareStatus = GetItemShareStatus,
-            BeforeWrite = SuppressExternalChangeNotifications,
-        });
-
-        if (result.State == ExplorerActionState.NoChange)
+        if (!TryConfirmInteractionAction("名前を変える", [newName], out string? interactionMessage))
         {
             return;
         }
 
-        string originalPath = item.FullPath;
-        ApplyExplorerActionResult(result);
-        if (!result.ShouldRefreshUi ||
-            string.IsNullOrWhiteSpace(result.DestinationPath) ||
-            string.IsNullOrWhiteSpace(result.SourceParent))
+        _pendingInteractionMessage = interactionMessage;
+        try
         {
-            return;
-        }
+            ExplorerActionResult result = ExplorerActionService.RenameItem(new RenameItemRequest
+            {
+                ModeLabel = _currentMode.ToString(),
+                SourcePath = item.FullPath,
+                NewName = newName,
+                IsDirectory = item.IsDirectory,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
-        MovePermissionEntries(originalPath, result.DestinationPath);
-        SavePermissionMap();
-        NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
-        InvalidateSizeCacheUnder(result.SourceParent);
-        _pendingFocusName = newName;
-        RefreshShopItems();
-        ScheduleRefreshShopItemsIfCurrentFolder(result.SourceParent, TimeSpan.FromMilliseconds(300));
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                return;
+            }
+
+            string originalPath = item.FullPath;
+            ApplyExplorerActionResult(result);
+            if (!result.ShouldRefreshUi ||
+                string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                string.IsNullOrWhiteSpace(result.SourceParent))
+            {
+                return;
+            }
+
+            MovePermissionEntries(originalPath, result.DestinationPath);
+            SavePermissionMap();
+            NoteFutureSharePolicyRepair(result.DestinationPath, result.SourceParent, SharePolicyRepairReason.Renamed);
+            InvalidateSizeCacheUnder(result.SourceParent);
+            _pendingFocusName = newName;
+            RefreshShopItems();
+            ScheduleRefreshShopItemsIfCurrentFolder(result.SourceParent, TimeSpan.FromMilliseconds(300));
+        }
+        finally
+        {
+            _pendingInteractionMessage = null;
+        }
     }
 
     private async void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
@@ -3822,22 +3910,35 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? destinationFolder = dialog.SelectedFolderPath;
         if (string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder)) return;
 
+        if (!TryConfirmInteractionAction("移す", sourcePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        {
+            return;
+        }
+
         BeginProcessing();
         try
         {
             var progress = await CreateFileProgressAsync("移動");
-            (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
-                sourcePaths,
-                destinationFolder,
-                progress);
-
-            if (movedCount > 0)
+            _pendingInteractionMessage = interactionMessage;
+            try
             {
-                string statusMessage = movedCount == 1 && lastName is not null
-                    ? $"{lastName} を移しました。"
-                    : $"{movedCount} つ移しました。";
-                SetTransientStatus(statusMessage);
-                RefreshShopItems();
+                (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
+                    sourcePaths,
+                    destinationFolder,
+                    progress);
+
+                if (movedCount > 0)
+                {
+                    string statusMessage = movedCount == 1 && lastName is not null
+                        ? $"{lastName} を移しました。"
+                        : $"{movedCount} つ移しました。";
+                    SetTransientStatus(statusMessage);
+                    RefreshShopItems();
+                }
+            }
+            finally
+            {
+                _pendingInteractionMessage = null;
             }
         }
         finally
@@ -3979,12 +4080,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
-        string confirmMsg = items.Count == 1
-            ? $"{items[0].Name} を完全に消します。よろしいですか?"
-            : $"{items.Count} つのアイテムを完全に消します。よろしいですか?";
-        MessageBoxResult confirmResult = System.Windows.MessageBox.Show(
-            this, confirmMsg, "削除", MessageBoxButton.OKCancel, MessageBoxImage.None);
-        if (confirmResult != MessageBoxResult.OK) return;
+        string? interactionMessage = null;
+        if (_currentMode == DisplayMode.FriendShop)
+        {
+            if (!TryConfirmInteractionAction("削除する", items.Select(item => item.Name).ToList(), out interactionMessage))
+            {
+                return;
+            }
+        }
+        else
+        {
+            string confirmMsg = items.Count == 1
+                ? $"{items[0].Name} を完全に消します。よろしいですか?"
+                : $"{items.Count} つのアイテムを完全に消します。よろしいですか?";
+            MessageBoxResult confirmResult = System.Windows.MessageBox.Show(
+                this, confirmMsg, "削除", MessageBoxButton.OKCancel, MessageBoxImage.None);
+            if (confirmResult != MessageBoxResult.OK) return;
+        }
 
         BeginProcessing();
         try
@@ -3994,6 +4106,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string? lastName = null;
             int total = items.Count;
             string modeLabel = _currentMode.ToString();
+            _pendingInteractionMessage = interactionMessage;
 
             for (int i = 0; i < total; i++)
             {
@@ -4036,6 +4149,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         finally
         {
+            _pendingInteractionMessage = null;
             EndProcessing();
         }
     }
@@ -4072,39 +4186,52 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        ExplorerActionResult result = ExplorerActionService.CreateFolder(new CreateFolderRequest
-        {
-            ModeLabel = _currentMode.ToString(),
-            ParentFolder = targetFolder,
-            FolderName = folderName,
-            GetShareStatus = GetItemShareStatus,
-            BeforeWrite = SuppressExternalChangeNotifications,
-        });
-
-        if (result.State == ExplorerActionState.NoChange)
+        if (!TryConfirmInteractionAction("フォルダーを作る", [folderName], out string? interactionMessage))
         {
             return;
         }
 
-        ApplyExplorerActionResult(result);
-
-        if (!result.ShouldRefreshUi ||
-            string.IsNullOrWhiteSpace(result.DestinationPath) ||
-            string.IsNullOrWhiteSpace(result.DestinationFolder))
+        _pendingInteractionMessage = interactionMessage;
+        try
         {
-            return;
-        }
+            ExplorerActionResult result = ExplorerActionService.CreateFolder(new CreateFolderRequest
+            {
+                ModeLabel = _currentMode.ToString(),
+                ParentFolder = targetFolder,
+                FolderName = folderName,
+                GetShareStatus = GetItemShareStatus,
+                BeforeWrite = SuppressExternalChangeNotifications,
+            });
 
-        NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.FolderCreated);
-        InvalidateSizeCacheUnder(result.DestinationFolder);
-        if (string.Equals(
-                Path.GetFullPath(result.DestinationFolder),
-                Path.GetFullPath(_currentFolder),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            _pendingFocusName = result.TargetName;
+            if (result.State == ExplorerActionState.NoChange)
+            {
+                return;
+            }
+
+            ApplyExplorerActionResult(result);
+
+            if (!result.ShouldRefreshUi ||
+                string.IsNullOrWhiteSpace(result.DestinationPath) ||
+                string.IsNullOrWhiteSpace(result.DestinationFolder))
+            {
+                return;
+            }
+
+            NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.FolderCreated);
+            InvalidateSizeCacheUnder(result.DestinationFolder);
+            if (string.Equals(
+                    Path.GetFullPath(result.DestinationFolder),
+                    Path.GetFullPath(_currentFolder),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingFocusName = result.TargetName;
+            }
+            RefreshShopItems();
         }
-        RefreshShopItems();
+        finally
+        {
+            _pendingInteractionMessage = null;
+        }
     }
 
     // --- 選択アクションバー ---
@@ -5065,6 +5192,436 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             "Notify",
             HistoryOutcome.Info);
         _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", "お店の中身が変更されました。", notifFolder);
+    }
+
+    private void RecordConfirmedInteraction(InteractionEventEntry interactionEvent, Friend? friend)
+    {
+        InteractionEventRepository.Append(interactionEvent);
+
+        if (!CanShowNotification(externalOnly: false))
+        {
+            SwkLogger.Debug(
+                $"MaybeRecordConfirmedInteraction stored-without-notify: event={interactionEvent.EventType} target={interactionEvent.TargetName ?? "-"}");
+            return;
+        }
+
+        string friendLabel = interactionEvent.ReceiverName ?? interactionEvent.ReceiverMachineName ?? "相手";
+        string actionLabel = GetInteractionActionLabel(interactionEvent.EventType);
+        string notificationText = $"{friendLabel} への{actionLabel}を実行しました。";
+        AppendHistory(
+            HistoryChannel.Notification,
+            notificationText,
+            "InteractionNotify",
+            HistoryOutcome.Success,
+            HistoryDirection.Outgoing,
+            friend: friend,
+            targetName: interactionEvent.TargetName,
+            pathText: interactionEvent.TargetFolder,
+            note: interactionEvent.Message,
+            interactionEventId: interactionEvent.Id,
+            source: interactionEvent.SourceRoute,
+            destinationPath: interactionEvent.TargetPath,
+            destinationFolder: interactionEvent.TargetFolder);
+        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", notificationText, interactionEvent.TargetFolder);
+        InteractionEventRepository.MarkDisplayed(interactionEvent.Id, DateTime.Now);
+        _ = SendConfirmedInteractionToFriendAsync(interactionEvent, friend);
+    }
+
+    private bool TryCreateConfirmedInteraction(
+        ExplorerActionResult result,
+        out InteractionEventEntry interactionEvent,
+        out Friend? friend)
+    {
+        interactionEvent = null!;
+        friend = null;
+
+        if (result.State != ExplorerActionState.Success ||
+            _currentMode != DisplayMode.FriendShop ||
+            _activeFriendShop is null ||
+            string.IsNullOrWhiteSpace(result.EventType))
+        {
+            return false;
+        }
+
+        string? targetPath = !string.IsNullOrWhiteSpace(result.DestinationPath)
+            ? result.DestinationPath
+            : result.SourcePath;
+        string? targetFolder = !string.IsNullOrWhiteSpace(result.DestinationFolder)
+            ? result.DestinationFolder
+            : Path.GetDirectoryName(targetPath ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            return false;
+        }
+
+        friend = _activeFriendShop;
+        interactionEvent = new InteractionEventEntry
+        {
+            OccurredAt = DateTime.Now,
+            EventType = result.EventType,
+            Direction = InteractionEventDirection.Outgoing,
+            SenderName = Environment.MachineName,
+            SenderMachineName = Environment.MachineName,
+            ReceiverId = friend.Id,
+            ReceiverName = GetFriendLabel(friend),
+            ReceiverMachineName = friend.HostMachineName,
+            TargetName = result.TargetName,
+            TargetPath = targetPath,
+            TargetFolder = targetFolder,
+            TargetKind = Directory.Exists(targetPath) ? "Folder" : "File",
+            NotificationType = "ConfirmedInteraction",
+            Message = string.IsNullOrWhiteSpace(_pendingInteractionMessage) ? null : _pendingInteractionMessage,
+            MessageEnabled = !string.IsNullOrWhiteSpace(_pendingInteractionMessage),
+            SourceRoute = result.Source
+        };
+        return true;
+    }
+
+    private async Task SendConfirmedInteractionToFriendAsync(InteractionEventEntry interactionEvent, Friend? friend)
+    {
+        if (friend is null)
+        {
+            return;
+        }
+
+        try
+        {
+            SwkNotificationListener.ShopInfo? shop = FindLiveShopInfo(friend) ?? await ResolveLiveFriendShopAsync(friend);
+            if (shop is null)
+            {
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{interactionEvent.TargetName ?? "項目"} の交流通知を相手へ届けられませんでした。",
+                    "InteractionDispatchSkipped",
+                    HistoryOutcome.Warning,
+                    HistoryDirection.Outgoing,
+                    friend: friend,
+                    targetName: interactionEvent.TargetName,
+                    pathText: interactionEvent.TargetFolder,
+                    note: "相手のお店が見つからなかったため、正規交流イベントを送れませんでした。",
+                    interactionEventId: interactionEvent.Id,
+                    source: "InteractionDispatch",
+                    destinationPath: interactionEvent.TargetPath,
+                    destinationFolder: interactionEvent.TargetFolder);
+                return;
+            }
+
+            string? relativePath = BuildShareRelativePath(_activeFriendShopRootPath ?? friend.ConnectUncPath, interactionEvent.TargetPath);
+            var notice = new SwkNotificationProtocol.InteractionEventNotice
+            {
+                EventId = interactionEvent.Id,
+                EventType = interactionEvent.EventType,
+                SenderMachineName = Environment.MachineName,
+                SenderDisplayName = Environment.MachineName,
+                SenderSwkInstanceId = SwkInstanceIdentity.GetOrCreateId(),
+                SenderShareName = _shopFolder is null ? null : Path.GetFileName(_shopFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                ReceiverShareName = friend.ShareName,
+                TargetName = interactionEvent.TargetName ?? "項目",
+                TargetRelativePath = relativePath,
+                TargetKind = interactionEvent.TargetKind,
+                NotificationType = interactionEvent.NotificationType,
+                Message = interactionEvent.Message,
+                IssuedAt = interactionEvent.OccurredAt.ToUniversalTime().ToString("o")
+            };
+
+            var listener = new SwkNotificationListener();
+            SwkNotificationListener.InteractionEventSendResult sendResult = await listener.SendInteractionEventAsync(
+                shop,
+                notice,
+                friend.OwnerCertThumbprint,
+                CancellationToken.None);
+            if (!sendResult.Success)
+            {
+                AppendHistory(
+                    HistoryChannel.Update,
+                    $"{interactionEvent.TargetName ?? "項目"} の交流通知を相手へ届けられませんでした。",
+                    "InteractionDispatchFailed",
+                    HistoryOutcome.Warning,
+                    HistoryDirection.Outgoing,
+                    friend: friend,
+                    targetName: interactionEvent.TargetName,
+                    pathText: interactionEvent.TargetFolder,
+                    note: sendResult.ErrorMessage,
+                    interactionEventId: interactionEvent.Id,
+                    source: "InteractionDispatch",
+                    destinationPath: interactionEvent.TargetPath,
+                    destinationFolder: interactionEvent.TargetFolder);
+            }
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"SendConfirmedInteractionToFriendAsync failed: {ex.Message}");
+        }
+    }
+
+    private void ImportPendingIncomingInteractions()
+    {
+        foreach (SwkIncomingInteractionRecord entry in SwkIncomingInteractionInbox.GetUnprocessed())
+        {
+            AcceptIncomingInteraction(entry);
+        }
+    }
+
+    private void AcceptIncomingInteraction(SwkIncomingInteractionRecord entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.EventId))
+        {
+            return;
+        }
+
+        if (InteractionEventRepository.Exists(entry.EventId))
+        {
+            SwkIncomingInteractionInbox.MarkProcessed(entry.EventId, DateTime.UtcNow);
+            return;
+        }
+
+        Friend? friend = ResolveVerifiedIncomingInteractionFriend(entry);
+        bool isVerified = friend is not null;
+        string senderLabel = ResolveIncomingSenderLabel(entry, friend);
+        DateTime occurredAt = DateTime.TryParse(entry.OccurredAt, out DateTime parsedOccurredAt)
+            ? parsedOccurredAt.ToLocalTime()
+            : DateTime.Now;
+        DateTime? receivedAt = DateTime.TryParse(entry.ReceivedAt, out DateTime parsedReceivedAt)
+            ? parsedReceivedAt.ToLocalTime()
+            : DateTime.Now;
+        DateTime? displayedAt = DateTime.TryParse(entry.DisplayedAt, out DateTime parsedDisplayedAt)
+            ? parsedDisplayedAt.ToLocalTime()
+            : null;
+
+        entry.IsSenderVerified = isVerified;
+        entry.VerifiedFriendId = friend?.Id;
+        entry.VerifiedFriendName = friend is null ? null : GetFriendLabel(friend);
+
+        InteractionEventRepository.Append(new InteractionEventEntry
+        {
+            Id = entry.EventId,
+            OccurredAt = occurredAt,
+            EventType = entry.EventType,
+            Direction = InteractionEventDirection.Incoming,
+            SenderName = senderLabel,
+            SenderMachineName = entry.SenderMachineName,
+            ReceiverName = Environment.MachineName,
+            ReceiverMachineName = Environment.MachineName,
+            TargetName = entry.TargetName,
+            TargetPath = entry.TargetFullPath,
+            TargetFolder = entry.TargetFolder,
+            TargetKind = entry.TargetKind,
+            NotificationType = entry.NotificationType,
+            Message = entry.Message,
+            MessageEnabled = !string.IsNullOrWhiteSpace(entry.Message),
+            ReceivedAt = receivedAt,
+            DisplayedAt = displayedAt,
+            SourceRoute = entry.SourceRoute
+        });
+
+        string targetName = string.IsNullOrWhiteSpace(entry.TargetName) ? "項目" : entry.TargetName;
+        string updateMessage = isVerified
+            ? $"{senderLabel} から {targetName} を受け取りました。"
+            : $"送信元を確認できない交流通知があります。対象: {targetName}";
+        string? senderNote = isVerified
+            ? null
+            : BuildUnverifiedSenderNote(entry);
+        AppendHistory(
+            HistoryChannel.Update,
+            updateMessage,
+            isVerified ? "InteractionReceive" : "InteractionReceiveUnverified",
+            isVerified ? HistoryOutcome.Success : HistoryOutcome.Warning,
+            HistoryDirection.Incoming,
+            friend: friend,
+            targetName: entry.TargetName,
+            pathText: entry.TargetFolder,
+            note: BuildInteractionReceiveNote(senderNote, entry.Message),
+            interactionEventId: entry.EventId,
+            source: entry.SourceRoute,
+            destinationPath: entry.TargetFullPath,
+            destinationFolder: entry.TargetFolder);
+
+        if (isVerified && !string.IsNullOrWhiteSpace(entry.TargetName) && !string.IsNullOrWhiteSpace(entry.TargetFolder))
+        {
+            ArrivedItems.Insert(0, new ArrivedItem(entry.TargetName, entry.TargetFolder, DateTime.Now));
+            while (ArrivedItems.Count > MaxArrivedItemCount)
+            {
+                ArrivedItems.RemoveAt(ArrivedItems.Count - 1);
+            }
+        }
+
+        if (CanShowNotification(externalOnly: true))
+        {
+            string notificationText = string.IsNullOrWhiteSpace(entry.Message)
+                ? updateMessage
+                : $"{updateMessage}\r\nメッセージ: {entry.Message}";
+            AppendHistory(
+                HistoryChannel.Notification,
+                updateMessage,
+                isVerified ? "InteractionNotify" : "InteractionNotifyUnverified",
+                isVerified ? HistoryOutcome.Success : HistoryOutcome.Warning,
+                HistoryDirection.Incoming,
+                friend: friend,
+                targetName: entry.TargetName,
+                pathText: entry.TargetFolder,
+                note: BuildInteractionReceiveNote(senderNote, entry.Message),
+                interactionEventId: entry.EventId,
+                source: entry.SourceRoute,
+                destinationPath: entry.TargetFullPath,
+                destinationFolder: entry.TargetFolder);
+            if (displayedAt is null)
+            {
+                _pipeClient.ShowBalloonTip("ShareWorkin の受信", notificationText, entry.TargetFolder ?? _shopFolder);
+                DateTime now = DateTime.Now;
+                InteractionEventRepository.MarkDisplayed(entry.EventId, now);
+                SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, now.ToUniversalTime());
+            }
+        }
+
+        SwkIncomingInteractionInbox.MarkProcessed(entry.EventId, DateTime.UtcNow);
+    }
+
+    private static string ResolveIncomingSenderLabel(SwkIncomingInteractionRecord entry, Friend? verifiedFriend)
+    {
+        if (verifiedFriend is not null)
+        {
+            return GetFriendLabel(verifiedFriend);
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderDisplayName))
+        {
+            return entry.SenderDisplayName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName))
+        {
+            return entry.SenderMachineName;
+        }
+
+        return "相手";
+    }
+
+    private static Friend? ResolveVerifiedIncomingInteractionFriend(SwkIncomingInteractionRecord entry)
+    {
+        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+        if (!string.IsNullOrWhiteSpace(entry.SenderSwkInstanceId))
+        {
+            Friend? byInstance = friends.FirstOrDefault(f =>
+                string.Equals(f.RemoteSwkInstanceId, entry.SenderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
+            if (byInstance is not null)
+            {
+                return byInstance;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? BuildUnverifiedSenderNote(SwkIncomingInteractionRecord entry)
+    {
+        List<string> parts = [];
+        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName))
+        {
+            parts.Add($"送信元PC: {entry.SenderMachineName}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderSwkInstanceId))
+        {
+            parts.Add($"送信元ID: {entry.SenderSwkInstanceId}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderDisplayName))
+        {
+            parts.Add($"通知本文名: {entry.SenderDisplayName}");
+        }
+
+        return parts.Count == 0
+            ? "登録済み Friend と照合できませんでした。"
+            : "未照合イベント: " + string.Join(" / ", parts);
+    }
+
+    private static string? BuildInteractionReceiveNote(string? senderNote, string? message)
+    {
+        if (string.IsNullOrWhiteSpace(senderNote) && string.IsNullOrWhiteSpace(message))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(senderNote))
+        {
+            return $"メッセージ: {message}";
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return senderNote;
+        }
+
+        return $"{senderNote}\r\nメッセージ: {message}";
+    }
+
+    private static string? BuildShareRelativePath(string? rootPath, string? targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath) || string.IsNullOrWhiteSpace(targetPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            string normalizedRoot = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string normalizedTarget = targetPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!normalizedTarget.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            string relative = normalizedTarget[normalizedRoot.Length..]
+                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.IsNullOrWhiteSpace(relative) ? null : relative.Replace(Path.DirectorySeparatorChar, '/');
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string GetInteractionActionLabel(string eventType) => eventType switch
+    {
+        "Place" => "送付",
+        "Copy" => "コピー",
+        "Move" => "移動",
+        "CreateFolder" => "共有フォルダー作成",
+        "Rename" => "名前変更",
+        "Delete" => "削除",
+        "Hold" => "保留操作",
+        _ => "操作"
+    };
+
+    private bool TryConfirmInteractionAction(
+        string actionLabel,
+        IReadOnlyList<string> targetNames,
+        out string? interactionMessage)
+    {
+        interactionMessage = null;
+
+        if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null)
+        {
+            return true;
+        }
+
+        InteractionActionConfirmDialog dialog = new(
+            GetFriendLabel(_activeFriendShop),
+            actionLabel,
+            targetNames)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return false;
+        }
+
+        interactionMessage = string.IsNullOrWhiteSpace(dialog.NotificationMessage)
+            ? null
+            : dialog.NotificationMessage;
+        return true;
     }
 
 

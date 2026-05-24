@@ -1,5 +1,5 @@
 #define MyAppName "ShareWorkin"
-#define MyAppVersion "1.20"
+#define MyAppVersion "1.21"
 #define MyAppPublisher "株式会社メディアハウス"
 #define MyAppURL "https://app.media-house.jp/"
 #define MyAppCorporateURL "https://media-house.jp/"
@@ -22,7 +22,7 @@ DisableDirPage=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 OutputDir=.
-OutputBaseFilename=ShareWorkin_v1.20_install
+OutputBaseFilename=ShareWorkin_v1.21_install
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -59,7 +59,7 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters
 [Code]
 const
   APP_NAME = 'ShareWorkin';
-  APP_VERSION = '1.20';
+  APP_VERSION = '1.21';
   APP_EXE = 'ShareWorkin.exe';
   TRAY_EXE = 'ShareWorkinTray.exe';
   STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';
@@ -74,6 +74,8 @@ const
   USERLIST_STATE_FILE = 'userlist-state.json';
   INSTANCE_FILE = 'swk-instance.json';
   NOTIFY_CERT_FILE = 'notifycert.dat';
+  INTERACTION_EVENTS_FILE = 'interaction-events.json';
+  INCOMING_INTERACTIONS_FILE = 'incoming-interactions.json';
   HOLD_DIR = 'hold';
   ICONS_DIR = 'icons';
   SETTINGS_BACKUP_FILE = 'ShareWorkin_settings_backup.json';
@@ -86,6 +88,8 @@ const
   USERLIST_STATE_BACKUP_FILE = 'ShareWorkin_userlist_state_backup.json';
   INSTANCE_BACKUP_FILE = 'ShareWorkin_instance_backup.json';
   NOTIFY_CERT_BACKUP_FILE = 'ShareWorkin_notifycert_backup.dat';
+  INTERACTION_EVENTS_BACKUP_FILE = 'ShareWorkin_interaction_events_backup.json';
+  INCOMING_INTERACTIONS_BACKUP_FILE = 'ShareWorkin_incoming_interactions_backup.json';
   HOLD_BACKUP_DIR = 'ShareWorkin_hold_backup';
   ICONS_BACKUP_DIR = 'ShareWorkin_icons_backup';
   OPTIMAL_RUNTIME_VERSION = '8.0.24';
@@ -184,6 +188,16 @@ begin
   Result := ExpandConstant('{tmp}\' + NOTIFY_CERT_BACKUP_FILE);
 end;
 
+function InteractionEventsBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + INTERACTION_EVENTS_BACKUP_FILE);
+end;
+
+function IncomingInteractionsBackupPath(): String;
+begin
+  Result := ExpandConstant('{tmp}\' + INCOMING_INTERACTIONS_BACKUP_FILE);
+end;
+
 function IconsBackupPath(): String;
 begin
   Result := ExpandConstant('{tmp}\' + ICONS_BACKUP_DIR);
@@ -254,6 +268,8 @@ begin
   DeleteFile(UserListStateBackupPath());
   DeleteFile(InstanceBackupPath());
   DeleteFile(NotifyCertBackupPath());
+  DeleteFile(InteractionEventsBackupPath());
+  DeleteFile(IncomingInteractionsBackupPath());
   DelTree(HoldBackupPath(), True, True, True);
   DelTree(IconsBackupPath(), True, True, True);
 
@@ -277,6 +293,10 @@ begin
     CopyFile(Source, InstanceBackupPath(), False);
   if FindExistingFile(NOTIFY_CERT_FILE, Source) then
     CopyFile(Source, NotifyCertBackupPath(), False);
+  if FindExistingFile(INTERACTION_EVENTS_FILE, Source) then
+    CopyFile(Source, InteractionEventsBackupPath(), False);
+  if FindExistingFile(INCOMING_INTERACTIONS_FILE, Source) then
+    CopyFile(Source, IncomingInteractionsBackupPath(), False);
   if FindExistingDirectory(HOLD_DIR, Source) then
     CopyDirectoryContents(Source, HoldBackupPath());
   if FindExistingDirectory(ICONS_DIR, Source) then
@@ -338,6 +358,16 @@ begin
   begin
     CopyFile(NotifyCertBackupPath(), AppDir + '\' + NOTIFY_CERT_FILE, False);
     DeleteFile(NotifyCertBackupPath());
+  end;
+  if FileExists(InteractionEventsBackupPath()) then
+  begin
+    CopyFile(InteractionEventsBackupPath(), AppDir + '\' + INTERACTION_EVENTS_FILE, False);
+    DeleteFile(InteractionEventsBackupPath());
+  end;
+  if FileExists(IncomingInteractionsBackupPath()) then
+  begin
+    CopyFile(IncomingInteractionsBackupPath(), AppDir + '\' + INCOMING_INTERACTIONS_FILE, False);
+    DeleteFile(IncomingInteractionsBackupPath());
   end;
   if DirExists(HoldBackupPath()) then
   begin

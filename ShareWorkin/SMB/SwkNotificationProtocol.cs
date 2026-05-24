@@ -131,4 +131,69 @@ public static class SwkNotificationProtocol
         [JsonPropertyName("arrivedAt")]
         public required string ArrivedAt { get; set; } // UTC ISO 8601
     }
+
+    public sealed class InteractionEventNotice
+    {
+        [JsonPropertyName("type")]
+        public string Type => "InteractionEventNotice";
+
+        [JsonPropertyName("eventId")]
+        public required string EventId { get; set; }
+
+        [JsonPropertyName("eventType")]
+        public required string EventType { get; set; }
+
+        [JsonPropertyName("senderMachineName")]
+        public required string SenderMachineName { get; set; }
+
+        [JsonPropertyName("senderDisplayName")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SenderDisplayName { get; set; }
+
+        [JsonPropertyName("senderSwkInstanceId")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SenderSwkInstanceId { get; set; }
+
+        [JsonPropertyName("senderShareName")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? SenderShareName { get; set; }
+
+        [JsonPropertyName("receiverShareName")]
+        public required string ReceiverShareName { get; set; }
+
+        [JsonPropertyName("targetName")]
+        public required string TargetName { get; set; }
+
+        [JsonPropertyName("targetRelativePath")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? TargetRelativePath { get; set; }
+
+        [JsonPropertyName("targetKind")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? TargetKind { get; set; }
+
+        [JsonPropertyName("notificationType")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? NotificationType { get; set; }
+
+        [JsonPropertyName("message")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Message { get; set; }
+
+        [JsonPropertyName("issuedAt")]
+        public required string IssuedAt { get; set; }
+    }
+
+    public sealed class InteractionEventResponse
+    {
+        [JsonPropertyName("type")]
+        public string Type => "InteractionEventResponse";
+
+        [JsonPropertyName("result")]
+        public required string Result { get; set; }
+
+        [JsonPropertyName("errorMessage")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? ErrorMessage { get; set; }
+    }
 }

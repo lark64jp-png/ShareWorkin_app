@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 namespace ShareWorkin.SMB;
 
 public sealed record TrayStatus(bool IsShopOpen, string? ShopFolder);
+public sealed record IncomingInteractionMessage(SwkIncomingInteractionRecord Entry);
 
 public sealed record ShopOpenOutcome(
     bool Ok,
@@ -33,6 +34,7 @@ public sealed class UiPipeClient : IDisposable
     public event Action? TrayExiting;
     public event Action? ShowRequested;
     public event Action<string, string>? FriendShopClosingReceived;
+    public event Action<SwkIncomingInteractionRecord>? IncomingInteractionReceived;
 
     public bool IsConnected => _pipe?.IsConnected == true;
 
@@ -257,6 +259,18 @@ public sealed class UiPipeClient : IDisposable
                             ? sn.GetString() ?? string.Empty
                             : string.Empty;
                         FriendShopClosingReceived?.Invoke(machineName, shareName);
+                        break;
+                    }
+                    case "INCOMING_INTERACTION":
+                    {
+                        if (doc.RootElement.TryGetProperty("entry", out JsonElement entryElement))
+                        {
+                            SwkIncomingInteractionRecord? entry = entryElement.Deserialize<SwkIncomingInteractionRecord>();
+                            if (entry is not null)
+                            {
+                                IncomingInteractionReceived?.Invoke(entry);
+                            }
+                        }
                         break;
                     }
                     default:

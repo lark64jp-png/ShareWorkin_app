@@ -153,6 +153,7 @@ public static class SmbController
         {
             _broadcaster = new SwkNotificationBroadcaster(request.ShareName);
             _broadcaster.OnShopClosingReceived = (machine, share) => OnShopClosingReceived?.Invoke(machine, share);
+            _broadcaster.OnInteractionEventReceived = notice => OnInteractionEventReceived?.Invoke(notice);
             _ = _broadcaster.StartAsync(); // 非同期で起動（待たない）
             SwkLogger.Info($"SwkNotificationBroadcaster started for '{request.ShareName}'");
         }
@@ -210,6 +211,8 @@ public static class SmbController
     /// 他店から ShopClosing を受信したときのコールバック（MainWindow が購読する）。
     /// </summary>
     public static Action<string, string>? OnShopClosingReceived { get; set; }
+
+    public static Action<SwkNotificationProtocol.InteractionEventNotice>? OnInteractionEventReceived { get; set; }
 
     private static ShopOpenResult Fail(string message, SmbLayerStatus before, SmbLayerStatus? after)
     {
