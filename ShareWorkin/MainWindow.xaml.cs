@@ -432,16 +432,17 @@ public partial class MainWindow : Window
 
             HitTestResult? hit = VisualTreeHelper.HitTest(ShopItemsListView, localPoint);
             ShopItem? item = GetShopItemFromSource(hit?.VisualHit as DependencyObject);
-            if (item is not null && item.IsDirectory)
+            if (IsValidDropTargetItem(item, data: null))
             {
-                if (ReferenceEquals(item, _dropTargetItem))
+                ShopItem target = item!;
+                if (ReferenceEquals(target, _dropTargetItem))
                 {
                     return;
                 }
 
                 ClearDropTargetHighlight();
-                item.IsDropTarget = true;
-                _dropTargetItem = item;
+                target.IsDropTarget = true;
+                _dropTargetItem = target;
                 return;
             }
         }
@@ -3293,7 +3294,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? dragDestinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
         bool droppingToHold = !string.IsNullOrWhiteSpace(dragDestinationFolder) && IsHoldFolderPath(dragDestinationFolder);
 
-        if (e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat))
+        if ((e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat)) &&
+            e.Effects != System.Windows.DragDropEffects.None)
         {
             bool isCopy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
             DragHintTextBlock.Text = droppingToHold
@@ -3310,6 +3312,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 string[] ps = (string[])e.Data.GetData(InternalDragPathsFormat);
                 ShowDragHint($"{ps.Length} つのアイテム");
             }
+        }
+        else if (e.Effects == System.Windows.DragDropEffects.None)
+        {
+            HideDragHint();
         }
         else if (e.Effects != System.Windows.DragDropEffects.None)
         {
@@ -7800,7 +7806,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return false;
         }
 
-        string? destination = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        ShopItem? hoveredItem = GetRawDropDestinationItem(e);
+        ShopItem? destinationItem = GetDropDestinationItem(e);
+        if (hoveredItem is not null &&
+            destinationItem is null &&
+            HasInternalDraggedPaths(e.Data))
+        {
+            return false;
+        }
+
+        string? destination = destinationItem?.FullPath ?? _dropTargetItem?.FullPath ?? _currentFolder;
         if (string.IsNullOrWhiteSpace(destination) || !Directory.Exists(destination))
         {
             return false;
@@ -7891,18 +7906,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private string? GetDropDestinationFolder(System.Windows.DragEventArgs e)
     {
-        DependencyObject? current = e.OriginalSource as DependencyObject;
-        while (current is not null)
-        {
-            if (current is System.Windows.Controls.ListViewItem { DataContext: ShopItem { IsDirectory: true } item })
-            {
-                        return item.FullPath;
-            }
-
-            current = VisualTreeHelper.GetParent(current);
-        }
-
-        return null;
+        return GetDropDestinationItem(e)?.FullPath;
     }
 
     private void UpdateDropTargetHighlight(System.Windows.DragEventArgs e)
@@ -7929,7 +7933,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private static ShopItem? GetDropDestinationItem(System.Windows.DragEventArgs e)
+    private ShopItem? GetDropDestinationItem(System.Windows.DragEventArgs e)
+    {
+        ShopItem? target = GetRawDropDestinationItem(e);
+        return IsValidDropTargetItem(target, e.Data) ? target : null;
+    }
+
+    private static ShopItem? GetRawDropDestinationItem(System.Windows.DragEventArgs e)
     {
         DependencyObject? current = e.OriginalSource as DependencyObject;
         while (current is not null)
@@ -7943,6 +7953,58 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return null;
+    }
+
+    private static bool HasInternalDraggedPaths(System.Windows.IDataObject data) =>
+        data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat);
+
+    private static string[] GetInternalDraggedPaths(System.Windows.IDataObject data)
+    {
+        if (data.GetDataPresent(InternalDragPathFormat))
+        {
+            string? singlePath = data.GetData(InternalDragPathFormat) as string;
+            return string.IsNullOrWhiteSpace(singlePath) ? [] : [singlePath];
+        }
+
+        if (data.GetDataPresent(InternalDragPathsFormat))
+        {
+            return data.GetData(InternalDragPathsFormat) as string[] ?? [];
+        }
+
+        return [];
+    }
+
+    private bool IsValidDropTargetItem(ShopItem? target, System.Windows.IDataObject? data)
+    {
+        if (target is null || !target.IsDirectory)
+        {
+            return false;
+        }
+
+        if (data is null || !HasInternalDraggedPaths(data))
+        {
+            return true;
+        }
+
+        foreach (string sourcePath in GetInternalDraggedPaths(data))
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                continue;
+            }
+
+            if (string.Equals(sourcePath, target.FullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (Directory.Exists(sourcePath) && IsUnderFolder(target.FullPath, sourcePath))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void ClearDropTargetHighlight()

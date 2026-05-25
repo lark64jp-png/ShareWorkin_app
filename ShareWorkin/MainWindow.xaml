@@ -79,10 +79,10 @@
                     <Setter Property="Foreground" Value="#1F2D28" />
                 </Trigger>
                 <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
-                    <Setter Property="Background" Value="#EEF7C8" />
-                    <Setter Property="BorderBrush" Value="#7FA641" />
+                    <Setter Property="Background" Value="#F6EDC9" />
+                    <Setter Property="BorderBrush" Value="#C6A24A" />
                     <Setter Property="BorderThickness" Value="2" />
-                    <Setter Property="Foreground" Value="#263018" />
+                    <Setter Property="Foreground" Value="#4C3920" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </DataTrigger>
                 <MultiDataTrigger>
@@ -90,10 +90,10 @@
                         <Condition Binding="{Binding IsDropTarget}" Value="True" />
                         <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=IsSelected}" Value="True" />
                     </MultiDataTrigger.Conditions>
-                    <Setter Property="Background" Value="#E6F0B8" />
-                    <Setter Property="BorderBrush" Value="#6F9334" />
+                    <Setter Property="Background" Value="#EEDDA0" />
+                    <Setter Property="BorderBrush" Value="#B78D2D" />
                     <Setter Property="BorderThickness" Value="2" />
-                    <Setter Property="Foreground" Value="#202813" />
+                    <Setter Property="Foreground" Value="#3F301A" />
                     <Setter Property="FontWeight" Value="Bold" />
                 </MultiDataTrigger>
             </Style.Triggers>
