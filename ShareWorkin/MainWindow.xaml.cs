@@ -34,8 +34,8 @@ public partial class MainWindow : Window
 
     private const int MaxArrivedItemCount = 100;
     private const string HoldFolderName = "保留";
-    private const string InternalDragPathFormat = "ShareWorkin.InternalPath";
-    private const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
+    internal const string InternalDragPathFormat = "ShareWorkin.InternalPath";
+    internal const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
     private static readonly bool EnableExplorerOleDropTarget = true;
 
     // Explorer からのドロップを受けやすくするため、WM_DROPFILES 系メッセージも許可しておく。
@@ -408,7 +408,10 @@ public partial class MainWindow : Window
         return _currentFolder;
     }
 
-    internal void UpdateExternalDropTargetHighlightFromScreenPoint(System.Windows.Point screenPoint)
+    internal void UpdateExternalDropTargetHighlightFromScreenPoint(
+        System.Windows.Point screenPoint,
+        Forms.IDataObject? data = null,
+        DragDropKeyStates keyStates = DragDropKeyStates.None)
     {
         if (string.IsNullOrWhiteSpace(_currentFolder))
         {
@@ -418,24 +421,9 @@ public partial class MainWindow : Window
 
         try
         {
-            if (!ShopItemsListView.IsVisible)
+            ShopItem? target = GetOleDropDestinationItemFromScreenPoint(screenPoint, data, keyStates);
+            if (target is not null)
             {
-                ClearDropTargetHighlight();
-                return;
-            }
-
-            System.Windows.Point localPoint = ShopItemsListView.PointFromScreen(screenPoint);
-            if (double.IsNaN(localPoint.X) || double.IsNaN(localPoint.Y))
-            {
-                ClearDropTargetHighlight();
-                return;
-            }
-
-            HitTestResult? hit = VisualTreeHelper.HitTest(ShopItemsListView, localPoint);
-            ShopItem? item = GetShopItemFromSource(hit?.VisualHit as DependencyObject);
-            if (IsValidDropTargetItem(item, data: null))
-            {
-                ShopItem target = item!;
                 if (ReferenceEquals(target, _dropTargetItem))
                 {
                     return;
@@ -464,8 +452,13 @@ public partial class MainWindow : Window
             return (int)System.Windows.DragDropEffects.None;
         }
 
-        if (data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat))
+        if (HasInternalDraggedPaths(data))
         {
+            if (!IsInternalDropTargetAllowed(destinationFolder, data, keyStates))
+            {
+                return (int)System.Windows.DragDropEffects.None;
+            }
+
             if (IsHoldFolderPath(destinationFolder))
             {
                 return (int)System.Windows.DragDropEffects.Move;
@@ -483,9 +476,18 @@ public partial class MainWindow : Window
 
     internal async void HandleOleDrop(Forms.IDataObject data, DragDropKeyStates keyStates, System.Windows.Point screenPoint)
     {
-        string destinationFolder = ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? _currentFolder ?? string.Empty;
+        bool hasInternalDragData = HasInternalDraggedPaths(data);
+        string destinationFolder = hasInternalDragData
+            ? ResolveOleInternalDropDestinationFromScreenPoint(screenPoint, data, keyStates) ?? string.Empty
+            : ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? _currentFolder ?? string.Empty;
         if (string.IsNullOrWhiteSpace(destinationFolder))
         {
+            return;
+        }
+
+        if (hasInternalDragData && !IsInternalDropTargetAllowed(destinationFolder, data, keyStates))
+        {
+            ClearDropTargetHighlight();
             return;
         }
 
@@ -7981,6 +7983,35 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return null;
     }
 
+    private ShopItem? GetOleDropDestinationItemFromScreenPoint(
+        System.Windows.Point screenPoint,
+        Forms.IDataObject? data,
+        DragDropKeyStates keyStates)
+    {
+        if (!ShopItemsListView.IsVisible)
+        {
+            return null;
+        }
+
+        System.Windows.Point localPoint = ShopItemsListView.PointFromScreen(screenPoint);
+        if (double.IsNaN(localPoint.X) || double.IsNaN(localPoint.Y))
+        {
+            return null;
+        }
+
+        HitTestResult? hit = VisualTreeHelper.HitTest(ShopItemsListView, localPoint);
+        ShopItem? item = GetShopItemFromSource(hit?.VisualHit as DependencyObject);
+        return IsValidDropTargetItem(item, data, keyStates) ? item : null;
+    }
+
+    internal string? ResolveOleInternalDropDestinationFromScreenPoint(
+        System.Windows.Point screenPoint,
+        Forms.IDataObject data,
+        DragDropKeyStates keyStates)
+    {
+        return GetOleDropDestinationItemFromScreenPoint(screenPoint, data, keyStates)?.FullPath;
+    }
+
     private bool HasInternalDraggedPaths(System.Windows.IDataObject data)
     {
         if (_activeInternalDragPaths is { Length: > 0 })
@@ -8012,16 +8043,117 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return [];
     }
 
+    private bool HasInternalDraggedPaths(Forms.IDataObject data)
+    {
+        if (_activeInternalDragPaths is { Length: > 0 })
+        {
+            return true;
+        }
+
+        return data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat);
+    }
+
+    private string[] GetInternalDraggedPaths(Forms.IDataObject data)
+    {
+        if (_activeInternalDragPaths is { Length: > 0 })
+        {
+            return _activeInternalDragPaths;
+        }
+
+        if (data.GetDataPresent(InternalDragPathFormat))
+        {
+            string? singlePath = data.GetData(InternalDragPathFormat) as string;
+            return string.IsNullOrWhiteSpace(singlePath) ? [] : [singlePath];
+        }
+
+        if (data.GetDataPresent(InternalDragPathsFormat))
+        {
+            return data.GetData(InternalDragPathsFormat) as string[] ?? [];
+        }
+
+        return [];
+    }
+
     private static string NormalizeComparablePath(string path)
     {
         return Path.GetFullPath(path)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
+    private IEnumerable<string> EnumerateCurrentDraggedPaths()
+    {
+        if (_activeInternalDragPaths is { Length: > 0 })
+        {
+            return _activeInternalDragPaths;
+        }
+
+        return ShopItemsListView.SelectedItems.Cast<ShopItem>()
+            .Where(static item => !string.IsNullOrWhiteSpace(item.FullPath))
+            .Select(static item => item.FullPath);
+    }
+
+    private bool IsTargetInsideCurrentSelection(ShopItem? target)
+    {
+        if (target is null)
+        {
+            return false;
+        }
+
+        string targetPath;
+        try
+        {
+            targetPath = NormalizeComparablePath(target.FullPath);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        foreach (string draggedPath in EnumerateCurrentDraggedPaths())
+        {
+            try
+            {
+                string selectedPath = NormalizeComparablePath(draggedPath);
+                if (string.Equals(selectedPath, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (Directory.Exists(draggedPath) &&
+                    targetPath.StartsWith(selectedPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                string? selectedParent = Path.GetDirectoryName(selectedPath);
+                if (!string.IsNullOrWhiteSpace(selectedParent) &&
+                    string.Equals(NormalizeComparablePath(selectedParent), targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+        }
+
+        return false;
+    }
+
     private bool IsInternalDropTargetAllowed(string destinationFolder, System.Windows.IDataObject data, DragDropKeyStates keyStates)
     {
-        string[] sourcePaths = GetInternalDraggedPaths(data);
-        if (sourcePaths.Length == 0 || !Directory.Exists(destinationFolder))
+        return IsInternalDropTargetAllowed(destinationFolder, GetInternalDraggedPaths(data), keyStates);
+    }
+
+    private bool IsInternalDropTargetAllowed(string destinationFolder, Forms.IDataObject data, DragDropKeyStates keyStates)
+    {
+        return IsInternalDropTargetAllowed(destinationFolder, GetInternalDraggedPaths(data), keyStates);
+    }
+
+    private bool IsInternalDropTargetAllowed(string destinationFolder, IReadOnlyList<string> sourcePaths, DragDropKeyStates keyStates)
+    {
+        if (sourcePaths.Count == 0 || !Directory.Exists(destinationFolder))
         {
             return false;
         }
@@ -8076,14 +8208,39 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private bool IsValidDropTargetItem(ShopItem? target, System.Windows.IDataObject? data, DragDropKeyStates keyStates = DragDropKeyStates.None)
     {
+        if (data is null || !HasInternalDraggedPaths(data))
+        {
+            return target is not null && target.IsDirectory;
+        }
+
+        return IsValidDropTargetItem(target, GetInternalDraggedPaths(data), keyStates);
+    }
+
+    private bool IsValidDropTargetItem(ShopItem? target, Forms.IDataObject? data, DragDropKeyStates keyStates = DragDropKeyStates.None)
+    {
+        if (data is null || !HasInternalDraggedPaths(data))
+        {
+            return target is not null && target.IsDirectory;
+        }
+
+        return IsValidDropTargetItem(target, GetInternalDraggedPaths(data), keyStates);
+    }
+
+    private bool IsValidDropTargetItem(ShopItem? target, IReadOnlyList<string> sourcePaths, DragDropKeyStates keyStates)
+    {
         if (target is null || !target.IsDirectory)
         {
             return false;
         }
 
-        if (data is null || !HasInternalDraggedPaths(data))
+        if (sourcePaths.Count == 0)
         {
             return true;
+        }
+
+        if (IsTargetInsideCurrentSelection(target))
+        {
+            return false;
         }
 
         string targetPath;
@@ -8097,7 +8254,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return false;
         }
 
-        foreach (string sourcePath in GetInternalDraggedPaths(data))
+        foreach (string sourcePath in sourcePaths)
         {
             if (string.IsNullOrWhiteSpace(sourcePath))
             {
@@ -8125,7 +8282,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
         }
 
-        return IsInternalDropTargetAllowed(target.FullPath, data, keyStates);
+        return IsInternalDropTargetAllowed(target.FullPath, sourcePaths, keyStates);
     }
 
     private void ClearDropTargetHighlight()
@@ -8944,7 +9101,7 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
     {
         _currentData = new Forms.DataObject(pDataObj);
         _ = _owner.Dispatcher.InvokeAsync(() =>
-            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y), _currentData, (DragDropKeyStates)grfKeyState));
         pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
         _lastEffect = pdwEffect;
         return 0;
@@ -8953,7 +9110,7 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
     public int DragOver(int grfKeyState, POINTL pt, ref int pdwEffect)
     {
         _ = _owner.Dispatcher.InvokeAsync(() =>
-            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y), _currentData, (DragDropKeyStates)grfKeyState));
         pdwEffect = ResolveEffect(_currentData, (DragDropKeyStates)grfKeyState, pt);
         _lastEffect = pdwEffect;
         return 0;
@@ -8976,7 +9133,7 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
         var data = new Forms.DataObject(pDataObj);
         DragDropKeyStates keyStates = (DragDropKeyStates)grfKeyState;
         _ = _owner.Dispatcher.InvokeAsync(() =>
-            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y)));
+            _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y), data, keyStates));
         pdwEffect = ResolveEffect(data, keyStates, pt);
         _lastEffect = pdwEffect;
         _ = _owner.Dispatcher.InvokeAsync(() =>
@@ -8997,9 +9154,10 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
                 return _lastEffect;
             }
 
-            string destinationFolder = _owner.ResolveExternalDropDestinationFromScreenPoint(
-                                           new System.Windows.Point(pt.x, pt.y))
-                                       ?? string.Empty;
+            System.Windows.Point screenPoint = new(pt.x, pt.y);
+            string destinationFolder = data.GetDataPresent(MainWindow.InternalDragPathFormat) || data.GetDataPresent(MainWindow.InternalDragPathsFormat)
+                ? _owner.ResolveOleInternalDropDestinationFromScreenPoint(screenPoint, data, keyStates) ?? string.Empty
+                : _owner.ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? string.Empty;
             return _owner.GetOleDropEffect(data, keyStates, destinationFolder);
         }
         catch (Exception ex)
