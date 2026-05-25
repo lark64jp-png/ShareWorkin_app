@@ -7991,6 +7991,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return [];
     }
 
+    private static string NormalizeComparablePath(string path)
+    {
+        return Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
     private bool IsValidDropTargetItem(ShopItem? target, System.Windows.IDataObject? data)
     {
         if (target is null || !target.IsDirectory)
@@ -8003,8 +8009,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return true;
         }
 
-        if (ShopItemsListView.SelectedItems.Contains(target))
+        string targetPath;
+        try
         {
+            targetPath = NormalizeComparablePath(target.FullPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            SwkLogger.Debug($"IsValidDropTargetItem skipped invalid target path: {ex.Message}");
             return false;
         }
 
@@ -8015,14 +8027,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 continue;
             }
 
-            if (string.Equals(sourcePath, target.FullPath, StringComparison.OrdinalIgnoreCase))
+            try
             {
-                return false;
-            }
+                string normalizedSourcePath = NormalizeComparablePath(sourcePath);
+                if (string.Equals(normalizedSourcePath, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
 
-            if (Directory.Exists(sourcePath) && IsUnderFolder(target.FullPath, sourcePath))
+                if (Directory.Exists(sourcePath) &&
+                    (string.Equals(normalizedSourcePath, targetPath, StringComparison.OrdinalIgnoreCase) ||
+                     targetPath.StartsWith(normalizedSourcePath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
             {
-                return false;
+                SwkLogger.Debug($"IsValidDropTargetItem skipped invalid source path: {ex.Message}");
             }
         }
 
