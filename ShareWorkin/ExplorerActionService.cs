@@ -136,10 +136,17 @@ public static class ExplorerActionService
                 Path.GetFullPath(request.DestinationFolder),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return Blocked("Move", "同じ場所には移せません。",
-                $"Explorer[{request.ModeLabel}]: Move validation blocked - same location: {request.SourcePath}",
-                targetName: Path.GetFileName(request.SourcePath),
-                pathText: sourceParent);
+            return new ExplorerActionResult
+            {
+                State = ExplorerActionState.NoChange,
+                EventType = "Move",
+                Source = "ExplorerActionService.ValidateMoveTarget",
+                SourcePath = request.SourcePath,
+                SourceParent = sourceParent,
+                DestinationFolder = request.DestinationFolder,
+                TargetName = Path.GetFileName(request.SourcePath),
+                PathText = sourceParent,
+            };
         }
 
         if (request.IsHoldFolderPath(request.DestinationFolder))
@@ -385,10 +392,17 @@ public static class ExplorerActionService
                 Path.GetFullPath(request.DestinationFolder),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return Blocked("Move", "同じ場所には移せません。",
-                $"Explorer[{request.ModeLabel}]: Move blocked - same location: {request.SourcePath}",
-                targetName: Path.GetFileName(request.SourcePath),
-                pathText: sourceParent);
+            return new ExplorerActionResult
+            {
+                State = ExplorerActionState.NoChange,
+                EventType = "Move",
+                Source = "ExplorerActionService.MoveItem",
+                SourcePath = request.SourcePath,
+                SourceParent = sourceParent,
+                DestinationFolder = request.DestinationFolder,
+                TargetName = Path.GetFileName(request.SourcePath),
+                PathText = sourceParent,
+            };
         }
 
         if (request.IsHoldFolderPath(request.DestinationFolder))

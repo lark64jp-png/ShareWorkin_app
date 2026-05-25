@@ -1449,7 +1449,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             ExplorerActionResult validation = validate(sourcePath);
-            if (validation.State == ExplorerActionState.Success)
+            if (validation.State == ExplorerActionState.Success ||
+                validation.State == ExplorerActionState.NoChange)
             {
                 continue;
             }
