@@ -26,6 +26,10 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
     private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
         Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     private static readonly string CertificatePath = Path.Combine(AppHomeDirectory, "notifycert.dat");
+    private static readonly X509KeyStorageFlags CertificateKeyStorageFlags =
+        X509KeyStorageFlags.MachineKeySet |
+        X509KeyStorageFlags.PersistKeySet |
+        X509KeyStorageFlags.Exportable;
     private TcpListener? _listener;
     private int _listeningPort;
     private CancellationTokenSource? _cancellationSource;
@@ -507,7 +511,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
             {
                 byte[] protectedBytes = File.ReadAllBytes(CertificatePath);
                 byte[] pfxBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.LocalMachine);
-                var loaded = new X509Certificate2(pfxBytes);
+                var loaded = new X509Certificate2(pfxBytes, (string?)null, CertificateKeyStorageFlags);
                 if (IsUsableCertificate(loaded))
                 {
                     SwkLogger.Info("SwkNotificationBroadcaster loaded persisted TLS certificate");
@@ -581,7 +585,7 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
         using var cert = request.CreateSelfSigned(
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow.AddYears(1));
-        return new X509Certificate2(cert.Export(X509ContentType.Pfx));
+        return new X509Certificate2(cert.Export(X509ContentType.Pfx), (string?)null, CertificateKeyStorageFlags);
     }
 
     private static async Task<string?> ReadJsonAsync(SslStream stream, CancellationToken cancellationToken)

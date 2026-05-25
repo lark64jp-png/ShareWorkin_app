@@ -21,23 +21,70 @@ $installer = Join-Path $root "ShareWorkin_v1.21_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 $appVersion = "1.21"
 $informationalVersion = $appVersion
+$gitWorkTree = $root
+$gitDir = $null
 
-function Test-GitRepository([string]$Path) {
+function Resolve-GitContext([string]$Path) {
     try {
-        $result = (git -C $Path rev-parse --is-inside-work-tree 2>$null).Trim()
-        return $result -eq "true"
+        $topLevel = (git -C $Path rev-parse --show-toplevel 2>$null).Trim()
+        if (-not $topLevel) {
+            return $null
+        }
+
+        $resolvedTopLevel = [System.IO.Path]::GetFullPath($topLevel)
+        $candidateGitDir = Join-Path $resolvedTopLevel ".git"
+        if (Test-Path -LiteralPath $candidateGitDir) {
+            return @{
+                WorkTree = $Path
+                GitDir = $candidateGitDir
+            }
+        }
+
+        $rawGitDir = (git -C $Path rev-parse --git-dir 2>$null).Trim()
+        if (-not $rawGitDir) {
+            return $null
+        }
+
+        $resolvedGitDir = if ([System.IO.Path]::IsPathRooted($rawGitDir)) {
+            $rawGitDir
+        }
+        else {
+            [System.IO.Path]::GetFullPath((Join-Path $Path $rawGitDir))
+        }
+
+        return @{
+            WorkTree = $Path
+            GitDir = $resolvedGitDir
+        }
     }
     catch {
-        return $false
+        return $null
     }
+}
+
+function Invoke-Git {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & git "--git-dir=$gitDir" "--work-tree=$gitWorkTree" @Arguments
+}
+
+function Test-GitRepository([string]$Path) {
+    return $null -ne (Resolve-GitContext $Path)
 }
 
 if (-not (Test-GitRepository $root)) {
     throw "Git repository was not found at '$root'. Run git init or clone the repository, then commit your changes before building the installer."
 }
 
+$gitContext = Resolve-GitContext $root
+$gitWorkTree = $gitContext.WorkTree
+$gitDir = $gitContext.GitDir
+
 try {
-    $headCommit = (git -C $root rev-parse --verify HEAD 2>$null).Trim()
+    $headCommit = (Invoke-Git rev-parse --verify HEAD 2>$null).Trim()
 }
 catch {
     $headCommit = ""
@@ -48,14 +95,14 @@ if (-not $headCommit) {
 }
 
 if (-not $AllowDirtyGit) {
-    $dirty = git -C $root status --porcelain
+    $dirty = Invoke-Git status --porcelain --untracked-files=no
     if ($dirty) {
         throw "Uncommitted Git changes were found. Commit your changes before building the installer, or use -AllowDirtyGit only when you intentionally want to bypass this guard."
     }
 }
 
 try {
-    $gitShort = (git -C $root rev-parse --short HEAD 2>$null).Trim()
+    $gitShort = (Invoke-Git rev-parse --short HEAD 2>$null).Trim()
     if ($gitShort) {
         $dirtyPaths = @(
             "README.md",
@@ -65,7 +112,7 @@ try {
             "ご利用にあたって.txt",
             "ShareWorkin"
         )
-        $dirty = git -C $root status --porcelain -- $dirtyPaths
+        $dirty = Invoke-Git status --porcelain --untracked-files=no -- $dirtyPaths
         $suffix = if ($dirty) { ".dirty" } else { "" }
         $informationalVersion = "$appVersion+$gitShort$suffix"
     }
