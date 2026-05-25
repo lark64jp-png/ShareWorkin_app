@@ -3310,7 +3310,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             : GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
         bool droppingToHold = !string.IsNullOrWhiteSpace(dragDestinationFolder) && IsHoldFolderPath(dragDestinationFolder);
 
-        if ((e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat)) &&
+        if (hasInternalDragData &&
             e.Effects != System.Windows.DragDropEffects.None)
         {
             bool isCopy = (e.KeyStates & DragDropKeyStates.ControlKey) != 0;
@@ -3373,12 +3373,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         e.Handled = true;
-        // 視覚ツリーウォークを試み、失敗なら DragOver で特定済みのフォルダをフォールバックに使う
+        // 内部ドラッグでは DragOver 時のハイライト済みフォルダを使う場合も、Drop 直前に必ず再検証する。
         string? destinationFolder = hasInternalDragData
-            ? GetDropDestinationFolder(e) ?? highlightedFolder?.FullPath
+            ? GetDropDestinationFolder(e) ?? (IsValidDropTargetItem(highlightedFolder, e.Data, e.KeyStates) ? highlightedFolder?.FullPath : null)
             : GetDropDestinationFolder(e) ?? highlightedFolder?.FullPath ?? _currentFolder;
 
-        if (hasInternalDragData && string.IsNullOrWhiteSpace(destinationFolder))
+        if (hasInternalDragData &&
+            (string.IsNullOrWhiteSpace(destinationFolder) ||
+             !IsInternalDropTargetAllowed(destinationFolder, e.Data, e.KeyStates)))
         {
             return;
         }
@@ -7818,17 +7820,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return false;
         }
 
+        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
         bool hasSupportedData =
-            e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop) ||
-            e.Data.GetDataPresent(InternalDragPathFormat) ||
-            e.Data.GetDataPresent(InternalDragPathsFormat);
+            hasInternalDragData ||
+            e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop);
 
         if (!hasSupportedData)
         {
             return false;
         }
 
-        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
         ShopItem? hoveredItem = GetRawDropDestinationItem(e);
         ShopItem? destinationItem = GetDropDestinationItem(e);
         if (hasInternalDragData)
@@ -7874,6 +7875,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (hasInternalDragData)
         {
+            if (string.IsNullOrWhiteSpace(destinationFolder) ||
+                !IsInternalDropTargetAllowed(destinationFolder, e.Data, e.KeyStates))
+            {
+                return System.Windows.DragDropEffects.None;
+            }
+
             return (e.KeyStates & DragDropKeyStates.ControlKey) != 0
                 ? System.Windows.DragDropEffects.Copy
                 : System.Windows.DragDropEffects.Move;
@@ -7939,8 +7946,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UpdateDropTargetHighlight(System.Windows.DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(InternalDragPathFormat) &&
-            !e.Data.GetDataPresent(InternalDragPathsFormat) &&
+        if (!HasInternalDraggedPaths(e.Data) &&
             !e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
         {
             ClearDropTargetHighlight();
