@@ -1055,7 +1055,7 @@ public sealed class UserListRow
                 ? "登録済み / 候補あり"
                 : "登録済み / 候補不明",
         Memo = friend.HasCertificateMismatch
-            ? "証明書が登録時と違うため接続を停止中"
+            ? "通知経路の確認が必要です。接続情報を再確認してください。"
             : string.IsNullOrWhiteSpace(friend.Memo)
                 ? candidate is not null ? "接続先の見直し候補があります。" : "接続先を確認できていません。"
                 : friend.Memo,

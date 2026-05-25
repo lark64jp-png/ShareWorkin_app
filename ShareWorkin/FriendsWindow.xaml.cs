@@ -154,9 +154,9 @@ public partial class FriendsWindow : Window
                 string shopShare = string.IsNullOrWhiteSpace(_activeShopInfo.ShareName) ? "(共有名なし)" : _activeShopInfo.ShareName;
                 if (_activeFriend.HasCertificateMismatch)
                 {
-                    TitleTextBlock.Text = "証明書を再確認";
+                    TitleTextBlock.Text = "通知経路を再確認";
                     SubtitleTextBlock.Text =
-                        $"「{friendName}」の証明書が変わっています。検出中の共有「{shopShare}」の「{shopHost}」{shopIp}へ再接続して登録情報を更新します。";
+                        $"「{friendName}」への通知経路を確認できませんでした。検出中の共有「{shopShare}」の「{shopHost}」{shopIp}へ再接続して登録情報を更新します。";
                 }
                 else
                 {
@@ -1073,7 +1073,7 @@ public partial class FriendsWindow : Window
     private string ResolvePresence(Friend f, bool isLive, bool isVisible)
     {
         if (string.IsNullOrWhiteSpace(f.LastCheckedAt)) return "未確認";
-        if (f.HasCertificateMismatch) return "証明書不一致";
+        if (f.HasCertificateMismatch) return "通知経路を再確認";
         if (!isLive && isVisible) return "ShareWorkin 起動中";
         return isLive ? "来店可能" : "不在";
     }

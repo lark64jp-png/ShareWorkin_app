@@ -29,6 +29,7 @@ namespace ShareWorkin;
 public partial class MainWindow : Window
 {
     private const string OwnerCertificateMismatchMessage = "店主の証明書が以前と違います。乗っ取りの可能性があるため接続を中止しました。";
+    private const string InteractionChannelNeedsReviewMessage = "通知経路の確認に失敗したため、追加通知を届けられませんでした。接続情報を再確認してください。";
     private static readonly System.Windows.Media.Brush UnselectedShopBackgroundBrush =
         new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 248, 204));
 
@@ -5440,6 +5441,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 CancellationToken.None);
             if (!sendResult.Success)
             {
+                string? dispatchNote = BuildInteractionDispatchNote(sendResult.ErrorMessage);
+                if (string.Equals(sendResult.ErrorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal))
+                {
+                    PersistFriendAccessIssue(friend, Friend.AccessIssueCertMismatch);
+                    FriendShareAccessTracker.ClearVerified(friend);
+                }
+
                 AppendHistory(
                     HistoryChannel.Update,
                     $"{interactionEvent.TargetName ?? "項目"} の交流通知を相手へ届けられませんでした。",
@@ -5449,11 +5457,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     friend: friend,
                     targetName: interactionEvent.TargetName,
                     pathText: interactionEvent.TargetFolder,
-                    note: sendResult.ErrorMessage,
+                    note: dispatchNote,
                     interactionEventId: interactionEvent.Id,
                     source: "InteractionDispatch",
                     destinationPath: interactionEvent.TargetPath,
                     destinationFolder: interactionEvent.TargetFolder);
+            }
+            else
+            {
+                PersistFriendAccessIssue(friend, issue: null);
             }
         }
         catch (Exception ex)
@@ -5704,6 +5716,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return $"{senderNote}\r\nメッセージ: {message}";
+    }
+
+    private static string? BuildInteractionDispatchNote(string? errorMessage)
+    {
+        if (string.IsNullOrWhiteSpace(errorMessage))
+        {
+            return null;
+        }
+
+        if (string.Equals(errorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal))
+        {
+            return InteractionChannelNeedsReviewMessage;
+        }
+
+        return errorMessage;
     }
 
     private static string? BuildShareRelativePath(string? rootPath, string? targetPath)
