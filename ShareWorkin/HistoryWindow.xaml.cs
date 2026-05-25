@@ -197,7 +197,7 @@ public partial class HistoryWindow : Window
         "InteractionNotifyUnverified" => "交流通知（未照合）",
         "InteractionDispatchSkipped" => "交流通知未送達",
         "InteractionDispatchFailed" => "交流通知送達失敗",
-        "OutOfSyncDetected" => "同期外差分",
+        "OutOfSyncDetected" => "受信検知（未照合）",
         _ => eventType
     };
 
@@ -208,7 +208,12 @@ public partial class HistoryWindow : Window
             return entry.FriendName!;
         }
 
-        return entry.Direction == HistoryDirection.Incoming ? "不明" : "自分";
+        if (IsExternalObservation(entry))
+        {
+            return "相手または外部";
+        }
+
+        return entry.Direction == HistoryDirection.Incoming ? "相手" : "自分";
     }
 
     private static string BuildPathText(HistoryEntry entry)
@@ -384,7 +389,19 @@ public partial class HistoryWindow : Window
         ]);
 
     private static string GetUserText(HistoryEntry entry)
-        => string.IsNullOrWhiteSpace(entry.FriendName) ? "自分" : entry.FriendName!;
+    {
+        if (!string.IsNullOrWhiteSpace(entry.FriendName))
+        {
+            return entry.FriendName!;
+        }
+
+        if (IsExternalObservation(entry))
+        {
+            return "相手または外部";
+        }
+
+        return entry.Direction == HistoryDirection.Incoming ? "相手" : "自分";
+    }
 
     private void FilterTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         => ApplyFilter();

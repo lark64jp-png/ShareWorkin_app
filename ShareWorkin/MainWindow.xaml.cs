@@ -1130,15 +1130,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         AppendHistory(
             HistoryChannel.Update,
-            $"{item.Name} を同期外差分として検知しました。",
+            $"{item.Name} の受け取りを未照合の受信として検知しました。",
             "OutOfSyncDetected",
             HistoryOutcome.Info,
             targetName: item.Name,
             pathText: item.FolderPath,
-            note: "正規交流イベントに対応しないため、通知・受信履歴には載せません。",
+            note: "交流通知と照合できなかったため、送信元未特定の受信として扱いました。",
             destinationPath: fullPath,
             destinationFolder: item.FolderPath,
             source: source);
+        QueueNotification(item);
         string loggedPath = NormalizeHistoryPathText(
             item.FolderPath,
             sourcePath: null,
@@ -5265,15 +5266,40 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        string notifFolder = _pendingNotificationItems[0].FolderPath;
-        SwkLogger.Info($"ShowNotification: count={_pendingNotificationItems.Count} folder={notifFolder}");
+        ArrivedItem firstItem = _pendingNotificationItems[0];
+        string notifFolder = firstItem.FolderPath;
+        int count = _pendingNotificationItems.Count;
+        SwkLogger.Info($"ShowNotification: count={count} folder={notifFolder}");
         _pendingNotificationItems.Clear();
+
+        if (count == 1)
+        {
+            string notificationText = $"{firstItem.Name} を受け取りました。";
+            AppendHistory(
+                HistoryChannel.Notification,
+                notificationText,
+                "Receive",
+                HistoryOutcome.Info,
+                HistoryDirection.Incoming,
+                targetName: firstItem.Name,
+                pathText: firstItem.FolderPath,
+                note: "交流通知と未照合のため、送信元はまだ特定できていません。",
+                destinationFolder: firstItem.FolderPath);
+            _pipeClient.ShowBalloonTip("ShareWorkin の受信", notificationText, notifFolder);
+            return;
+        }
+
+        string summaryText = $"{count} 件の受け取りを検知しました。";
         AppendHistory(
             HistoryChannel.Notification,
-            "お店の中身が変更されました。",
+            summaryText,
             "Notify",
-            HistoryOutcome.Info);
-        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", "お店の中身が変更されました。", notifFolder);
+            HistoryOutcome.Info,
+            HistoryDirection.Incoming,
+            pathText: notifFolder,
+            note: "交流通知と未照合の受信です。詳細は更新履歴で確認できます。",
+            destinationFolder: notifFolder);
+        _pipeClient.ShowBalloonTip("ShareWorkin の受信", summaryText, notifFolder);
     }
 
     private void RecordConfirmedInteraction(InteractionEventEntry interactionEvent, Friend? friend)
