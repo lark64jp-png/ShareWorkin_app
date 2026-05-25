@@ -5439,6 +5439,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 notice,
                 friend.OwnerCertThumbprint,
                 CancellationToken.None);
+            if (!sendResult.Success &&
+                string.Equals(sendResult.ErrorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal) &&
+                await TryRecoverFriendCertificateAsync(friend, shop, "InteractionDispatch"))
+            {
+                sendResult = await listener.SendInteractionEventAsync(
+                    shop,
+                    notice,
+                    friend.OwnerCertThumbprint,
+                    CancellationToken.None);
+            }
+
             if (!sendResult.Success)
             {
                 string? dispatchNote = BuildInteractionDispatchNote(sendResult.ErrorMessage);
@@ -7557,6 +7568,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 if (string.Equals(result.ErrorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal))
                 {
+                    if (await TryRecoverFriendCertificateAsync(friend, liveShop, "ReconnectRefresh"))
+                    {
+                        return true;
+                    }
+
                     PersistFriendAccessIssue(friend, Friend.AccessIssueCertMismatch);
                 }
                 FriendShareAccessTracker.ClearVerified(friend);
@@ -7589,6 +7605,69 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             FriendShareAccessTracker.ClearVerified(friend);
             SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static async Task<bool> TryRecoverFriendCertificateAsync(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop,
+        string reason)
+    {
+        if (!IsCompatibleLiveShopForFriend(friend, liveShop))
+        {
+            return false;
+        }
+
+        // 共有接続で同一相手と確認できている場合だけ、通知証明書の更新を許可する。
+        if (!FriendShareAccessTracker.IsVerifiedFor(friend, liveShop))
+        {
+            SwkLogger.Warn(
+                $"TryRecoverFriendCertificateAsync skipped unverified friend: reason={reason} friend={friend.Id}/{friend.DisplayName} " +
+                $"host={friend.HostMachineName} share={friend.ShareName} shopHost={liveShop.MachineName} shopShare={liveShop.ShareName}");
+            return false;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var listener = new SwkNotificationListener();
+            SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
+                liveShop,
+                inviteId: null,
+                expectedThumbprint: null,
+                cts.Token);
+
+            if (!result.Success ||
+                string.IsNullOrWhiteSpace(result.Password) ||
+                string.IsNullOrWhiteSpace(result.CertThumbprint))
+            {
+                SwkLogger.Warn(
+                    $"TryRecoverFriendCertificateAsync failed: reason={reason} friend={friend.Id} error={result.ErrorMessage ?? "empty"}");
+                return false;
+            }
+
+            friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
+            friend.OwnerCertThumbprint = result.CertThumbprint;
+            if (!string.IsNullOrWhiteSpace(result.SwkInstanceId))
+            {
+                friend.RemoteSwkInstanceId = result.SwkInstanceId;
+            }
+
+            FriendShareAccessTracker.MarkVerified(friend, liveShop);
+            UpdateFriendExternalState(friend, liveShop);
+            SwkLogger.Info(
+                $"TryRecoverFriendCertificateAsync succeeded: reason={reason} friend={friend.Id} thumbprint={result.CertThumbprint}");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            SwkLogger.Warn($"TryRecoverFriendCertificateAsync timed out: reason={reason} friend={friend.Id}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TryRecoverFriendCertificateAsync failed: reason={reason} friend={friend.Id} error={ex.Message}");
             return false;
         }
     }
