@@ -494,37 +494,33 @@ public partial class MainWindow : Window
         BeginProcessing();
         try
         {
-            if (data.GetDataPresent(InternalDragPathFormat))
+            if (hasInternalDragData)
             {
-                string sourcePath = data.GetData(InternalDragPathFormat) as string ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(sourcePath))
-                {
-                    return;
-                }
-
-                if (IsHoldFolderPath(destinationFolder))
-                    await HoldInternalDraggedItemsAsync([sourcePath]);
-                else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
-                    await CopyInternalDraggedItemAsync(sourcePath, destinationFolder);
-                else
-                    await MoveInternalDraggedItemAsync(sourcePath, destinationFolder);
-                return;
-            }
-
-            if (data.GetDataPresent(InternalDragPathsFormat))
-            {
-                string[] sourcePaths = data.GetData(InternalDragPathsFormat) as string[] ?? [];
+                string[] sourcePaths = GetInternalDraggedPaths(data);
                 if (sourcePaths.Length == 0)
                 {
                     return;
                 }
 
-                if (IsHoldFolderPath(destinationFolder))
-                    await HoldInternalDraggedItemsAsync(sourcePaths);
-                else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
-                    await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                if (sourcePaths.Length == 1)
+                {
+                    string sourcePath = sourcePaths[0];
+                    if (IsHoldFolderPath(destinationFolder))
+                        await HoldInternalDraggedItemsAsync([sourcePath]);
+                    else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                        await CopyInternalDraggedItemAsync(sourcePath, destinationFolder);
+                    else
+                        await MoveInternalDraggedItemAsync(sourcePath, destinationFolder);
+                }
                 else
-                    await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                {
+                    if (IsHoldFolderPath(destinationFolder))
+                        await HoldInternalDraggedItemsAsync(sourcePaths);
+                    else if ((keyStates & DragDropKeyStates.ControlKey) != 0)
+                        await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                    else
+                        await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                }
                 return;
             }
 
@@ -8049,7 +8045,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return [];
     }
 
-    private bool HasInternalDraggedPaths(Forms.IDataObject data)
+    internal bool HasInternalDraggedPaths(Forms.IDataObject data)
     {
         if (_activeInternalDragPaths is { Length: > 0 })
         {
@@ -9161,7 +9157,7 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
             }
 
             System.Windows.Point screenPoint = new(pt.x, pt.y);
-            string destinationFolder = data.GetDataPresent(MainWindow.InternalDragPathFormat) || data.GetDataPresent(MainWindow.InternalDragPathsFormat)
+            string destinationFolder = _owner.HasInternalDraggedPaths(data)
                 ? _owner.ResolveOleInternalDropDestinationFromScreenPoint(screenPoint, data, keyStates) ?? string.Empty
                 : _owner.ResolveExternalDropDestinationFromScreenPoint(screenPoint) ?? string.Empty;
             return _owner.GetOleDropEffect(data, keyStates, destinationFolder);
