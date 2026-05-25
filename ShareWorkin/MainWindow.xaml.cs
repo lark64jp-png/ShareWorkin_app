@@ -3289,9 +3289,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_DragEnter(object sender, System.Windows.DragEventArgs e)
     {
+        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
         e.Effects = GetDropEffect(e);
         UpdateDropTargetHighlight(e);
-        string? dragDestinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        string? dragDestinationFolder = hasInternalDragData
+            ? GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath
+            : GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
         bool droppingToHold = !string.IsNullOrWhiteSpace(dragDestinationFolder) && IsHoldFolderPath(dragDestinationFolder);
 
         if ((e.Data.GetDataPresent(InternalDragPathFormat) || e.Data.GetDataPresent(InternalDragPathsFormat)) &&
@@ -3349,6 +3352,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ClearDropTargetHighlight();
         HideDragHint();
 
+        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
         if (!CanAcceptDrop(e) || string.IsNullOrWhiteSpace(_currentFolder))
         {
             e.Handled = true;
@@ -3357,9 +3361,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         e.Handled = true;
         // 視覚ツリーウォークを試み、失敗なら DragOver で特定済みのフォルダをフォールバックに使う
-        string destinationFolder = GetDropDestinationFolder(e)
-            ?? highlightedFolder?.FullPath
-            ?? _currentFolder;
+        string? destinationFolder = hasInternalDragData
+            ? GetDropDestinationFolder(e) ?? highlightedFolder?.FullPath
+            : GetDropDestinationFolder(e) ?? highlightedFolder?.FullPath ?? _currentFolder;
+
+        if (hasInternalDragData && string.IsNullOrWhiteSpace(destinationFolder))
+        {
+            return;
+        }
 
         BeginProcessing();
         try
@@ -3367,28 +3376,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (e.Data.GetDataPresent(InternalDragPathFormat))
             {
                 string sourcePath = (string)e.Data.GetData(InternalDragPathFormat);
-                if (IsHoldFolderPath(destinationFolder))
+                if (IsHoldFolderPath(destinationFolder!))
                     await HoldInternalDraggedItemsAsync([sourcePath]);
                 else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                    await CopyInternalDraggedItemAsync(sourcePath, destinationFolder);
+                    await CopyInternalDraggedItemAsync(sourcePath, destinationFolder!);
                 else
-                    await MoveInternalDraggedItemAsync(sourcePath, destinationFolder);
+                    await MoveInternalDraggedItemAsync(sourcePath, destinationFolder!);
                 return;
             }
 
             if (e.Data.GetDataPresent(InternalDragPathsFormat))
             {
                 string[] sourcePaths = (string[])e.Data.GetData(InternalDragPathsFormat);
-                if (IsHoldFolderPath(destinationFolder))
+                if (IsHoldFolderPath(destinationFolder!))
                     await HoldInternalDraggedItemsAsync(sourcePaths);
                 else if ((e.KeyStates & DragDropKeyStates.ControlKey) != 0)
-                    await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                    await CopyInternalDraggedItemsAsync(sourcePaths, destinationFolder!);
                 else
-                    await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder);
+                    await MoveInternalDraggedItemsAsync(sourcePaths, destinationFolder!);
                 return;
             }
 
-            if (!Directory.Exists(destinationFolder))
+            if (string.IsNullOrWhiteSpace(destinationFolder) || !Directory.Exists(destinationFolder))
             {
                 SetTransientStatus("その場所が見つかりません。");
                 return;
@@ -7806,13 +7815,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return false;
         }
 
+        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
         ShopItem? hoveredItem = GetRawDropDestinationItem(e);
         ShopItem? destinationItem = GetDropDestinationItem(e);
-        if (hoveredItem is not null &&
-            destinationItem is null &&
-            HasInternalDraggedPaths(e.Data))
+        if (hasInternalDragData)
         {
-            return false;
+            if (hoveredItem is not null && destinationItem is null)
+            {
+                return false;
+            }
+
+            return destinationItem is not null && Directory.Exists(destinationItem.FullPath);
         }
 
         string? destination = destinationItem?.FullPath ?? _dropTargetItem?.FullPath ?? _currentFolder;
@@ -7837,14 +7850,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return System.Windows.DragDropEffects.None;
         }
 
-        string? destinationFolder = GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
+        bool hasInternalDragData = HasInternalDraggedPaths(e.Data);
+        string? destinationFolder = hasInternalDragData
+            ? GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath
+            : GetDropDestinationFolder(e) ?? _dropTargetItem?.FullPath ?? _currentFolder;
         if (!string.IsNullOrWhiteSpace(destinationFolder) && IsHoldFolderPath(destinationFolder))
         {
             return System.Windows.DragDropEffects.Move;
         }
 
-        if (e.Data.GetDataPresent(InternalDragPathFormat) ||
-            e.Data.GetDataPresent(InternalDragPathsFormat))
+        if (hasInternalDragData)
         {
             return (e.KeyStates & DragDropKeyStates.ControlKey) != 0
                 ? System.Windows.DragDropEffects.Copy
