@@ -5526,9 +5526,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string updateMessage = isVerified
             ? $"{senderLabel} から {targetName} を受け取りました。"
             : $"送信元を確認できない交流通知があります。対象: {targetName}";
+        string historyMessage = string.IsNullOrWhiteSpace(entry.Message)
+            ? updateMessage
+            : $"{updateMessage}\r\nメッセージ: {entry.Message}";
         string? senderNote = isVerified
             ? null
             : BuildUnverifiedSenderNote(entry);
+
+        AppendHistory(
+            HistoryChannel.Update,
+            historyMessage,
+            "Receive",
+            isVerified ? HistoryOutcome.Success : HistoryOutcome.Warning,
+            HistoryDirection.Incoming,
+            friend: friend,
+            targetName: entry.TargetName,
+            pathText: entry.TargetFolder,
+            note: BuildInteractionReceiveNote(senderNote, entry.Message),
+            interactionEventId: entry.EventId,
+            source: entry.SourceRoute,
+            destinationPath: entry.TargetFullPath,
+            destinationFolder: entry.TargetFolder);
 
         if (isVerified && !string.IsNullOrWhiteSpace(entry.TargetName) && !string.IsNullOrWhiteSpace(entry.TargetFolder))
         {
@@ -5551,8 +5569,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 : $"{updateMessage}\r\nメッセージ: {entry.Message}";
             AppendHistory(
                 HistoryChannel.Notification,
-                updateMessage,
-                isVerified ? "InteractionNotify" : "InteractionNotifyUnverified",
+                historyMessage,
+                "Receive",
                 isVerified ? HistoryOutcome.Success : HistoryOutcome.Warning,
                 HistoryDirection.Incoming,
                 friend: friend,
@@ -5605,6 +5623,40 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (byInstance is not null)
             {
                 return byInstance;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName) &&
+            !string.IsNullOrWhiteSpace(entry.SenderShareName))
+        {
+            Friend? byHostAndShare = friends.FirstOrDefault(f =>
+                string.Equals(f.HostMachineName, entry.SenderMachineName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase));
+            if (byHostAndShare is not null)
+            {
+                return byHostAndShare;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName))
+        {
+            List<Friend> byHost = friends
+                .Where(f => string.Equals(f.HostMachineName, entry.SenderMachineName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (byHost.Count == 1)
+            {
+                return byHost[0];
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SenderShareName))
+        {
+            List<Friend> byShare = friends
+                .Where(f => string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (byShare.Count == 1)
+            {
+                return byShare[0];
             }
         }
 

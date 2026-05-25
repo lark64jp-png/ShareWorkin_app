@@ -51,6 +51,7 @@ public partial class HistoryWindow : Window
         List<HistoryEntry> entries = HistoryRepository.GetEntries(_channel, _maxCount)
             .OrderByDescending(e => e.OccurredAt)
             .ToList();
+        entries = CollapseSupersededReceiveDetections(entries);
 
         _allRows = entries.Select(static e => new HistoryRow
         {
@@ -78,6 +79,56 @@ public partial class HistoryWindow : Window
         }
 
         ApplyFilter();
+    }
+
+    private static List<HistoryEntry> CollapseSupersededReceiveDetections(List<HistoryEntry> entries)
+    {
+        List<HistoryEntry> confirmedReceives = entries
+            .Where(IsConfirmedReceiveEntry)
+            .ToList();
+        if (confirmedReceives.Count == 0)
+        {
+            return entries;
+        }
+
+        return entries
+            .Where(entry => !IsSupersededReceiveDetection(entry, confirmedReceives))
+            .ToList();
+    }
+
+    private static bool IsConfirmedReceiveEntry(HistoryEntry entry)
+        => string.Equals(entry.EventType, "Receive", StringComparison.OrdinalIgnoreCase) &&
+           entry.Direction == HistoryDirection.Incoming &&
+           (!string.IsNullOrWhiteSpace(entry.FriendName) || !string.IsNullOrWhiteSpace(entry.InteractionEventId));
+
+    private static bool IsSupersededReceiveDetection(HistoryEntry entry, IReadOnlyList<HistoryEntry> confirmedReceives)
+    {
+        bool isExternalDetection = string.Equals(entry.EventType, "OutOfSyncDetected", StringComparison.OrdinalIgnoreCase);
+        bool isFallbackReceive = string.Equals(entry.EventType, "Receive", StringComparison.OrdinalIgnoreCase) &&
+                                 entry.Direction == HistoryDirection.Incoming &&
+                                 string.IsNullOrWhiteSpace(entry.InteractionEventId) &&
+                                 (entry.Note?.Contains("未照合", StringComparison.OrdinalIgnoreCase) == true);
+        if (!isExternalDetection && !isFallbackReceive)
+        {
+            return false;
+        }
+
+        return confirmedReceives.Any(confirmed =>
+            Math.Abs((confirmed.OccurredAt - entry.OccurredAt).TotalMinutes) <= 2 &&
+            string.Equals(NormalizeMatchKey(confirmed), NormalizeMatchKey(entry), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeMatchKey(HistoryEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.DestinationPath))
+        {
+            return entry.DestinationPath!;
+        }
+
+        string path = !string.IsNullOrWhiteSpace(entry.DestinationFolder)
+            ? entry.DestinationFolder!
+            : (!string.IsNullOrWhiteSpace(entry.PathText) ? entry.PathText! : string.Empty);
+        return $"{path}|{entry.TargetName ?? string.Empty}";
     }
 
     private void ApplyFilter()

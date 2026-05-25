@@ -232,13 +232,17 @@ public sealed class TrayApp : IDisposable
         string balloonText = entry.IsSenderVerified
             ? $"{ResolveVerifiedSenderLabel(entry)} から {targetName} が届きました。"
             : $"未照合の送信元から {targetName} が届きました。";
+        if (!string.IsNullOrWhiteSpace(entry.Message))
+        {
+            balloonText += $"\r\nメッセージ: {entry.Message}";
+        }
         ShowBalloonTip("ShareWorkin の受信", balloonText, entry.TargetFolder ?? _shopFolder);
         SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, DateTime.UtcNow);
     }
 
     private SwkIncomingInteractionRecord BuildIncomingInteractionRecord(SwkNotificationProtocol.InteractionEventNotice notice)
     {
-        Friend? verifiedFriend = ResolveVerifiedIncomingInteractionFriend(notice.SenderSwkInstanceId);
+        Friend? verifiedFriend = ResolveVerifiedIncomingInteractionFriend(notice);
         string? relativePath = NormalizeRelativePath(notice.TargetRelativePath);
         string? fullPath = BuildFullPath(_shopFolder, relativePath);
         string? folder = !string.IsNullOrWhiteSpace(fullPath)
@@ -272,15 +276,55 @@ public sealed class TrayApp : IDisposable
         };
     }
 
-    private static Friend? ResolveVerifiedIncomingInteractionFriend(string? senderSwkInstanceId)
+    private static Friend? ResolveVerifiedIncomingInteractionFriend(SwkNotificationProtocol.InteractionEventNotice notice)
     {
-        if (string.IsNullOrWhiteSpace(senderSwkInstanceId))
+        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+
+        if (!string.IsNullOrWhiteSpace(notice.SenderSwkInstanceId))
         {
-            return null;
+            Friend? byInstance = friends.FirstOrDefault(friend =>
+                string.Equals(friend.RemoteSwkInstanceId, notice.SenderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
+            if (byInstance is not null)
+            {
+                return byInstance;
+            }
         }
 
-        return FriendsRepository.LoadAll().FirstOrDefault(friend =>
-            string.Equals(friend.RemoteSwkInstanceId, senderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(notice.SenderMachineName) &&
+            !string.IsNullOrWhiteSpace(notice.SenderShareName))
+        {
+            Friend? byHostAndShare = friends.FirstOrDefault(friend =>
+                string.Equals(friend.HostMachineName, notice.SenderMachineName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(friend.ShareName, notice.SenderShareName, StringComparison.OrdinalIgnoreCase));
+            if (byHostAndShare is not null)
+            {
+                return byHostAndShare;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(notice.SenderMachineName))
+        {
+            List<Friend> byHost = friends
+                .Where(friend => string.Equals(friend.HostMachineName, notice.SenderMachineName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (byHost.Count == 1)
+            {
+                return byHost[0];
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(notice.SenderShareName))
+        {
+            List<Friend> byShare = friends
+                .Where(friend => string.Equals(friend.ShareName, notice.SenderShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (byShare.Count == 1)
+            {
+                return byShare[0];
+            }
+        }
+
+        return null;
     }
 
     private static string ResolveVerifiedSenderLabel(SwkIncomingInteractionRecord entry)
