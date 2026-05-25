@@ -3015,6 +3015,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        ClearDropTargetHighlight();
         System.Windows.DataObject data = new();
         string[] dragPaths = itemsToDrag.Select(i => i.FullPath).ToArray();
         data.SetData(System.Windows.DataFormats.FileDrop, dragPaths);
@@ -8000,6 +8001,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (data is null || !HasInternalDraggedPaths(data))
         {
             return true;
+        }
+
+        if (ShopItemsListView.SelectedItems.Contains(target))
+        {
+            return false;
         }
 
         foreach (string sourcePath in GetInternalDraggedPaths(data))
