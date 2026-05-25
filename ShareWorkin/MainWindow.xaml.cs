@@ -144,6 +144,7 @@ public partial class MainWindow : Window
     private Popup? _dragPreviewPopup;
     private TextBlock? _dragPreviewTextBlock;
     private ExplorerOleDropTarget? _explorerOleDropTarget;
+    private string[]? _activeInternalDragPaths;
     private bool _externalDragDropInitialized;
     private System.Windows.Point _dragStartPoint;
     private ShopItem? _dragStartItem;
@@ -3028,12 +3029,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             data.SetData(InternalDragPathsFormat, dragPaths);
         }
 
+        _activeInternalDragPaths = dragPaths;
         string hint = itemsToDrag.Count == 1 ? itemsToDrag[0].Name : $"{itemsToDrag.Count} つのアイテム";
         ShowDragHint(hint);
-        System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Copy | System.Windows.DragDropEffects.Move);
-        HideDragHint();
-        ClearDropTargetHighlight();
-        _dragStartItem = null;
+        try
+        {
+            System.Windows.DragDrop.DoDragDrop(ShopItemsListView, data, System.Windows.DragDropEffects.Copy | System.Windows.DragDropEffects.Move);
+        }
+        finally
+        {
+            _activeInternalDragPaths = null;
+            HideDragHint();
+            ClearDropTargetHighlight();
+            _dragStartItem = null;
+        }
     }
 
     private void ShopItemsListView_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -7953,7 +7962,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private ShopItem? GetDropDestinationItem(System.Windows.DragEventArgs e)
     {
         ShopItem? target = GetRawDropDestinationItem(e);
-        return IsValidDropTargetItem(target, e.Data) ? target : null;
+        return IsValidDropTargetItem(target, e.Data, e.KeyStates) ? target : null;
     }
 
     private static ShopItem? GetRawDropDestinationItem(System.Windows.DragEventArgs e)
@@ -7972,11 +7981,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return null;
     }
 
-    private static bool HasInternalDraggedPaths(System.Windows.IDataObject data) =>
-        data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat);
-
-    private static string[] GetInternalDraggedPaths(System.Windows.IDataObject data)
+    private bool HasInternalDraggedPaths(System.Windows.IDataObject data)
     {
+        if (_activeInternalDragPaths is { Length: > 0 })
+        {
+            return true;
+        }
+
+        return data.GetDataPresent(InternalDragPathFormat) || data.GetDataPresent(InternalDragPathsFormat);
+    }
+
+    private string[] GetInternalDraggedPaths(System.Windows.IDataObject data)
+    {
+        if (_activeInternalDragPaths is { Length: > 0 })
+        {
+            return _activeInternalDragPaths;
+        }
+
         if (data.GetDataPresent(InternalDragPathFormat))
         {
             string? singlePath = data.GetData(InternalDragPathFormat) as string;
@@ -7997,7 +8018,63 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
-    private bool IsValidDropTargetItem(ShopItem? target, System.Windows.IDataObject? data)
+    private bool IsInternalDropTargetAllowed(string destinationFolder, System.Windows.IDataObject data, DragDropKeyStates keyStates)
+    {
+        string[] sourcePaths = GetInternalDraggedPaths(data);
+        if (sourcePaths.Length == 0 || !Directory.Exists(destinationFolder))
+        {
+            return false;
+        }
+
+        bool isCopy = (keyStates & DragDropKeyStates.ControlKey) != 0;
+        foreach (string sourcePath in sourcePaths)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return false;
+            }
+
+            ExplorerActionResult validation = IsHoldFolderPath(destinationFolder)
+                ? ExplorerActionService.ValidateHoldTarget(new HoldItemRequest
+                {
+                    ModeLabel = _currentMode.ToString(),
+                    SourcePath = sourcePath,
+                    HoldFolderPath = destinationFolder,
+                    GetShareStatus = GetItemShareStatus,
+                    BeforeWrite = SuppressExternalChangeNotifications,
+                })
+                : isCopy
+                    ? ExplorerActionService.ValidateCopyTarget(new CopyItemRequest
+                    {
+                        ModeLabel = _currentMode.ToString(),
+                        SourcePath = sourcePath,
+                        DestinationFolder = destinationFolder,
+                        IsHoldFolderPath = IsHoldFolderPath,
+                        IsUnderFolder = IsUnderFolder,
+                        GetShareStatus = GetItemShareStatus,
+                        BeforeWrite = SuppressExternalChangeNotifications,
+                    })
+                    : ExplorerActionService.ValidateMoveTarget(new MoveItemRequest
+                    {
+                        ModeLabel = _currentMode.ToString(),
+                        SourcePath = sourcePath,
+                        DestinationFolder = destinationFolder,
+                        IsHoldFolderPath = IsHoldFolderPath,
+                        IsUnderFolder = IsUnderFolder,
+                        GetShareStatus = GetItemShareStatus,
+                        BeforeWrite = SuppressExternalChangeNotifications,
+                    });
+
+            if (validation.State != ExplorerActionState.Success)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool IsValidDropTargetItem(ShopItem? target, System.Windows.IDataObject? data, DragDropKeyStates keyStates = DragDropKeyStates.None)
     {
         if (target is null || !target.IsDirectory)
         {
@@ -8048,7 +8125,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
         }
 
-        return true;
+        return IsInternalDropTargetAllowed(target.FullPath, data, keyStates);
     }
 
     private void ClearDropTargetHighlight()
