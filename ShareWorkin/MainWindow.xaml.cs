@@ -20,6 +20,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using ShareWorkin.SMB;
 using Forms = System.Windows.Forms;
@@ -108,6 +109,7 @@ public partial class MainWindow : Window
     private readonly UiPipeClient _pipeClient = new();
     private readonly DispatcherTimer _notificationTimer;
     private readonly DispatcherTimer _pollingTimer;
+    private readonly DispatcherTimer _notificationSupportRefreshTimer;
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly Dictionary<string, DateTime> _recentExternalReceiveAt = new(StringComparer.OrdinalIgnoreCase);
@@ -190,9 +192,12 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<string> _permissionAllowed = new();
     private readonly ObservableCollection<string> _permissionUnset = new();
     private string? _pendingInteractionMessage;
+    private DateTime? _lastNotificationTestAt;
+    private NotificationSupportState _notificationSupportState = NotificationSupportState.Unverified;
     private int _processingDepth;
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
+    private bool _suppressNotificationModeSelectionChanged;
 
     public ObservableCollection<ArrivedItem> ArrivedItems { get; } = [];
 
@@ -221,12 +226,16 @@ public partial class MainWindow : Window
             _ = Dispatcher.InvokeAsync(
                 () => AcceptIncomingInteraction(entry),
                 DispatcherPriority.Background);
+        SwkNetworkHealth.StatusChanged += OnNetworkHealthStatusChanged;
 
         _notificationTimer = new DispatcherTimer { Interval = NotificationQuietTime };
         _notificationTimer.Tick += NotificationTimer_Tick;
 
         _pollingTimer = new DispatcherTimer { Interval = PollingInterval };
         _pollingTimer.Tick += PollingTimer_Tick;
+
+        _notificationSupportRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _notificationSupportRefreshTimer.Tick += NotificationSupportRefreshTimer_Tick;
 
         _transientStatusTimer = new DispatcherTimer { Interval = TransientStatusDuration };
         _transientStatusTimer.Tick += TransientStatusTimer_Tick;
@@ -247,6 +256,22 @@ public partial class MainWindow : Window
         AllowDrop = true;
         SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
+    }
+
+    private void OnNetworkHealthStatusChanged(SwkNetworkHealthStatus status)
+    {
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            HistoryRepository.Append(new HistoryEntry
+            {
+                Channel = HistoryChannel.Notification,
+                EventType = status.HasWarning ? "NetworkHealthWarning" : "NetworkHealthRecovered",
+                Message = status.Title,
+                Note = status.Detail,
+                Outcome = status.HasWarning ? HistoryOutcome.Warning : HistoryOutcome.Success,
+                Source = "SwkNetworkHealth",
+            });
+        }, DispatcherPriority.Background);
     }
 
     // InformationalVersion の "+<git sha>[.dirty]" を短く表示する。
@@ -685,6 +710,7 @@ public partial class MainWindow : Window
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             await SwkNetworkCache.RefreshAsync(ScanMode.Quick, cts.Token);
+            await AutoRepairKnownFriendsAsync();
             await Dispatcher.InvokeAsync(PopulateExplorerDropdown, DispatcherPriority.Background);
         }
         catch (OperationCanceledException) { }
@@ -1136,7 +1162,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             HistoryOutcome.Info,
             targetName: item.Name,
             pathText: item.FolderPath,
-            note: "交流通知と照合できなかったため、送信元未特定の受信として扱いました。",
+            note: $"交流通知と照合できなかったため、送信元未特定の受信として扱いました。\r\n検知経路: {source}\r\n対象パス: {fullPath}",
             destinationPath: fullPath,
             destinationFolder: item.FolderPath,
             source: source);
@@ -1146,7 +1172,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             sourcePath: null,
             destinationPath: fullPath,
             destinationFolder: item.FolderPath) ?? item.FolderPath;
-        SwkLogger.Info($"Out-of-sync detected: {item.Name} -> {loggedPath} source={source}");
+        SwkLogger.Warn(
+            $"Trace.ExternalFlow.Receive.Unverified: target={item.Name} path={loggedPath} source={source} " +
+            $"recentInteractionHit={_recentIncomingInteractionAt.ContainsKey(fullPath)} recentExternalCount={_recentExternalReceiveAt.Count}");
         SwkLogger.Info($"TryRegisterExternalReceive appended: path={fullPath} source={source}");
         SwkLogger.Info($"Trace.ExternalFlow.Receive.Success: target={item.Name} path={loggedPath} source={source}");
         return true;
@@ -1177,6 +1205,22 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             sourcePath,
             destinationPath,
             destinationFolder);
+        if (channel == HistoryChannel.Update &&
+            ShouldSuppressUpdateHistoryEntry(
+                pathFriend,
+                eventType,
+                interactionEventId,
+                source,
+                sourcePath,
+                destinationPath,
+                destinationFolder))
+        {
+            SwkLogger.Info(
+                $"Update history suppressed for remote share event: eventType={eventType} outcome={outcome} " +
+                $"target={normalizedTargetName ?? "-"} path={normalizedPathText ?? "-"} source={source ?? "-"}");
+            return;
+        }
+
         SwkLogger.Debug(
             $"AppendHistory: channel={channel} eventType={eventType} outcome={outcome} " +
             $"direction={direction} target={normalizedTargetName ?? "-"} path={normalizedPathText ?? "-"} source={source ?? "-"}");
@@ -1224,6 +1268,50 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             sourcePath: sourcePath,
             destinationPath: destinationPath,
             destinationFolder: destinationFolder);
+    }
+
+    private bool ShouldSuppressUpdateHistoryEntry(
+        Friend? pathFriend,
+        string? eventType,
+        string? interactionEventId,
+        string? source,
+        string? sourcePath,
+        string? destinationPath,
+        string? destinationFolder)
+    {
+        if (!string.IsNullOrWhiteSpace(interactionEventId) &&
+            string.Equals(eventType, "Receive", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(source, "Tray.IncomingInteraction", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (pathFriend is not null)
+        {
+            return true;
+        }
+
+        if (_activeFriendShop is null || _currentMode != DisplayMode.FriendShop)
+        {
+            return false;
+        }
+
+        string[] candidates =
+        [
+            sourcePath ?? string.Empty,
+            destinationPath ?? string.Empty,
+            destinationFolder ?? string.Empty,
+        ];
+
+        foreach (string candidate in candidates)
+        {
+            if (TryMapToCanonicalFriendPath(candidate, _activeFriendShop, out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? NormalizeHistoryTargetName(
@@ -1687,7 +1775,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             HistoryChannel.Access => "自分とお友達の出入りや接続の履歴です。",
             HistoryChannel.Notification => "通知対象になった出来事の履歴です。",
-            _ => "自分のお店で起きた更新の履歴です。",
+            _ => "自分の共有で起きた更新の履歴です。",
         };
         HistoryWindow window = new(title, subtitle, channel, maxCount) { Owner = this };
         window.Closed += (_, _) => _historyWindows.Remove(channel);
@@ -2057,14 +2145,111 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void NotificationModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _notificationMode = GetSelectedNotificationMode();
-        if (_notificationMode == NotificationMode.Off)
+        if (_suppressNotificationModeSelectionChanged)
         {
-            _notificationTimer.Stop();
-            _pendingNotificationItems.Clear();
+            return;
         }
 
+        ApplyNotificationMode(GetSelectedNotificationMode(), updateSelection: false);
+    }
+
+    private void NotificationSupportButton_Click(object sender, RoutedEventArgs e)
+    {
+        LogNotificationSupportSnapshot("TogglePanel");
+        SetNotificationSupportPanelVisibility(NotificationSupportPanel.Visibility != Visibility.Visible);
+    }
+
+    private void SetNotificationSupportPanelVisibility(bool visible)
+    {
+        NotificationSupportPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        if (visible)
+        {
+            RefreshNotificationSupportUi();
+            _notificationSupportRefreshTimer.Start();
+            return;
+        }
+
+        _notificationSupportRefreshTimer.Stop();
+    }
+
+    private void NotificationSupportRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (NotificationSupportPanel.Visibility != Visibility.Visible)
+        {
+            _notificationSupportRefreshTimer.Stop();
+            return;
+        }
+
+        RefreshNotificationSupportUi();
+    }
+
+    private void CloseNotificationSupportButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetNotificationSupportPanelVisibility(false);
+    }
+
+    private void OpenNotificationSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        LogNotificationSupportSnapshot("OpenWindowsSettings");
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-settings:notifications") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"OpenNotificationSettingsButton_Click failed: {ex.Message}");
+            SetTransientStatus("Windows通知設定を開けませんでした。");
+        }
+    }
+
+    private void LogNotificationSupportSnapshot(string source)
+    {
+        bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
+        int trayProcessCount = Process.GetProcessesByName("ShareWorkinTray").Length;
+        bool pipeConnected = _pipeClient.IsConnected;
+        TrayStatus? trayStatus = pipeConnected ? _pipeClient.GetStatus(timeoutMs: 500) : null;
+        bool panelVisible = NotificationSupportPanel.Visibility == Visibility.Visible;
+        string lastTest = _lastNotificationTestAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "null";
+
+        SwkLogger.Info(
+            $"NotificationSettings snapshot: source={source} windowsNotificationsEnabled={windowsNotificationsEnabled} " +
+            $"notificationMode={_notificationMode} supportState={_notificationSupportState} panelVisible={panelVisible} " +
+            $"shopOpen={_isShopOpen} trayProcessCount={trayProcessCount} pipeConnected={pipeConnected} " +
+            $"trayStatusOpen={trayStatus?.IsShopOpen.ToString() ?? "null"} trayStatusFolder={trayStatus?.ShopFolder ?? "null"} " +
+            $"shopFolder={_shopFolder ?? "null"} lastTestAt={lastTest}");
+    }
+
+    private async void SendTestNotificationButton_Click(object sender, RoutedEventArgs e)
+    {
+        SwkLogger.Info("NotificationSettings.SendTestNotification requested");
+        if (!await EnsureTrayConnectedAsync())
+        {
+            SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray connection unavailable");
+            SetTransientStatus("ShareWorkinTray に接続できませんでした。");
+            return;
+        }
+
+        bool acknowledged = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
+        if (!acknowledged)
+        {
+            SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
+            SetTransientStatus("テスト通知を送信できませんでした。");
+            return;
+        }
+
+        SwkLogger.Info("NotificationSettings.SendTestNotification acknowledged by tray");
+        _lastNotificationTestAt = DateTime.Now;
+        _notificationSupportState = NotificationSupportState.TestSent;
         SaveSettings();
+        RefreshNotificationSupportUi();
+        SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
+    }
+
+    private void UseWithoutNotificationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyNotificationMode(NotificationMode.Off, updateSelection: true);
+        SetTransientStatus("通知なしで使う設定にしました。共有は使えますが、受け取りに気づきにくくなります。");
     }
 
     private async void UserListButton_Click(object sender, RoutedEventArgs e)
@@ -2797,6 +2982,122 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         NotificationModeComboBox.SelectedIndex = 0;
+    }
+
+    private void ApplyNotificationMode(NotificationMode mode, bool updateSelection)
+    {
+        if (updateSelection)
+        {
+            _suppressNotificationModeSelectionChanged = true;
+            try
+            {
+                SelectNotificationMode(mode);
+            }
+            finally
+            {
+                _suppressNotificationModeSelectionChanged = false;
+            }
+        }
+
+        _notificationMode = mode;
+        if (_notificationMode == NotificationMode.Off)
+        {
+            _notificationTimer.Stop();
+            _pendingNotificationItems.Clear();
+        }
+
+        SaveSettings();
+        RefreshNotificationSupportUi();
+    }
+
+    private void RefreshNotificationSupportUi()
+    {
+        if (NotificationSupportMonitorTextBlock is null ||
+            NotificationSupportStateTextBlock is null ||
+            NotificationSupportLastTestTextBlock is null ||
+            NotificationSupportButton is null ||
+            OpenNotificationSettingsButton is null)
+        {
+            return;
+        }
+
+        bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
+        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled);
+        NotificationSupportMonitorTextBlock.Text = $"共有監視: {(_isShopOpen ? "ON" : "OFF")}";
+        NotificationSupportStateTextBlock.Text = $"通知状態: {FormatNotificationSupportState(_notificationSupportState, windowsNotificationsEnabled)}";
+        NotificationSupportLastTestTextBlock.Text = _lastNotificationTestAt.HasValue
+            ? $"最終通知テスト日時: {_lastNotificationTestAt.Value:yyyy/MM/dd HH:mm}"
+            : "最終通知テスト日時: 未実行";
+        UpdateNotificationSupportButtonHighlight(isAttentionNeeded);
+    }
+
+    private static string FormatNotificationSupportState(NotificationSupportState state, bool windowsNotificationsEnabled)
+    {
+        if (!windowsNotificationsEnabled)
+        {
+            return "Windows通知OFF";
+        }
+
+        return state switch
+        {
+            NotificationSupportState.TestSent => "テスト送信済み",
+            _ => "未確認"
+        };
+    }
+
+    private static bool AreWindowsNotificationsEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\PushNotifications", false);
+            object? value = key?.GetValue("ToastEnabled");
+            return value switch
+            {
+                int intValue => intValue != 0,
+                byte byteValue => byteValue != 0,
+                _ => true
+            };
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"AreWindowsNotificationsEnabled failed: {ex.Message}");
+            return true;
+        }
+    }
+
+    private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled)
+    {
+        return !windowsNotificationsEnabled ||
+               _notificationMode == NotificationMode.Off ||
+               _notificationSupportState == NotificationSupportState.Unverified;
+    }
+
+    private void UpdateNotificationSupportButtonHighlight(bool isAttentionNeeded)
+    {
+        if (isAttentionNeeded)
+        {
+            System.Windows.Media.Brush highlightBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF4, 0xD6));
+            System.Windows.Media.Brush highlightBorder = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC9, 0x94, 0x12));
+
+            NotificationSupportButton.Background = highlightBackground;
+            NotificationSupportButton.BorderBrush = highlightBorder;
+            NotificationSupportButton.BorderThickness = new Thickness(2);
+            NotificationSupportButton.FontWeight = FontWeights.SemiBold;
+            OpenNotificationSettingsButton.Background = highlightBackground;
+            OpenNotificationSettingsButton.BorderBrush = highlightBorder;
+            OpenNotificationSettingsButton.BorderThickness = new Thickness(2);
+            OpenNotificationSettingsButton.FontWeight = FontWeights.SemiBold;
+            return;
+        }
+
+        NotificationSupportButton.ClearValue(BackgroundProperty);
+        NotificationSupportButton.ClearValue(BorderBrushProperty);
+        NotificationSupportButton.ClearValue(BorderThicknessProperty);
+        NotificationSupportButton.ClearValue(FontWeightProperty);
+        OpenNotificationSettingsButton.ClearValue(BackgroundProperty);
+        OpenNotificationSettingsButton.ClearValue(BorderBrushProperty);
+        OpenNotificationSettingsButton.ClearValue(BorderThicknessProperty);
+        OpenNotificationSettingsButton.ClearValue(FontWeightProperty);
     }
 
     private void SizeCalcCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -5286,7 +5587,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 pathText: firstItem.FolderPath,
                 note: "交流通知と未照合のため、送信元はまだ特定できていません。",
                 destinationFolder: firstItem.FolderPath);
-            _pipeClient.ShowBalloonTip("ShareWorkin の受信", notificationText, notifFolder);
+            _pipeClient.ShowBalloonTip("ShareWorkin の受信(通知なし)", notificationText, notifFolder);
             return;
         }
 
@@ -5300,27 +5601,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             pathText: notifFolder,
             note: "交流通知と未照合の受信です。詳細は更新履歴で確認できます。",
             destinationFolder: notifFolder);
-        _pipeClient.ShowBalloonTip("ShareWorkin の受信", summaryText, notifFolder);
+        _pipeClient.ShowBalloonTip("ShareWorkin の受信(通知なし)", summaryText, notifFolder);
     }
 
     private void RecordConfirmedInteraction(InteractionEventEntry interactionEvent, Friend? friend)
     {
         InteractionEventRepository.Append(interactionEvent);
 
-        if (!CanShowNotification(externalOnly: false))
-        {
-            SwkLogger.Debug(
-                $"MaybeRecordConfirmedInteraction stored-without-notify: event={interactionEvent.EventType} target={interactionEvent.TargetName ?? "-"}");
-            return;
-        }
-
         string friendLabel = interactionEvent.ReceiverName ?? interactionEvent.ReceiverMachineName ?? "相手";
         string actionLabel = GetInteractionActionLabel(interactionEvent.EventType);
-        string notificationText = $"{friendLabel} への{actionLabel}を実行しました。";
+        string targetLabel = interactionEvent.TargetName ?? "項目";
         AppendHistory(
-            HistoryChannel.Notification,
-            notificationText,
-            "InteractionNotify",
+            HistoryChannel.Access,
+            $"{friendLabel} に {targetLabel} を{actionLabel}しました。",
+            interactionEvent.EventType,
             HistoryOutcome.Success,
             HistoryDirection.Outgoing,
             friend: friend,
@@ -5331,7 +5625,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             source: interactionEvent.SourceRoute,
             destinationPath: interactionEvent.TargetPath,
             destinationFolder: interactionEvent.TargetFolder);
-        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", notificationText, interactionEvent.TargetFolder);
         InteractionEventRepository.MarkDisplayed(interactionEvent.Id, DateTime.Now);
         _ = SendConfirmedInteractionToFriendAsync(interactionEvent, friend);
     }
@@ -5556,6 +5849,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? null
             : BuildUnverifiedSenderNote(entry);
 
+        if (!isVerified)
+        {
+            SwkLogger.Warn(
+                $"Trace.IncomingInteraction.Unverified: eventId={entry.EventId} target={entry.TargetName ?? "-"} " +
+                $"route={entry.SourceRoute ?? "-"} diag={BuildIncomingRecognitionDiagnostics(entry)}");
+        }
+
         AppendHistory(
             HistoryChannel.Update,
             historyMessage,
@@ -5606,7 +5906,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 destinationFolder: entry.TargetFolder);
             if (displayedAt is null)
             {
-                _pipeClient.ShowBalloonTip("ShareWorkin の受信", notificationText, entry.TargetFolder ?? _shopFolder);
+                _pipeClient.ShowBalloonTip(
+                    GetIncomingNotificationTitle(isVerified),
+                    notificationText,
+                    entry.TargetFolder ?? _shopFolder);
                 DateTime now = DateTime.Now;
                 InteractionEventRepository.MarkDisplayed(entry.EventId, now);
                 SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, now.ToUniversalTime());
@@ -5639,51 +5942,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private static Friend? ResolveVerifiedIncomingInteractionFriend(SwkIncomingInteractionRecord entry)
     {
         IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
-        if (!string.IsNullOrWhiteSpace(entry.SenderSwkInstanceId))
-        {
-            Friend? byInstance = friends.FirstOrDefault(f =>
-                string.Equals(f.RemoteSwkInstanceId, entry.SenderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
-            if (byInstance is not null)
-            {
-                return byInstance;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName) &&
-            !string.IsNullOrWhiteSpace(entry.SenderShareName))
-        {
-            Friend? byHostAndShare = friends.FirstOrDefault(f =>
-                string.Equals(f.HostMachineName, entry.SenderMachineName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase));
-            if (byHostAndShare is not null)
-            {
-                return byHostAndShare;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(entry.SenderMachineName))
-        {
-            List<Friend> byHost = friends
-                .Where(f => string.Equals(f.HostMachineName, entry.SenderMachineName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (byHost.Count == 1)
-            {
-                return byHost[0];
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(entry.SenderShareName))
-        {
-            List<Friend> byShare = friends
-                .Where(f => string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (byShare.Count == 1)
-            {
-                return byShare[0];
-            }
-        }
-
-        return null;
+        return FriendRecognitionService.ResolveIncomingInteractionFriend(
+            friends,
+            entry.SenderSwkInstanceId,
+            entry.SenderMachineName,
+            entry.SenderShareName);
     }
 
     private static string? BuildUnverifiedSenderNote(SwkIncomingInteractionRecord entry)
@@ -5704,9 +5967,60 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             parts.Add($"通知本文名: {entry.SenderDisplayName}");
         }
 
+        if (!string.IsNullOrWhiteSpace(entry.SenderShareName))
+        {
+            parts.Add($"送信元共有: {entry.SenderShareName}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.ReceiverShareName))
+        {
+            parts.Add($"受信共有: {entry.ReceiverShareName}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.SourceRoute))
+        {
+            parts.Add($"検知経路: {entry.SourceRoute}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.TargetFullPath))
+        {
+            parts.Add($"対象パス: {entry.TargetFullPath}");
+        }
+
         return parts.Count == 0
             ? "登録済み Friend と照合できませんでした。"
             : "未照合イベント: " + string.Join(" / ", parts);
+    }
+
+    private static string BuildIncomingRecognitionDiagnostics(SwkIncomingInteractionRecord entry)
+    {
+        IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
+        List<Friend> byInstance = string.IsNullOrWhiteSpace(entry.SenderSwkInstanceId)
+            ? []
+            : friends.Where(f =>
+                    string.Equals(f.RemoteSwkInstanceId, entry.SenderSwkInstanceId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        List<Friend> byHostAndShare =
+            string.IsNullOrWhiteSpace(entry.SenderMachineName) || string.IsNullOrWhiteSpace(entry.SenderShareName)
+                ? []
+                : friends.Where(f =>
+                        string.Equals(FriendRecognitionService.NormalizeHost(f.HostMachineName), FriendRecognitionService.NormalizeHost(entry.SenderMachineName), StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+        List<Friend> byHost = string.IsNullOrWhiteSpace(entry.SenderMachineName)
+            ? []
+            : friends.Where(f =>
+                    string.Equals(FriendRecognitionService.NormalizeHost(f.HostMachineName), FriendRecognitionService.NormalizeHost(entry.SenderMachineName), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        List<Friend> byShare = string.IsNullOrWhiteSpace(entry.SenderShareName)
+            ? []
+            : friends.Where(f =>
+                    string.Equals(f.ShareName, entry.SenderShareName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        return
+            $"senderMachine={entry.SenderMachineName ?? "-"} senderShare={entry.SenderShareName ?? "-"} senderId={entry.SenderSwkInstanceId ?? "-"} " +
+            $"receiverShare={entry.ReceiverShareName ?? "-"} byInstance={byInstance.Count} byHostShare={byHostAndShare.Count} byHost={byHost.Count} byShare={byShare.Count}";
     }
 
     private static string? BuildInteractionReceiveNote(string? senderNote, string? message)
@@ -5743,6 +6057,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         return errorMessage;
     }
+
+    private static string GetIncomingNotificationTitle(bool isVerified) =>
+        isVerified
+            ? "ShareWorkin の受信(確認済み)"
+            : "ShareWorkin の受信(未照合通知)";
 
     private static string? BuildShareRelativePath(string? rootPath, string? targetPath)
     {
@@ -6162,10 +6481,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void RefreshShopItems()
     {
         CancelFolderSizeCalculation();
-        ShopItems.Clear();
+        List<string> previousVisiblePaths = CaptureVisibleShopItemPaths();
+        HashSet<string> selectedPaths = CaptureSelectedShopItemPaths();
 
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
+            ShopItems.Clear();
             if (_currentMode == DisplayMode.FriendShop && !string.IsNullOrWhiteSpace(_currentFolder))
                 SetTransientStatus("接続できません");
             UpdateBreadcrumb();
@@ -6254,17 +6575,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 DateTime holdUpdatedAt = Directory.Exists(holdPath) ? Directory.GetLastWriteTime(holdPath) : DateTime.MinValue;
                 sorted = sorted.Prepend(new ShopItem(HoldFolderName, holdPath, true, true, holdUpdatedAt, null));
             }
-            foreach (ShopItem item in sorted)
-            {
-                if (_currentMode == DisplayMode.FriendShop && item.IsSharedOff)
-                {
-                    continue;
-                }
-                ShopItems.Add(item);
-            }
+            List<ShopItem> nextVisibleItems = sorted.ToList();
+            bool displayStateChanged = HasVisibleShopItemsChanged(previousVisiblePaths, nextVisibleItems);
+
+            ReplaceVisibleShopItems(nextVisibleItems);
 
             UpdateBreadcrumb();
-            ApplyPendingFocus();
+            if (!ApplyPendingFocus() && !displayStateChanged)
+            {
+                RestoreSelectedShopItems(selectedPaths);
+            }
             if (_currentMode == DisplayMode.FriendShop)
                 StartFriendShopPolling();
             else
@@ -6478,12 +6798,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             IReadOnlyList<SwkNotificationListener.ShopInfo> found =
                 await SwkNotificationListener.ProbeHostsAsync(candidates, cts.Token);
             SwkNotificationListener.ShopInfo? byId = found.FirstOrDefault(s =>
-                SameSwkInstance(friend, s) &&
+                FriendRecognitionService.SameSwkInstance(friend, s) &&
                 string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
             if (byId is not null) return byId;
 
             SwkNotificationListener.ShopInfo? exact = found.FirstOrDefault(s =>
-                string.Equals(NormalizeHostName(s.MachineName), NormalizeHostName(friend.HostMachineName), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(FriendRecognitionService.NormalizeHost(s.MachineName), FriendRecognitionService.NormalizeHost(friend.HostMachineName), StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
                 !string.IsNullOrWhiteSpace(exact?.SwkInstanceId))
@@ -6740,11 +7060,79 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         };
     }
 
-    private void ApplyPendingFocus()
+    private HashSet<string> CaptureSelectedShopItemPaths()
+    {
+        return ShopItemsListView.SelectedItems.Cast<ShopItem>()
+            .Where(static item => !string.IsNullOrWhiteSpace(item.FullPath))
+            .Select(static item => item.FullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private List<string> CaptureVisibleShopItemPaths()
+    {
+        return ShopItems
+            .Where(static item => !string.IsNullOrWhiteSpace(item.FullPath))
+            .Select(static item => item.FullPath)
+            .ToList();
+    }
+
+    private static bool HasVisibleShopItemsChanged(IReadOnlyList<string> previousVisiblePaths, IReadOnlyList<ShopItem> nextVisibleItems)
+    {
+        if (previousVisiblePaths.Count != nextVisibleItems.Count)
+        {
+            return true;
+        }
+
+        for (int index = 0; index < previousVisiblePaths.Count; index++)
+        {
+            string currentPath = nextVisibleItems[index].FullPath;
+            if (!string.Equals(previousVisiblePaths[index], currentPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void ReplaceVisibleShopItems(IReadOnlyList<ShopItem> nextVisibleItems)
+    {
+        ShopItems.Clear();
+        foreach (ShopItem item in nextVisibleItems)
+        {
+            ShopItems.Add(item);
+        }
+    }
+
+    private void RestoreSelectedShopItems(HashSet<string> selectedPaths)
+    {
+        if (selectedPaths.Count == 0)
+        {
+            return;
+        }
+
+        List<ShopItem> matches = ShopItems
+            .Where(item => selectedPaths.Contains(item.FullPath))
+            .ToList();
+        if (matches.Count == 0)
+        {
+            return;
+        }
+
+        ShopItemsListView.SelectedItems.Clear();
+        foreach (ShopItem item in matches)
+        {
+            ShopItemsListView.SelectedItems.Add(item);
+        }
+
+        ShopItemsListView.ScrollIntoView(matches[0]);
+    }
+
+    private bool ApplyPendingFocus()
     {
         if (string.IsNullOrEmpty(_pendingFocusName))
         {
-            return;
+            return false;
         }
 
         ShopItem? target = ShopItems.FirstOrDefault(item =>
@@ -6752,11 +7140,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _pendingFocusName = null;
         if (target is null)
         {
-            return;
+            return false;
         }
 
         ShopItemsListView.SelectedItem = target;
         ShopItemsListView.ScrollIntoView(target);
+        return true;
     }
 
     private void StartContentsSensor(string folderPath)
@@ -7248,62 +7637,37 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopInfo(Friend friend)
     {
-        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
-        {
-            SwkNotificationListener.ShopInfo? byId = SwkNetworkCache.ShopInfos.FirstOrDefault(s =>
-                SameSwkInstance(friend, s) &&
-                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-            if (byId is not null) return byId;
+        return FriendRecognitionService.FindLiveShopForFriend(friend, SwkNetworkCache.ShopInfos);
+    }
 
-            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, SwkNetworkCache.ShopInfos);
-            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
-        }
-
-        return FindLiveShopByHostAndShare(friend, SwkNetworkCache.ShopInfos);
+    private static SwkNotificationListener.ShopInfo? FindRelinkCandidateShopInfo(Friend friend)
+    {
+        return FriendRecognitionService.FindRelinkCandidateForFriend(friend, SwkNetworkCache.ShopInfos);
     }
 
     private static bool IsCompatibleLiveShopForFriend(Friend friend, SwkNotificationListener.ShopInfo liveShop)
-    {
-        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
-            !string.IsNullOrWhiteSpace(liveShop.SwkInstanceId))
-        {
-            return SameSwkInstance(friend, liveShop) &&
-                   string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return string.Equals(NormalizeHostName(friend.HostMachineName), NormalizeHostName(liveShop.MachineName), StringComparison.OrdinalIgnoreCase) &&
-               string.Equals(friend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
-    }
+        => FriendRecognitionService.IsCompatibleLiveShopForFriend(friend, liveShop);
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        string normalizedHost = NormalizeHostName(friend.HostMachineName);
-        SwkNotificationListener.ShopInfo? exact = shopInfos.FirstOrDefault(s =>
-            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-        if (exact is not null) return exact;
-
-        return null;
-    }
+        => FriendRecognitionService.FindLiveShopForFriend(friend, shopInfos);
 
     private static string NormalizeHostName(string? host)
-    {
-        if (string.IsNullOrWhiteSpace(host)) return string.Empty;
-        string trimmed = host.Trim();
-        int dot = trimmed.IndexOf('.');
-        return dot > 0 ? trimmed[..dot] : trimmed;
-    }
+        => FriendRecognitionService.NormalizeHost(host);
 
     private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
-        !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
-        !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId) &&
-        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
+        FriendRecognitionService.SameSwkInstance(friend, shopInfo);
 
     private static async Task<SwkNotificationListener.ShopInfo?> ResolveLiveFriendShopAsync(Friend friend)
     {
         SwkNotificationListener.ShopInfo? hit = FindLiveShopInfo(friend);
+        if (hit is not null)
+        {
+            return hit;
+        }
+
+        hit = FindRelinkCandidateShopInfo(friend);
         if (hit is not null)
         {
             return hit;
@@ -7320,7 +7684,41 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Warn($"ResolveLiveFriendShopAsync scan failed: {ex.Message}");
         }
 
-        return FindLiveShopInfo(friend);
+        return FindLiveShopInfo(friend) ?? FindRelinkCandidateShopInfo(friend);
+    }
+
+    private async Task AutoRepairKnownFriendsAsync()
+    {
+        await Dispatcher.InvokeAsync(() =>
+        {
+            var all = FriendsRepository.LoadAll().ToList();
+            bool changed = false;
+
+            foreach (Friend friend in all)
+            {
+                if (FindLiveShopInfo(friend) is not null)
+                {
+                    continue;
+                }
+
+                SwkNotificationListener.ShopInfo? relinkShop = FindRelinkCandidateShopInfo(friend);
+                if (relinkShop is null)
+                {
+                    continue;
+                }
+
+                SwkLogger.Info(
+                    $"AutoRepairKnownFriendsAsync: friend={friend.DisplayName}/{friend.HostMachineName} " +
+                    $"share={friend.ShareName} ip={relinkShop.IpAddress ?? "-"} instance={relinkShop.SwkInstanceId ?? "-"}");
+                UpdateFriendExternalState(friend, relinkShop);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                PopulateExplorerDropdown();
+            }
+        }, DispatcherPriority.Background);
     }
 
     private static void UpdateFriendExternalState(Friend friend, SwkNotificationListener.ShopInfo liveShop)
@@ -8658,7 +9056,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _shopFolder = settings?.ShopFolder ?? settings?.WatchFolder;
         MyShopTextBox.Text = _shopFolder ?? string.Empty;
         _notificationMode = ResolveNotificationMode(settings);
-        SelectNotificationMode(_notificationMode);
+        _suppressNotificationModeSelectionChanged = true;
+        try
+        {
+            SelectNotificationMode(_notificationMode);
+        }
+        finally
+        {
+            _suppressNotificationModeSelectionChanged = false;
+        }
+        _lastNotificationTestAt = settings?.LastNotificationTestAt;
+        _notificationSupportState = ResolveNotificationSupportState(settings);
         _isSizeCalcEnabled = settings?.FolderSizeCalcEnabled ?? false;
         SizeCalcCheckBox.IsChecked = _isSizeCalcEnabled;
         _wasOpenAtLastShutdown = settings?.IsOpenAtLastShutdown ?? false;
@@ -8673,6 +9081,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             SaveSettings();
         }
+
+        RefreshNotificationSupportUi();
     }
 
     private static ShareAccessRight ParseAccessLevel(string? value)
@@ -8700,6 +9110,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return settings?.NotificationEnabled == false
             ? NotificationMode.Off
             : NotificationMode.All;
+    }
+
+    private static NotificationSupportState ResolveNotificationSupportState(AppSettings? settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings?.NotificationSupportStatus) &&
+            Enum.TryParse(settings.NotificationSupportStatus, out NotificationSupportState state))
+        {
+            return state;
+        }
+
+        return settings?.LastNotificationTestAt.HasValue == true
+            ? NotificationSupportState.TestSent
+            : NotificationSupportState.Unverified;
     }
 
     private void SavePermissionMap()
@@ -8887,6 +9310,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 ShopFolder = _shopFolder,
                 NotificationMode = _notificationMode.ToString(),
                 NotificationEnabled = _notificationMode != NotificationMode.Off,
+                NotificationSupportStatus = _notificationSupportState.ToString(),
+                LastNotificationTestAt = _lastNotificationTestAt,
                 FolderSizeCalcEnabled = _isSizeCalcEnabled,
                 IsOpenAtLastShutdown = _wasOpenAtLastShutdown,
                 AccessLevel = _shareAccessRight == ShareAccessRight.Read ? "Read" : "Full",
@@ -8967,6 +9392,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         OpenStatusTextBlock.ToolTip = string.IsNullOrEmpty(openTooltip) ? null : openTooltip;
 
         UpdateSidebar(isOpen);
+        RefreshNotificationSupportUi();
     }
 
     private void UpdateUserListButtonHighlight()
@@ -9202,6 +9628,12 @@ public enum NotificationMode
     Off,
 }
 
+public enum NotificationSupportState
+{
+    Unverified,
+    TestSent,
+}
+
 public sealed record ArrivedItem(string Name, string FolderPath, DateTime ArrivedAt)
 {
     public string ArrivedAtText => ArrivedAt.ToString("yyyy/MM/dd HH:mm:ss");
@@ -9232,6 +9664,12 @@ public sealed class AppSettings
     public string? NotificationMode { get; set; }
 
     public bool NotificationEnabled { get; set; } = true;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NotificationSupportStatus { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? LastNotificationTestAt { get; set; }
 
     public bool FolderSizeCalcEnabled { get; set; }
 

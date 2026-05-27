@@ -380,10 +380,25 @@ public sealed class SwkNotificationBroadcaster : IAsyncDisposable
 
                     if (msg.Contains("\"ShopProbe\""))
                     {
+                        string? clientMachineName = null;
+                        try
+                        {
+                            using JsonDocument probeDoc = JsonDocument.Parse(msg);
+                            if (probeDoc.RootElement.TryGetProperty("clientMachineName", out JsonElement clientMachineElement))
+                            {
+                                clientMachineName = clientMachineElement.GetString();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            SwkLogger.Debug($"ShopProbe parse warning: {ex.Message}");
+                        }
+
                         var response = CreateShopNotification();
                         string responseJson = JsonSerializer.Serialize(response);
                         byte[] responseBytes = Encoding.UTF8.GetBytes(responseJson);
                         await udp.SendAsync(responseBytes, result.RemoteEndPoint, cancellationToken);
+                        SwkNetworkHealth.RecordIncomingProbe(clientMachineName, result.RemoteEndPoint);
                         SwkLogger.Debug($"UDP probe response sent to {result.RemoteEndPoint}: port={_listeningPort}");
                     }
                     else if (msg.Contains("\"ShopClosing\""))

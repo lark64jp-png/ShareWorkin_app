@@ -138,7 +138,12 @@ public sealed class UiPipeClient : IDisposable
 
     public void ShowBalloonTip(string title, string text, string? folder)
     {
-        FireAndForget(JsonSerializer.Serialize(new { cmd = "SHOW_BALLOON", title, text, folder }));
+        SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "SHOW_BALLOON", title, text, folder }));
+    }
+
+    public bool SendTestNotification(string? folder)
+    {
+        return SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "TEST_NOTIFICATION", folder }));
     }
 
     public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
@@ -217,9 +222,27 @@ public sealed class UiPipeClient : IDisposable
         catch (Exception ex)
         {
             SwkLogger.Debug($"UiPipeClient.SendCommand error: {ex.Message}");
+            Disconnect();
             return null;
         }
         finally { _cmdLock.Release(); }
+    }
+
+    private bool SendNotificationCommand(string json)
+    {
+        if (!IsConnected)
+        {
+            SwkLogger.Debug("UiPipeClient.SendNotificationCommand skipped: not connected");
+            return false;
+        }
+
+        bool ok = ReadOk(SendCommand(json));
+        if (!ok)
+        {
+            SwkLogger.Warn("UiPipeClient.SendNotificationCommand failed: tray did not acknowledge notification command");
+        }
+
+        return ok;
     }
 
     private void FireAndForget(string json)
@@ -281,6 +304,10 @@ public sealed class UiPipeClient : IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { SwkLogger.Debug($"UiPipeClient.ReceiveLoopAsync ended: {ex.Message}"); }
+        finally
+        {
+            Disconnect();
+        }
     }
 
 }

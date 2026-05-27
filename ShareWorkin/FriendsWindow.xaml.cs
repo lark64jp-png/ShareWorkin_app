@@ -79,11 +79,16 @@ public partial class FriendsWindow : Window
         Loaded += (_, _) =>
         {
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
+            SwkNetworkHealth.Updated += OnNetworkHealthUpdated;
             PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
             RefreshCandidateRows();
             SelectCurrentCandidateRow();
             _initialApplied = true;
+        };
+        Closed += (_, _) =>
+        {
+            SwkNetworkHealth.Updated -= OnNetworkHealthUpdated;
         };
     }
 
@@ -107,11 +112,16 @@ public partial class FriendsWindow : Window
         Loaded += (_, _) =>
         {
             ReloadButton.IsEnabled = !SwkNetworkCache.IsScanning;
+            SwkNetworkHealth.Updated += OnNetworkHealthUpdated;
             PromoteCertificateMismatchToLiveShop();
             ApplyActiveTarget();
             RefreshCandidateRows();
             SelectCurrentCandidateRow();
             _initialApplied = true;
+        };
+        Closed += (_, _) =>
+        {
+            SwkNetworkHealth.Updated -= OnNetworkHealthUpdated;
         };
     }
 
@@ -250,7 +260,47 @@ public partial class FriendsWindow : Window
         _pendingIconKey = _initialIconKey;
         RenderIcon();
         RefreshHistoryPanels();
+        UpdateNetworkHealthBanner();
         UpdateOkState();
+    }
+
+    private void OnNetworkHealthUpdated()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(UpdateNetworkHealthBanner);
+            return;
+        }
+
+        UpdateNetworkHealthBanner();
+    }
+
+    private void UpdateNetworkHealthBanner()
+    {
+        SwkNetworkHealthStatus health = SwkNetworkHealth.GetStatus();
+        if (!health.HasWarning)
+        {
+            NetworkWarningBorder.Visibility = Visibility.Collapsed;
+            NetworkWarningTitleTextBlock.Text = string.Empty;
+            NetworkWarningDetailTextBlock.Text = string.Empty;
+            return;
+        }
+
+        NetworkWarningBorder.Visibility = Visibility.Visible;
+        NetworkWarningTitleTextBlock.Text = "委譲元の問題ではなく、このPC側の見え方が不安定な可能性があります";
+        NetworkWarningDetailTextBlock.Text = health.Detail;
+    }
+
+    private void NetworkGuideButton_Click(object sender, RoutedEventArgs e)
+    {
+        SwkNetworkHealthStatus status = SwkNetworkHealth.GetStatus();
+        if (!status.HasWarning)
+        {
+            return;
+        }
+
+        var window = new NetworkHealthGuideWindow(status) { Owner = this };
+        window.ShowDialog();
     }
 
     private void RefreshHistoryPanels()
@@ -824,11 +874,10 @@ public partial class FriendsWindow : Window
             _cancellationTokenSource = new CancellationTokenSource();
             _cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
 
-            var listener = new SwkNotificationListener();
-            var result = await listener.RequestInviteCodeAsync(
+            Friend target = _activeFriend!;
+            RefreshExistingFriendResult result = await FriendRecognitionService.RefreshExistingFriendAsync(
+                target,
                 liveShop,
-                inviteId: null,
-                expectedThumbprint: null,
                 _cancellationTokenSource.Token);
 
             if (!result.Success)
@@ -838,22 +887,9 @@ public partial class FriendsWindow : Window
                 return;
             }
 
-            string nowIso = DateTime.UtcNow.ToString("o");
-            Friend target = _activeFriend!;
             target.DisplayName = name;
             target.Memo = memo;
             target.IconKey = _pendingIconKey;
-            target.HostMachineName = liveShop.MachineName;
-            target.ShareName = liveShop.ShareName;
-            target.PasswordProtected = FriendsRepository.ProtectPassword(result.Password!);
-            target.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
-            target.RemoteSwkInstanceId = result.SwkInstanceId ?? liveShop.SwkInstanceId;
-            target.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
-            target.LastFoundAt = nowIso;
-            target.LastCheckedAt = nowIso;
-            target.LastSeenAt = nowIso;
-            target.LastAccessIssue = null;
-            FriendShareAccessTracker.ClearVerified(target);
             SwkLogger.Info(
                 $"Investigation.RefreshExistingFriendAsync.VerifyStart: friend={GetFriendLabel(target)} " +
                 $"host={liveShop.MachineName} share={liveShop.ShareName}");
@@ -1031,16 +1067,7 @@ public partial class FriendsWindow : Window
     }
 
     private static bool ShouldReplaceExistingRegistration(Friend existing, Friend incoming)
-    {
-        if (!string.IsNullOrWhiteSpace(incoming.RemoteSwkInstanceId))
-        {
-            return string.Equals(existing.RemoteSwkInstanceId, incoming.RemoteSwkInstanceId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return string.Equals(existing.HostMachineName, incoming.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
-    }
+        => FriendRecognitionService.ShouldReplaceExistingRegistration(existing, incoming);
 
     // 新規モードで仮ID保存されたオリジナル画像を、確定後の friend.Id へ改名する。
     private static string PromoteIconKeyToFriendId(string pendingKey, string friendId)
@@ -1152,82 +1179,17 @@ public partial class FriendsWindow : Window
     private static SwkNotificationListener.ShopInfo? FindLiveShopForFriend(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
-        {
-            SwkNotificationListener.ShopInfo? byId = shopInfos.FirstOrDefault(s =>
-                SameSwkInstance(friend, s) &&
-                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-            if (byId is not null) return byId;
-
-            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, shopInfos);
-            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
-        }
-
-        return FindLiveShopByHostAndShare(friend, shopInfos);
-    }
+        => FriendRecognitionService.FindLiveShopForFriend(friend, shopInfos);
 
     private static SwkNotificationListener.ShopInfo? FindVisibleShopForFriend(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        SwkNotificationListener.ShopInfo? exact = FindLiveShopByHostAndShare(friend, shopInfos);
-        if (exact is not null)
-        {
-            return exact;
-        }
-
-        if (!string.IsNullOrWhiteSpace(friend.ShareName))
-        {
-            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
-                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (sameShare.Count == 1)
-            {
-                return sameShare[0];
-            }
-        }
-
-        string friendIp = friend.LastKnownAddress ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(friendIp))
-        {
-            return shopInfos.FirstOrDefault(s =>
-                string.Equals(s.IpAddress, friendIp, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return null;
-    }
+        => FriendRecognitionService.FindVisibleShopForFriend(friend, shopInfos);
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        string friendHost = NormalizeHost(friend.HostMachineName);
-        if (!string.IsNullOrWhiteSpace(friendHost))
-        {
-            SwkNotificationListener.ShopInfo? byHost = shopInfos.FirstOrDefault(s =>
-                string.Equals(NormalizeHost(s.MachineName), friendHost, StringComparison.OrdinalIgnoreCase));
-            if (byHost is not null) return byHost;
-        }
-
-        string friendIp = friend.LastKnownAddress ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(friendIp))
-        {
-            SwkNotificationListener.ShopInfo? byIp = shopInfos.FirstOrDefault(s =>
-                string.Equals(s.IpAddress, friendIp, StringComparison.OrdinalIgnoreCase));
-            if (byIp is not null) return byIp;
-        }
-
-        if (!string.IsNullOrWhiteSpace(friend.ShareName))
-        {
-            List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
-                .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (sameShare.Count == 1) return sameShare[0];
-        }
-
-        return null;
-    }
+        => FriendRecognitionService.FindLiveShopForFriend(friend, shopInfos);
 
     private static bool MatchesCandidateFriend(
         Friend friend,
@@ -1245,9 +1207,7 @@ public partial class FriendsWindow : Window
     }
 
     private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
-        !string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId) &&
-        !string.IsNullOrWhiteSpace(shopInfo.SwkInstanceId) &&
-        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
+        FriendRecognitionService.SameSwkInstance(friend, shopInfo);
 
     public static bool OpenFriendFolder(Friend friend)
     {
@@ -1413,12 +1373,7 @@ public partial class FriendsWindow : Window
     }
 
     private static string NormalizeHost(string? host)
-    {
-        if (string.IsNullOrWhiteSpace(host)) return string.Empty;
-        string trimmed = host.Trim();
-        int dot = trimmed.IndexOf('.');
-        return dot > 0 ? trimmed[..dot] : trimmed;
-    }
+        => FriendRecognitionService.NormalizeHost(host);
 
     // ── CandidateRow ──────────────────────────────────────────────────
 

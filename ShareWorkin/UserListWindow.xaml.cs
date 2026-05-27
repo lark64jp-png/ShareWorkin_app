@@ -44,11 +44,14 @@ public partial class UserListWindow : Window
         Loaded += async (_, _) =>
         {
             SwkLogger.Debug("UserListWindow Loaded -> BuildFromCacheAsync");
+            SwkNetworkHealth.Updated += OnNetworkHealthUpdated;
+            UpdateNetworkHealthBanner();
             await BuildFromCacheAsync();
             _autoRefreshTimer.Start();
         };
         Closed += (_, _) =>
         {
+            SwkNetworkHealth.Updated -= OnNetworkHealthUpdated;
             _autoRefreshTimer.Stop();
             _autoRefreshTimer.Tick -= AutoRefreshTimer_Tick;
         };
@@ -153,6 +156,7 @@ public partial class UserListWindow : Window
 
         int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
         int resumeRequired = rows.Count(r => r.Kind == UserListRowKind.ResumeRequiredFriend);
+        int relinkRequired = rows.Count(r => r.Kind == UserListRowKind.RelinkCandidateFriend);
         int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
         int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
         int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
@@ -163,9 +167,41 @@ public partial class UserListWindow : Window
         if (_rows.Count == 0)
             StatusTextBlock.Text = "周りには誰もいません。";
         else
-            SetStatusCountsText(connected, resumeRequired, switchable, unreach, newShop, windowsPcOnly, installCandidate);
+            SetStatusCountsText(connected, resumeRequired, relinkRequired, switchable, unreach, newShop, windowsPcOnly, installCandidate);
+        UpdateNetworkHealthBanner();
 
-        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} relinkRequired={relinkRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+    }
+
+    private void OnNetworkHealthUpdated()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(UpdateNetworkHealthBanner);
+            return;
+        }
+
+        UpdateNetworkHealthBanner();
+    }
+
+    private void UpdateNetworkHealthBanner()
+    {
+        SwkNetworkHealthStatus status = SwkNetworkHealth.GetStatus();
+        NetworkWarningBorder.Visibility = status.HasWarning ? Visibility.Visible : Visibility.Collapsed;
+        NetworkWarningTitleTextBlock.Text = status.Title;
+        NetworkWarningDetailTextBlock.Text = status.Detail;
+    }
+
+    private void NetworkGuideButton_Click(object sender, RoutedEventArgs e)
+    {
+        SwkNetworkHealthStatus status = SwkNetworkHealth.GetStatus();
+        if (!status.HasWarning)
+        {
+            return;
+        }
+
+        var window = new NetworkHealthGuideWindow(status) { Owner = this };
+        window.ShowDialog();
     }
 
     private static List<UserListRow> BuildRowsFromCache(
@@ -181,12 +217,19 @@ public partial class UserListWindow : Window
         {
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
             SwkNotificationListener.ShopInfo? visibleShop = liveShop ?? FindVisibleShopForFriend(f, shopInfos);
+            SwkNotificationListener.ShopInfo? relinkShop = liveShop is null
+                ? FindRelinkCandidateForFriend(f, shopInfos)
+                : null;
 
             if (liveShop is not null && !f.HasCertificateMismatch)
             {
                 rows.Add(IsConnectedFriend(f, liveShop)
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForResumeRequiredFriend(f, liveShop));
+            }
+            else if (relinkShop is not null)
+            {
+                rows.Add(UserListRow.ForRelinkCandidateFriend(f, relinkShop));
             }
             else
             {
@@ -343,6 +386,7 @@ public partial class UserListWindow : Window
     private void SetStatusCountsText(
         int connected,
         int resumeRequired,
+        int relinkRequired,
         int switchable,
         int unreach,
         int newShop,
@@ -353,6 +397,8 @@ public partial class UserListWindow : Window
         AddStatusRun("登録済接続可能", connected, Color.FromRgb(76, 175, 80));
         AddSeparatorRun();
         AddStatusRun("再開待ち", resumeRequired, Color.FromRgb(191, 87, 0));
+        AddSeparatorRun();
+        AddStatusRun("接続更新候補", relinkRequired, Color.FromRgb(191, 87, 0));
         AddSeparatorRun();
         AddStatusRun("切替候補", switchable, Color.FromRgb(191, 87, 0));
         AddSeparatorRun();
@@ -627,83 +673,39 @@ public partial class UserListWindow : Window
     private static SwkNotificationListener.ShopInfo? FindLiveShopForFriend(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        if (!string.IsNullOrWhiteSpace(friend.RemoteSwkInstanceId))
-        {
-            SwkNotificationListener.ShopInfo? byId = shopInfos.FirstOrDefault(s =>
-                SameSwkInstance(friend, s) &&
-                string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-            if (byId is not null) return byId;
-
-            SwkNotificationListener.ShopInfo? hostShareFallback = FindLiveShopByHostAndShare(friend, shopInfos);
-            return string.IsNullOrWhiteSpace(hostShareFallback?.SwkInstanceId) ? hostShareFallback : null;
-        }
-
-        return FindLiveShopByHostAndShare(friend, shopInfos);
-    }
+        => FriendRecognitionService.FindLiveShopForFriend(friend, shopInfos);
 
     private static SwkNotificationListener.ShopInfo? FindVisibleShopForFriend(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        SwkNotificationListener.ShopInfo? exact = FindLiveShopByHostAndShare(friend, shopInfos);
-        if (exact is not null)
-        {
-            return exact;
-        }
+        => FriendRecognitionService.FindVisibleShopForFriend(friend, shopInfos);
 
-        if (string.IsNullOrWhiteSpace(friend.ShareName))
-        {
-            return null;
-        }
-
-        List<SwkNotificationListener.ShopInfo> sameShare = shopInfos
-            .Where(s => string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        return sameShare.Count == 1 ? sameShare[0] : null;
-    }
+    private static SwkNotificationListener.ShopInfo? FindRelinkCandidateForFriend(
+        Friend friend,
+        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
+        => FriendRecognitionService.FindRelinkCandidateForFriend(friend, shopInfos);
 
     private static SwkNotificationListener.ShopInfo? FindLiveShopByHostAndShare(
         Friend friend,
         IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos)
-    {
-        string normalizedHost = NormalizeHostName(friend.HostMachineName);
-        return shopInfos.FirstOrDefault(s =>
-            string.Equals(NormalizeHostName(s.MachineName), normalizedHost, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(s.ShareName, friend.ShareName, StringComparison.OrdinalIgnoreCase));
-    }
+        => FriendRecognitionService.FindLiveShopForFriend(friend, shopInfos);
 
     private static async Task<bool> TryRefreshFriendFromBkAsync(
         Friend friend,
         SwkNotificationListener.ShopInfo liveShop)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-        var listener = new SwkNotificationListener();
-        SwkNotificationListener.InviteCodeResult result = await listener.RequestInviteCodeAsync(
+        RefreshExistingFriendResult result = await FriendRecognitionService.RefreshExistingFriendAsync(
+            friend,
             liveShop,
-            inviteId: null,
-            expectedThumbprint: null,
             cts.Token);
 
-        if (!result.Success || string.IsNullOrEmpty(result.Password))
+        if (!result.Success)
         {
             SwkLogger.Warn(
                 $"UserListWindow.TryRefreshFriendFromBkAsync failed: id={friend.Id} {result.ErrorMessage ?? "empty password"}");
             return false;
         }
-
-        string nowIso = DateTime.UtcNow.ToString("o");
-        friend.HostMachineName = liveShop.MachineName;
-        friend.ShareName = liveShop.ShareName;
-        friend.PasswordProtected = FriendsRepository.ProtectPassword(result.Password);
-        friend.OwnerCertThumbprint = result.CertThumbprint ?? string.Empty;
-        friend.RemoteSwkInstanceId = result.SwkInstanceId ?? liveShop.SwkInstanceId;
-        friend.LastKnownAddress = liveShop.IpAddress ?? string.Empty;
-        friend.LastFoundAt = nowIso;
-        friend.LastCheckedAt = nowIso;
-        friend.LastSeenAt = nowIso;
-        friend.LastAccessIssue = null;
-        FriendShareAccessTracker.ClearVerified(friend);
         return true;
     }
 
@@ -763,12 +765,7 @@ public partial class UserListWindow : Window
     }
 
     private static string NormalizeHostName(string? host)
-    {
-        if (string.IsNullOrWhiteSpace(host)) return string.Empty;
-        string trimmed = host.Trim();
-        int dot = trimmed.IndexOf('.');
-        return dot > 0 ? trimmed[..dot] : trimmed;
-    }
+        => FriendRecognitionService.NormalizeHost(host);
 
     private static bool IsConnectedFriend(Friend friend, SwkNotificationListener.ShopInfo liveShop)
     {
@@ -829,7 +826,7 @@ public partial class UserListWindow : Window
 
     private static bool SameSwkInstance(Friend friend, SwkNotificationListener.ShopInfo shopInfo) =>
         HasBothInstanceIds(friend, shopInfo) &&
-        string.Equals(friend.RemoteSwkInstanceId, shopInfo.SwkInstanceId, StringComparison.OrdinalIgnoreCase);
+        FriendRecognitionService.SameSwkInstance(friend, shopInfo);
 
     private static bool CanEnumerateShare(string path)
     {
@@ -956,11 +953,12 @@ public enum UserListRowKind
     // 値の小さい順に表示される(0 が先頭)。
     ConnectedFriend = 0,        // Friend登録済み + 開店中 + 明示接続成功確認あり
     ResumeRequiredFriend = 1,   // Friend登録済み + 開店中 + 接続成功確認待ち
-    SwitchCandidate = 2,        // Friend登録済み + 接続先切替候補
-    NewShop = 3,                // Friend未登録 + 開店中
-    UnreachableFriend = 4,      // Friend登録済み + オフライン
-    WindowsPcOnly = 5,          // Friend未登録 + ShareWorkinなし（445+135応答）
-    InstallCandidate = 6,       // Friend未登録 + ポート21/22応答（インストール候補）
+    RelinkCandidateFriend = 2,  // Friend登録済み + 同一相手っぽいが識別情報更新が必要
+    SwitchCandidate = 3,        // Friend登録済み + 接続先切替候補
+    NewShop = 4,                // Friend未登録 + 開店中
+    UnreachableFriend = 5,      // Friend登録済み + オフライン
+    WindowsPcOnly = 6,          // Friend未登録 + ShareWorkinなし（445+135応答）
+    InstallCandidate = 7,       // Friend未登録 + ポート21/22応答（インストール候補）
 }
 
 public sealed class UserListRow
@@ -978,6 +976,7 @@ public sealed class UserListRow
     public FontWeight NameWeight { get; init; } = FontWeights.Medium;
     public System.Windows.FontStyle NameStyle { get; init; } = FontStyles.Normal;
     public Visibility ResumeButtonVisibility { get; init; } = Visibility.Collapsed;
+    public string ResumeButtonLabel { get; init; } = "再開";
 
     public Friend? Friend { get; init; }
     public LanCandidate? Candidate { get; init; }
@@ -1037,6 +1036,28 @@ public sealed class UserListRow
         RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
         NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
         NameWeight = FontWeights.SemiBold,
+        ResumeButtonLabel = "更新",
+        ResumeButtonVisibility = Visibility.Visible,
+        Friend = friend,
+        ShopInfo = liveShop,
+    };
+
+    public static UserListRow ForRelinkCandidateFriend(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop) => new()
+    {
+        NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "登録済み / 接続更新候補",
+        ShareFolderName = liveShop.ShareName,
+        Memo = "同じ相手の可能性があります。このPCの接続情報を更新して再接続を試してください。",
+        IpLabel = liveShop.IpAddress ?? friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.RelinkCandidateFriend,
+        IconBrush = Brushes.White,
+        IconImage = LoadIconImage(friend.IconKey),
+        RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
+        NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
+        NameWeight = FontWeights.SemiBold,
+        ResumeButtonLabel = "再開",
         ResumeButtonVisibility = Visibility.Visible,
         Friend = friend,
         ShopInfo = liveShop,

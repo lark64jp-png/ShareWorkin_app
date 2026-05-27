@@ -12,6 +12,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="8" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="14" />
             <RowDefinition Height="*" />
             <RowDefinition Height="4" />
@@ -32,6 +34,35 @@
                    TextWrapping="Wrap" />
 
         <Border Grid.Row="4"
+                x:Name="NetworkWarningBorder"
+                Visibility="Collapsed"
+                BorderBrush="#E8C66A"
+                BorderThickness="1"
+                CornerRadius="6"
+                Background="#FFF8D9"
+                Padding="10,8">
+            <StackPanel>
+                <TextBlock x:Name="NetworkWarningTitleTextBlock"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="#8A5A00"
+                           TextWrapping="Wrap" />
+                <TextBlock x:Name="NetworkWarningDetailTextBlock"
+                           Margin="0,3,0,0"
+                           FontSize="11"
+                           Foreground="#8A5A00"
+                           TextWrapping="Wrap" />
+                <Button x:Name="NetworkGuideButton"
+                        Content="設定確認"
+                        Width="92"
+                        Height="28"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
+                        Click="NetworkGuideButton_Click" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="6"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="6"
@@ -114,7 +145,7 @@
                                        HorizontalAlignment="Right" />
 
                             <Button Grid.Column="12"
-                                    Content="再開"
+                                    Content="{Binding ResumeButtonLabel}"
                                     Tag="{Binding}"
                                     Height="24"
                                     Padding="6,0"
@@ -128,7 +159,7 @@
         </Border>
 
         <!-- 読み込みインジケーター -->
-        <ProgressBar Grid.Row="6"
+        <ProgressBar Grid.Row="8"
                      x:Name="LoadingBar"
                      Height="3"
                      IsIndeterminate="True"
@@ -137,7 +168,7 @@
                      BorderThickness="0"
                      Visibility="Collapsed" />
 
-        <StackPanel Grid.Row="8">
+        <StackPanel Grid.Row="10">
             <DockPanel LastChildFill="True">
                 <UniformGrid DockPanel.Dock="Right"
                              Rows="1" Columns="2"

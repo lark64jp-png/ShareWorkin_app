@@ -128,16 +128,7 @@ public partial class ImportInviteDialog : Window
     }
 
     private static bool ShouldReplaceExistingRegistration(Friend existing, Friend incoming)
-    {
-        if (!string.IsNullOrWhiteSpace(incoming.RemoteSwkInstanceId))
-        {
-            return string.Equals(existing.RemoteSwkInstanceId, incoming.RemoteSwkInstanceId, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return string.Equals(existing.HostMachineName, incoming.HostMachineName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(existing.ShareName, incoming.ShareName, StringComparison.OrdinalIgnoreCase);
-    }
+        => FriendRecognitionService.ShouldReplaceExistingRegistration(existing, incoming);
 
     private static async Task<SwkNotificationListener.ShopInfo?> ResolveShopAsync(string hostMachineName, string shareName)
     {

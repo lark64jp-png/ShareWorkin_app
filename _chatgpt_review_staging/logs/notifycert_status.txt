@@ -1,0 +1,10 @@
+notifycert.dat status
+
+- Checked path: C:\MyApps\ShareWorkin\notifycert.dat
+- Result: file not present at the time of inspection
+- Related local log fact:
+  - swk_2026-05-25.log contains:
+    Failed to persist TLS certificate: 指定された状態で使用するには無効なキーです。
+
+This note is included because the missing file itself cannot be copied.
+

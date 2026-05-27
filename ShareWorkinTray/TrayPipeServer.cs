@@ -47,7 +47,6 @@ public sealed class TrayPipeServer
                 var session = new TrayPipeSession(pipe, _tray);
                 var prev = _activeSession;
                 _activeSession = session;
-                prev?.Dispose();
                 _ = session.RunAsync(ct).ContinueWith(_ =>
                 {
                     if (ReferenceEquals(_activeSession, session))
@@ -56,6 +55,17 @@ public sealed class TrayPipeServer
                         _tray.NotifyUiDisconnected();
                     }
                 }, TaskScheduler.Default);
+                if (prev is not null)
+                {
+                    try
+                    {
+                        prev.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        SwkLogger.Debug($"TrayPipeServer previous session dispose skipped: {ex.Message}");
+                    }
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -202,7 +212,20 @@ internal sealed class TrayPipeSession : IDisposable
                     string title = root.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
                     string text = root.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "";
                     string? folder = root.TryGetProperty("folder", out var f) && f.ValueKind != JsonValueKind.Null ? f.GetString() : null;
+                    SwkLogger.Info($"TrayPipeServer SHOW_BALLOON received: title={title}");
                     _tray.ShowBalloonTip(title, text, folder);
+                    await SendAsync("{\"type\":\"SHOW_BALLOON_RESULT\",\"ok\":true}");
+                    break;
+                }
+
+                case "TEST_NOTIFICATION":
+                {
+                    string? folder = root.TryGetProperty("folder", out var f) && f.ValueKind != JsonValueKind.Null
+                        ? f.GetString()
+                        : null;
+                    SwkLogger.Info("TrayPipeServer TEST_NOTIFICATION received");
+                    _tray.ShowTestNotification(folder);
+                    await SendAsync("{\"type\":\"TEST_NOTIFICATION_RESULT\",\"ok\":true}");
                     break;
                 }
 
@@ -266,9 +289,9 @@ internal sealed class TrayPipeSession : IDisposable
         if (_disposed) return;
         _disposed = true;
         try { _pipe.Disconnect(); } catch { }
-        _reader.Dispose();
-        _writer.Dispose();
-        _pipe.Dispose();
-        _writeLock.Dispose();
+        try { _reader.Dispose(); } catch { }
+        try { _writer.Dispose(); } catch { }
+        try { _pipe.Dispose(); } catch { }
+        try { _writeLock.Dispose(); } catch { }
     }
 }

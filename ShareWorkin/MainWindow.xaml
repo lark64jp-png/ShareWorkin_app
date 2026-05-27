@@ -104,6 +104,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- TODO_UI: Move the visual language away from a Windows share manager
@@ -766,7 +767,156 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="2" Background="#E8E1D2" Padding="28,10">
+        <Border Grid.Row="2"
+                x:Name="NotificationSupportPanel"
+                Background="#F2EBDD"
+                BorderBrush="#D8D2C3"
+                BorderThickness="0,1,0,1"
+                Padding="28,14"
+                Visibility="Collapsed">
+            <Border Background="#FFF9EE"
+                    BorderBrush="#D6C8AE"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16,14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="12" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="通知設定"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#3F3A32" />
+                            <TextBlock Text="通知は共有体験を支える主要機能です。届かないときは、ここから設定確認とテスト通知を行えます。"
+                                       Margin="0,6,0,0"
+                                       Foreground="#5D5448"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <Button Grid.Column="1"
+                                x:Name="CloseNotificationSupportButton"
+                                Width="24"
+                                Height="24"
+                                Padding="0"
+                                Margin="10,0,0,0"
+                                VerticalContentAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalAlignment="Top"
+                                HorizontalAlignment="Right"
+                                ToolTip="通知設定を閉じる"
+                                Click="CloseNotificationSupportButton_Click">
+                            <TextBlock Text="&#xE711;"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="10"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
+                    </Grid>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="280" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="通知モード:"
+                                       VerticalAlignment="Center"
+                                       Foreground="#3F3A32"
+                                       FontWeight="Medium"
+                                       Margin="0,0,10,0" />
+                            <ComboBox x:Name="NotificationModeComboBox"
+                                      Width="132"
+                                      Height="26"
+                                      VerticalContentAlignment="Center">
+                                <ComboBoxItem Content="すべて" Tag="All" IsSelected="True" />
+                                <ComboBoxItem Content="外部のみ" Tag="ExternalOnly" />
+                                <ComboBoxItem Content="なし" Tag="Off" />
+                            </ComboBox>
+                        </StackPanel>
+
+                        <WrapPanel Grid.Column="2"
+                                   VerticalAlignment="Top"
+                                   Margin="0,14,0,0">
+                            <Button x:Name="OpenNotificationSettingsButton"
+                                    Content="通知設定を開く"
+                                    Width="132"
+                                    Height="30"
+                                    Padding="0"
+                                    Margin="0,0,12,12"
+                                    Click="OpenNotificationSettingsButton_Click" />
+                            <Button Content="テスト通知を送る"
+                                    Width="132"
+                                    Height="30"
+                                    Padding="0"
+                                    Margin="0,0,12,12"
+                                    Click="SendTestNotificationButton_Click" />
+                            <Button Content="通知なしで使う"
+                                    Width="132"
+                                    Height="30"
+                                    Padding="0"
+                                    Margin="0,0,12,12"
+                                    Click="UseWithoutNotificationsButton_Click" />
+                        </WrapPanel>
+                    </Grid>
+
+                    <Grid Grid.Row="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="280" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock x:Name="NotificationSupportMonitorTextBlock"
+                                       Text="共有監視: OFF"
+                                       Foreground="#2F2A22"
+                                       FontWeight="Medium" />
+                            <TextBlock x:Name="NotificationSupportStateTextBlock"
+                                       Text="通知状態: 未確認"
+                                       Margin="0,6,0,0"
+                                       Foreground="#2F2A22"
+                                       FontWeight="Medium" />
+                            <TextBlock x:Name="NotificationSupportLastTestTextBlock"
+                                       Text="最終通知テスト日時: 未実行"
+                                       Margin="0,6,0,0"
+                                       Foreground="#5D5448" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="通知なしでも共有は使えますが、受け取りに気づきにくくなります。"
+                                       Foreground="#5D5448"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="他のアプリ通知が気になる場合は、Windows通知設定で不要なアプリ通知をOFFにできます。"
+                                       Margin="0,8,0,0"
+                                       Foreground="#5D5448"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Text="再インストール後も以前の通知設定がWindows側に残る場合があります。通知が届かないときはShareWorkin通知を確認してください。"
+                                       Margin="0,8,0,0"
+                                       Foreground="#5D5448"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Border>
+
+        <Border Grid.Row="3" Background="#E8E1D2" Padding="28,10">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="160" />
@@ -805,24 +955,12 @@
                         Width="80"
                         Height="26"
                         Click="NotificationHistoryButton_Click" />
-                <StackPanel Grid.Column="8"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="通知:"
-                               VerticalAlignment="Center"
-                               FontSize="11"
-                               Foreground="#6F675C"
-                               Margin="0,0,6,0" />
-                    <ComboBox x:Name="NotificationModeComboBox"
-                              Width="96"
-                              Height="24"
-                              FontSize="11"
-                              VerticalContentAlignment="Center">
-                        <ComboBoxItem Content="すべて" Tag="All" IsSelected="True" />
-                        <ComboBoxItem Content="外部のみ" Tag="ExternalOnly" />
-                        <ComboBoxItem Content="なし" Tag="Off" />
-                    </ComboBox>
-                </StackPanel>
+                <Button Grid.Column="8"
+                        x:Name="NotificationSupportButton"
+                        Content="通知設定"
+                        Width="86"
+                        Height="26"
+                        Click="NotificationSupportButton_Click" />
             </Grid>
         </Border>
 

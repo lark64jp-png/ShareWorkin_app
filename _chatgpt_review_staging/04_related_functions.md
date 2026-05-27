@@ -1,0 +1,31 @@
+# 関連関数一覧
+
+主対象:
+- `ShareWorkin/MainWindow.xaml.cs`
+  - `TryRegisterExternalReceive`
+  - `ShowNotification`
+  - `SendConfirmedInteractionToFriendAsync`
+  - `AcceptIncomingInteraction`
+  - `ResolveVerifiedIncomingInteractionFriend`
+  - `TryRefreshFriendPasswordAsync`
+  - `PersistFriendAccessIssue`
+- `ShareWorkin/UserListWindow.xaml.cs`
+  - `BuildRowsFromCache`
+  - `IsConnectedFriend`
+  - `TryFindRecoveryCandidateForFriend`
+- `ShareWorkin/FriendsWindow.xaml.cs`
+  - `ResolvePresence`
+  - `CanRefreshExistingFriend`
+- `ShareWorkinTray/TrayApp.cs`
+  - `HandleIncomingInteractionReceived`
+  - `BuildIncomingInteractionRecord`
+  - `ResolveVerifiedIncomingInteractionFriend`
+- `ShareWorkin/SMB/SwkNotificationBroadcaster.cs`
+  - `LoadOrCreateCertificate`
+  - `TryPersistCertificate`
+- `ShareWorkin/SMB/SwkNotificationListener.cs`
+  - `RequestInviteCodeAsync`
+  - `SendInteractionEventAsync`
+- `ShareWorkin/HistoryWindow.xaml.cs`
+  - `RefreshRows`
+  - `CollapseSupersededReceiveDetections`

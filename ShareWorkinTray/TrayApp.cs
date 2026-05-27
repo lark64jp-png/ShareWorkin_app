@@ -59,6 +59,7 @@ public sealed class TrayApp : IDisposable
 
     public void Start()
     {
+        WindowsToastNotificationService.Initialize();
         LoadSettings();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         SmbController.OnInteractionEventReceived = HandleIncomingInteractionReceived;
@@ -216,6 +217,12 @@ public sealed class TrayApp : IDisposable
     private void HandleIncomingInteractionReceived(SwkNotificationProtocol.InteractionEventNotice notice)
     {
         SwkIncomingInteractionRecord entry = BuildIncomingInteractionRecord(notice);
+        if (!entry.IsSenderVerified)
+        {
+            SwkLogger.Warn(
+                $"Trace.TrayIncoming.Unverified: eventId={entry.EventId} senderMachine={entry.SenderMachineName ?? "-"} " +
+                $"senderShare={entry.SenderShareName ?? "-"} senderId={entry.SenderSwkInstanceId ?? "-"} target={entry.TargetName ?? "-"}");
+        }
         SwkIncomingInteractionInbox.Append(entry);
 
         if (PipeServer.HasConnectedClient)
@@ -236,7 +243,7 @@ public sealed class TrayApp : IDisposable
         {
             balloonText += $"\r\nメッセージ: {entry.Message}";
         }
-        ShowBalloonTip("ShareWorkin の受信", balloonText, entry.TargetFolder ?? _shopFolder);
+        ShowBalloonTip(GetIncomingNotificationTitle(entry.IsSenderVerified), balloonText, entry.TargetFolder ?? _shopFolder);
         SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, DateTime.UtcNow);
     }
 
@@ -279,52 +286,11 @@ public sealed class TrayApp : IDisposable
     private static Friend? ResolveVerifiedIncomingInteractionFriend(SwkNotificationProtocol.InteractionEventNotice notice)
     {
         IReadOnlyList<Friend> friends = FriendsRepository.LoadAll();
-
-        if (!string.IsNullOrWhiteSpace(notice.SenderSwkInstanceId))
-        {
-            Friend? byInstance = friends.FirstOrDefault(friend =>
-                string.Equals(friend.RemoteSwkInstanceId, notice.SenderSwkInstanceId, StringComparison.OrdinalIgnoreCase));
-            if (byInstance is not null)
-            {
-                return byInstance;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(notice.SenderMachineName) &&
-            !string.IsNullOrWhiteSpace(notice.SenderShareName))
-        {
-            Friend? byHostAndShare = friends.FirstOrDefault(friend =>
-                string.Equals(friend.HostMachineName, notice.SenderMachineName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(friend.ShareName, notice.SenderShareName, StringComparison.OrdinalIgnoreCase));
-            if (byHostAndShare is not null)
-            {
-                return byHostAndShare;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(notice.SenderMachineName))
-        {
-            List<Friend> byHost = friends
-                .Where(friend => string.Equals(friend.HostMachineName, notice.SenderMachineName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (byHost.Count == 1)
-            {
-                return byHost[0];
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(notice.SenderShareName))
-        {
-            List<Friend> byShare = friends
-                .Where(friend => string.Equals(friend.ShareName, notice.SenderShareName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (byShare.Count == 1)
-            {
-                return byShare[0];
-            }
-        }
-
-        return null;
+        return FriendRecognitionService.ResolveIncomingInteractionFriend(
+            friends,
+            notice.SenderSwkInstanceId,
+            notice.SenderMachineName,
+            notice.SenderShareName);
     }
 
     private static string ResolveVerifiedSenderLabel(SwkIncomingInteractionRecord entry)
@@ -336,6 +302,11 @@ public sealed class TrayApp : IDisposable
 
         return "相手";
     }
+
+    private static string GetIncomingNotificationTitle(bool isVerified) =>
+        isVerified
+            ? "ShareWorkin の受信(確認済み)"
+            : "ShareWorkin の受信(未照合通知)";
 
     private static string? ResolveFriendLabel(Friend? friend)
     {
@@ -389,9 +360,24 @@ public sealed class TrayApp : IDisposable
     public void ShowBalloonTip(string title, string text, string? folder)
     {
         _lastBalloonFolder = folder;
+        if (WindowsToastNotificationService.TryShow(title, text))
+        {
+            SwkLogger.Info($"ShowToastNotification: title={title}");
+            return;
+        }
+
         _notifyIcon.BalloonTipTitle = title;
         _notifyIcon.BalloonTipText = text;
         _notifyIcon.ShowBalloonTip(5000);
+        SwkLogger.Info($"ShowBalloonTip fallback: title={title}");
+    }
+
+    public void ShowTestNotification(string? folder)
+    {
+        ShowBalloonTip(
+            "ShareWorkin のテスト通知",
+            "この通知が見えていれば、ShareWorkinの通知表示は有効です。",
+            folder);
     }
 
     public void NotifyUiDisconnected()

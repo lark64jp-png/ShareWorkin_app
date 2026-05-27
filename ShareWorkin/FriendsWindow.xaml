@@ -12,14 +12,16 @@
             <RowDefinition Height="Auto" />   <!-- 0: タイトル行 + 削除/確定 -->
             <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />   <!-- 2: サブタイトル -->
-            <RowDefinition Height="14" />
-            <RowDefinition Height="Auto" />   <!-- 4: 二列情報部 -->
-            <RowDefinition Height="10" />
-            <RowDefinition Height="Auto" />   <!-- 6: 中段ボタン行 -->
-            <RowDefinition Height="6" />
-            <RowDefinition Height="Auto" />   <!-- 8: 状態メッセージ -->
             <RowDefinition Height="8" />
-            <RowDefinition Height="*" />      <!-- 10: 候補リスト -->
+            <RowDefinition Height="Auto" />   <!-- 4: ネットワーク警告 -->
+            <RowDefinition Height="14" />
+            <RowDefinition Height="Auto" />   <!-- 6: 二列情報部 -->
+            <RowDefinition Height="10" />
+            <RowDefinition Height="Auto" />   <!-- 8: 中段ボタン行 -->
+            <RowDefinition Height="6" />
+            <RowDefinition Height="Auto" />   <!-- 10: 状態メッセージ -->
+            <RowDefinition Height="8" />
+            <RowDefinition Height="*" />      <!-- 12: 候補リスト -->
         </Grid.RowDefinitions>
 
         <!-- 0: タイトル + 削除/確定 -->
@@ -61,8 +63,37 @@
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
 
-        <!-- 4: 二列情報部 -->
-        <Grid Grid.Row="4">
+        <Border Grid.Row="4"
+                x:Name="NetworkWarningBorder"
+                Visibility="Collapsed"
+                BorderBrush="#E8C66A"
+                BorderThickness="1"
+                CornerRadius="6"
+                Background="#FFF8D9"
+                Padding="10,8">
+            <StackPanel>
+                <TextBlock x:Name="NetworkWarningTitleTextBlock"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="#8A5A00"
+                           TextWrapping="Wrap" />
+                <TextBlock x:Name="NetworkWarningDetailTextBlock"
+                           Margin="0,3,0,0"
+                           FontSize="11"
+                           Foreground="#8A5A00"
+                           TextWrapping="Wrap" />
+                <Button x:Name="NetworkGuideButton"
+                        Content="設定確認"
+                        Width="92"
+                        Height="28"
+                        Margin="0,8,0,0"
+                        HorizontalAlignment="Right"
+                        Click="NetworkGuideButton_Click" />
+            </StackPanel>
+        </Border>
+
+        <!-- 6: 二列情報部 -->
+        <Grid Grid.Row="6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="14" />
@@ -300,7 +331,7 @@
         </Grid>
 
         <!-- 6: 中段ボタン行 -->
-        <DockPanel Grid.Row="6" LastChildFill="False">
+        <DockPanel Grid.Row="8" LastChildFill="False">
             <UniformGrid DockPanel.Dock="Left" Rows="1" Columns="1" Width="140">
                 <Button x:Name="ReloadButton"
                         Content="再スキャン"
@@ -323,13 +354,13 @@
 
         <!-- 8: 状態メッセージ -->
         <TextBlock x:Name="StatusTextBlock"
-                   Grid.Row="8"
+                   Grid.Row="10"
                    FontSize="12"
                    Foreground="#4B5563"
                    TextWrapping="Wrap" />
 
-        <!-- 10: 候補リスト（登録不可行はグレーダウン・選択不可） -->
-        <Border Grid.Row="10"
+        <!-- 12: 候補リスト（登録不可行はグレーダウン・選択不可） -->
+        <Border Grid.Row="12"
                 BorderBrush="#D8D2C3"
                 BorderThickness="1"
                 CornerRadius="6"

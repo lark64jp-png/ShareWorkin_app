@@ -248,6 +248,8 @@ public partial class HistoryWindow : Window
         "InteractionNotifyUnverified" => "交流通知（未照合）",
         "InteractionDispatchSkipped" => "交流通知未送達",
         "InteractionDispatchFailed" => "交流通知送達失敗",
+        "NetworkHealthWarning" => "見え方注意",
+        "NetworkHealthRecovered" => "見え方回復",
         "OutOfSyncDetected" => "受信検知（未照合）",
         _ => eventType
     };
@@ -291,6 +293,11 @@ public partial class HistoryWindow : Window
 
     private static string BuildAttentionText(HistoryEntry entry)
     {
+        if (IsUnknownAccessEntry(entry))
+        {
+            return "相手を特定できないアクセスや受信の行です。登録利用者と断定せず、特別扱いで確認してほしい行です。";
+        }
+
         if (entry.Outcome == HistoryOutcome.Failure)
         {
             return "変更できなかったため、先に確認してほしい行です。";
@@ -323,6 +330,16 @@ public partial class HistoryWindow : Window
             return "交流通知の履歴です。更新履歴ではなく通知履歴で確認する種類の行です。";
         }
 
+        if (string.Equals(entry.EventType, "NetworkHealthWarning", StringComparison.OrdinalIgnoreCase))
+        {
+            return "このPCが他のPCから見つかりにくい可能性を検知した行です。省電力や通信状態の確認に向いています。";
+        }
+
+        if (string.Equals(entry.EventType, "NetworkHealthRecovered", StringComparison.OrdinalIgnoreCase))
+        {
+            return "このPCの見え方が回復した行です。直前の通信不安定から戻った確認に向いています。";
+        }
+
         if (IsExternalObservation(entry))
         {
             return "外部変化または観測由来の行です。利用者操作と区別して確認できます。";
@@ -333,6 +350,11 @@ public partial class HistoryWindow : Window
 
     private static MediaBrush GetRowBackground(HistoryEntry entry)
     {
+        if (IsUnknownAccessEntry(entry))
+        {
+            return new MediaSolidColorBrush(MediaColor.FromRgb(238, 230, 250));
+        }
+
         if (entry.Outcome == HistoryOutcome.Failure)
         {
             return new MediaSolidColorBrush(MediaColor.FromRgb(255, 228, 228));
@@ -374,6 +396,35 @@ public partial class HistoryWindow : Window
         }
 
         return MediaBrushes.White;
+    }
+
+    private static bool IsUnknownAccessEntry(HistoryEntry entry)
+    {
+        if (string.Equals(entry.EventType, "OutOfSyncDetected", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(entry.EventType, "Receive", StringComparison.OrdinalIgnoreCase) &&
+            entry.Direction == HistoryDirection.Incoming &&
+            string.IsNullOrWhiteSpace(entry.FriendName) &&
+            (entry.Note?.Contains("未照合", StringComparison.OrdinalIgnoreCase) == true ||
+             entry.Message.Contains("未照合", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (entry.Direction == HistoryDirection.Incoming &&
+            string.IsNullOrWhiteSpace(entry.FriendName) &&
+            (string.Equals(entry.EventType, "InteractionNotifyUnverified", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(entry.EventType, "InteractionNotify", StringComparison.OrdinalIgnoreCase)) &&
+            (entry.Note?.Contains("未照合", StringComparison.OrdinalIgnoreCase) == true ||
+             entry.Message.Contains("未照合", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsOtherPartyUpdate(HistoryEntry entry)

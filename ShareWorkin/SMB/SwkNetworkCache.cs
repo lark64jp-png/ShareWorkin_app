@@ -96,11 +96,13 @@ public static class SwkNetworkCache
             try
             {
                 shopInfos = await SwkNotificationListener.ProbeHostsAsync(candidates, ct).ConfigureAwait(false);
+                SwkNetworkHealth.RecordDiscoverySnapshot(shopInfos);
             }
             catch (Exception ex)
             {
                 SwkLogger.Warn($"SwkNetworkCache: ProbeHostsAsync failed: {ex.Message}");
                 shopInfos = Array.Empty<SwkNotificationListener.ShopInfo>();
+                SwkNetworkHealth.RecordDiscoverySnapshot(shopInfos);
             }
 
             Update(candidates, shopInfos, mode);
