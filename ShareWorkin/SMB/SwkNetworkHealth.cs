@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 
 namespace ShareWorkin.SMB;
 
@@ -15,7 +16,7 @@ public static class SwkNetworkHealth
     private static DateTime? _lastOutgoingDiscoveryAt;
     private static int _lastOutgoingDiscoveryCount;
     private static int _expectedPeerCount;
-    private static DateTime? _remoteVisibilityAvailableSince;
+    private static DateTime? _lastVisibleRemoteShopAt;
     private static DateTime? _remoteDiscoveryMissingSince;
     private static bool _warningActive;
 
@@ -24,7 +25,7 @@ public static class SwkNetworkHealth
 
     public static void RecordIncomingProbe(string? clientMachineName, IPEndPoint remoteEndPoint)
     {
-        if (string.Equals(clientMachineName, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+        if (IsSelfProbe(clientMachineName, remoteEndPoint))
         {
             return;
         }
@@ -55,13 +56,14 @@ public static class SwkNetworkHealth
 
             if (visibleRemoteShopCount > 0)
             {
-                _remoteVisibilityAvailableSince ??= now;
+                _lastVisibleRemoteShopAt = now;
                 _remoteDiscoveryMissingSince = null;
             }
             else
             {
-                _remoteVisibilityAvailableSince = null;
-                _remoteDiscoveryMissingSince = expectedPeerCount > 0
+                bool lostRecently = _lastVisibleRemoteShopAt.HasValue &&
+                    now - _lastVisibleRemoteShopAt.Value <= IncomingProbeWarningThreshold;
+                _remoteDiscoveryMissingSince = expectedPeerCount > 0 && !lostRecently
                     ? _remoteDiscoveryMissingSince ?? now
                     : null;
             }
@@ -78,18 +80,14 @@ public static class SwkNetworkHealth
             DateTime now = DateTime.Now;
             bool hasRecentScan = _lastOutgoingDiscoveryAt.HasValue &&
                                  now - _lastOutgoingDiscoveryAt.Value <= IncomingProbeWarningThreshold;
-            bool canSeeOthers = hasRecentScan && _lastOutgoingDiscoveryCount > 0;
-            DateTime? incomingReference = _lastIncomingProbeAt.HasValue && _remoteVisibilityAvailableSince.HasValue
-                ? (_lastIncomingProbeAt.Value > _remoteVisibilityAvailableSince.Value
-                    ? _lastIncomingProbeAt.Value
-                    : _remoteVisibilityAvailableSince.Value)
-                : _lastIncomingProbeAt ?? _remoteVisibilityAvailableSince;
+            bool hasRecentVisibleRemote = _lastVisibleRemoteShopAt.HasValue &&
+                                          now - _lastVisibleRemoteShopAt.Value <= IncomingProbeWarningThreshold;
+            bool canSeeOthers = hasRecentScan && hasRecentVisibleRemote;
             bool inboundIssue = canSeeOthers &&
-                                incomingReference.HasValue &&
-                                now - incomingReference.Value > IncomingProbeWarningThreshold;
+                                _lastIncomingProbeAt.HasValue &&
+                                now - _lastIncomingProbeAt.Value > IncomingProbeWarningThreshold;
             bool outboundIssue = hasRecentScan &&
                                  _expectedPeerCount > 0 &&
-                                 _lastOutgoingDiscoveryCount == 0 &&
                                  _remoteDiscoveryMissingSince.HasValue &&
                                  now - _remoteDiscoveryMissingSince.Value > IncomingProbeWarningThreshold;
 
@@ -162,6 +160,44 @@ public static class SwkNetworkHealth
             "このPCの見え方が回復しました。",
             "他のPCからの探査受信が再開しました。"));
     }
+
+    private static bool IsSelfProbe(string? clientMachineName, IPEndPoint remoteEndPoint)
+    {
+        IPAddress address = remoteEndPoint.Address;
+        if (IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        if (!IsLocalAddress(address))
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(clientMachineName) ||
+               string.Equals(clientMachineName, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLocalAddress(IPAddress address)
+    {
+        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+        {
+            return true;
+        }
+
+        try
+        {
+            return Dns.GetHostAddresses(Dns.GetHostName())
+                .Any(local => NormalizeAddress(local).Equals(NormalizeAddress(address)));
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
+    private static IPAddress NormalizeAddress(IPAddress address) =>
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 }
 
 public sealed record SwkNetworkHealthStatus(

@@ -2104,7 +2104,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         // ④ 最後にクイックスキャンで自動復帰を試す。ここで見つかるなら
         // ユーザー判断は不要なので、登録情報を更新してそのまま開く。
-        SwkNotificationListener.ShopInfo? scannedLiveShop = await ResolveLiveFriendShopAsync(_activeFriendShop);
+        SwkNotificationListener.ShopInfo? scannedLiveShop = await ResolveLiveFriendShopWithRetryAsync(_activeFriendShop);
         if (scannedLiveShop is not null)
         {
             UpdateFriendExternalState(_activeFriendShop, scannedLiveShop);
@@ -7687,6 +7687,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return FindLiveShopInfo(friend) ?? FindRelinkCandidateShopInfo(friend);
     }
 
+    private static async Task<SwkNotificationListener.ShopInfo?> ResolveLiveFriendShopWithRetryAsync(
+        Friend friend,
+        int attempts = 2)
+    {
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            SwkNotificationListener.ShopInfo? hit = await ResolveLiveFriendShopAsync(friend);
+            if (hit is not null)
+            {
+                return hit;
+            }
+
+            if (attempt + 1 < attempts)
+            {
+                await Task.Delay(500);
+            }
+        }
+
+        return null;
+    }
+
     private async Task AutoRepairKnownFriendsAsync()
     {
         await Dispatcher.InvokeAsync(() =>
@@ -7815,11 +7836,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             liveShop = null;
         }
 
-        liveShop ??= await ResolveLiveFriendShopAsync(friend);
+        liveShop ??= await ResolveLiveFriendShopWithRetryAsync(friend);
         if (liveShop is null)
         {
             SetTransientStatus("接続できません");
             return;
+        }
+
+        if (FriendRecognitionService.IsRelinkCandidateLiveShopForFriend(friend, liveShop))
+        {
+            bool refreshed = await TryRefreshFriendRegistrationAsync(friend, liveShop);
+            if (refreshed)
+            {
+                PopulateExplorerDropdown();
+            }
         }
 
         List<string> uncCandidates = BuildFriendUncCandidates(friend, liveShop);
@@ -8005,6 +8035,49 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Warn($"TryRefreshFriendPasswordAsync failed: {ex.Message}");
             return false;
         }
+    }
+
+    private static async Task<bool> TryRefreshFriendRegistrationAsync(
+        Friend friend,
+        SwkNotificationListener.ShopInfo liveShop)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        RefreshExistingFriendResult result = await FriendRecognitionService.RefreshExistingFriendAsync(
+            friend,
+            liveShop,
+            cts.Token);
+
+        if (!result.Success)
+        {
+            SwkLogger.Warn(
+                $"TryRefreshFriendRegistrationAsync failed: friend={friend.Id}/{friend.DisplayName} " +
+                $"{result.ErrorMessage ?? "empty password"}");
+            return false;
+        }
+
+        var all = FriendsRepository.LoadAll().ToList();
+        Friend? stored = all.FirstOrDefault(f => f.Id == friend.Id);
+        if (stored is null)
+        {
+            return false;
+        }
+
+        stored.HostMachineName = friend.HostMachineName;
+        stored.ShareName = friend.ShareName;
+        stored.PasswordProtected = friend.PasswordProtected;
+        stored.OwnerCertThumbprint = friend.OwnerCertThumbprint;
+        stored.RemoteSwkInstanceId = friend.RemoteSwkInstanceId;
+        stored.LastKnownAddress = friend.LastKnownAddress;
+        stored.LastFoundAt = friend.LastFoundAt;
+        stored.LastCheckedAt = friend.LastCheckedAt;
+        stored.LastSeenAt = friend.LastSeenAt;
+        stored.LastAccessIssue = friend.LastAccessIssue;
+        FriendsRepository.SaveAll(all);
+        FriendShareAccessTracker.ClearVerified(friend);
+        SwkLogger.Info(
+            $"TryRefreshFriendRegistrationAsync: refreshed friend={friend.DisplayName}/{friend.HostMachineName} " +
+            $"share={friend.ShareName} instance={friend.RemoteSwkInstanceId ?? "-"}");
+        return true;
     }
 
     private static async Task<bool> TryRecoverFriendCertificateAsync(

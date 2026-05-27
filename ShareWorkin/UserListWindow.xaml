@@ -41,25 +41,46 @@
                 CornerRadius="6"
                 Background="#FFF8D9"
                 Padding="10,8">
-            <StackPanel>
-                <TextBlock x:Name="NetworkWarningTitleTextBlock"
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0"
+                           Grid.Column="0"
+                           x:Name="NetworkWarningTitleTextBlock"
+                           Margin="0,0,8,0"
+                           VerticalAlignment="Center"
                            FontSize="12"
                            FontWeight="SemiBold"
                            Foreground="#8A5A00"
                            TextWrapping="Wrap" />
-                <TextBlock x:Name="NetworkWarningDetailTextBlock"
+                <Button Grid.Row="0"
+                        Grid.Column="1"
+                        x:Name="NetworkGuideButton"
+                        Content="設定確認"
+                        MinWidth="0"
+                        Height="22"
+                        Padding="7,1"
+                        Margin="0,0,0,2"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        FontSize="10"
+                        Click="NetworkGuideButton_Click" />
+                <TextBlock Grid.Row="1"
+                           Grid.Column="0"
+                           Grid.ColumnSpan="2"
+                           x:Name="NetworkWarningDetailTextBlock"
                            Margin="0,3,0,0"
                            FontSize="11"
                            Foreground="#8A5A00"
                            TextWrapping="Wrap" />
-                <Button x:Name="NetworkGuideButton"
-                        Content="設定確認"
-                        Width="92"
-                        Height="28"
-                        Margin="0,8,0,0"
-                        HorizontalAlignment="Right"
-                        Click="NetworkGuideButton_Click" />
-            </StackPanel>
+            </Grid>
         </Border>
 
         <Border Grid.Row="6"
