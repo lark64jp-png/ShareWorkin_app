@@ -33,6 +33,11 @@ public partial class UserListWindow : Window
         AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         "userlist-state.json");
 
+    private const int MaxAutoRecoveryAttempts = 3;
+    private static readonly TimeSpan UnstableWindow = TimeSpan.FromMinutes(5);
+    private static readonly Dictionary<string, FriendConnectionTracker> _connectionTrackers =
+        new(StringComparer.Ordinal);
+
     public UserListWindow(Window owner)
     {
         InitializeComponent();
@@ -156,8 +161,10 @@ public partial class UserListWindow : Window
 
         int connected = rows.Count(r => r.Kind == UserListRowKind.ConnectedFriend);
         int resumeRequired = rows.Count(r => r.Kind == UserListRowKind.ResumeRequiredFriend);
+        int autoRecovering = rows.Count(r => r.Kind == UserListRowKind.AutoRecovering);
+        int unstable = rows.Count(r => r.Kind == UserListRowKind.Unstable);
         int relinkRequired = rows.Count(r => r.Kind == UserListRowKind.RelinkCandidateFriend);
-        int switchable = rows.Count(r => r.Kind == UserListRowKind.SwitchCandidate);
+        int manualRequired = rows.Count(r => r.Kind == UserListRowKind.ManualRequired);
         int newShop = rows.Count(r => r.Kind == UserListRowKind.NewShop);
         int unreach = rows.Count(r => r.Kind == UserListRowKind.UnreachableFriend);
         int windowsPcOnly = rows.Count(r => r.Kind == UserListRowKind.WindowsPcOnly);
@@ -167,10 +174,14 @@ public partial class UserListWindow : Window
         if (_rows.Count == 0)
             StatusTextBlock.Text = "周りには誰もいません。";
         else
-            SetStatusCountsText(connected, resumeRequired, relinkRequired, switchable, unreach, newShop, windowsPcOnly, installCandidate);
+            SetStatusCountsText(connected, resumeRequired, autoRecovering, unstable, relinkRequired, manualRequired, unreach, newShop, windowsPcOnly, installCandidate);
         UpdateNetworkHealthBanner();
 
-        SwkLogger.Debug($"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} relinkRequired={relinkRequired} switchable={switchable} newShop={newShop} unreach={unreach} windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
+        SwkLogger.Debug(
+            $"UserListWindow.BuildUiFromCache done: connected={connected} resumeRequired={resumeRequired} " +
+            $"autoRecovering={autoRecovering} unstable={unstable} relinkRequired={relinkRequired} " +
+            $"manualRequired={manualRequired} newShop={newShop} unreach={unreach} " +
+            $"windowsPcOnly={windowsPcOnly} installCandidate={installCandidate}");
     }
 
     private void OnNetworkHealthUpdated()
@@ -216,30 +227,64 @@ public partial class UserListWindow : Window
         foreach (Friend f in friends)
         {
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
-            SwkNotificationListener.ShopInfo? visibleShop = liveShop ?? FindVisibleShopForFriend(f, shopInfos);
-            SwkNotificationListener.ShopInfo? relinkShop = liveShop is null
+            SwkNotificationListener.ShopInfo? relinkShop = liveShop is null && !f.HasCertificateMismatch
                 ? FindRelinkCandidateForFriend(f, shopInfos)
                 : null;
 
             if (liveShop is not null && !f.HasCertificateMismatch)
             {
+                // 接続確認済み or 確認待ち → trackerリセット（復旧ログ）
+                ResetTracker(f.Id);
                 rows.Add(IsConnectedFriend(f, liveShop)
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForResumeRequiredFriend(f, liveShop));
             }
             else if (relinkShop is not null)
             {
+                // 同ホストに別SwkInstanceId → 接続先更新あり（自動回復不可）
+                ResetTracker(f.Id);
                 rows.Add(UserListRow.ForRelinkCandidateFriend(f, relinkShop));
             }
             else
             {
-                rows.Add(UserListRow.ForUnreachableFriend(f, FindCandidateForFriend(f, candidates), visibleShop));
-            }
+                // liveShop なし → 猶予状態を経由して最終判定
+                FriendConnectionTracker tracker = GetOrCreateTracker(f.Id);
+                bool hasHistory = !string.IsNullOrWhiteSpace(f.LastFoundAt);
+                tracker.RecordMiss(hasHistory);
 
-            if (TryFindRecoveryCandidateForFriend(f, candidates, shopInfos, out LanCandidate? recoveryCandidate, out SwkNotificationListener.ShopInfo? recoveryShop))
-            {
-                rows.Add(UserListRow.ForSwitchCandidate(f, recoveryCandidate!, recoveryShop!));
-                AddCandidateKeys(representedCandidateKeys, recoveryCandidate!);
+                UserListRow row;
+                if (hasHistory && tracker.MissCount <= MaxAutoRecoveryAttempts)
+                {
+                    // 猶予1：自動復旧中（最大 MaxAutoRecoveryAttempts 回）
+                    row = UserListRow.ForAutoRecovering(f, tracker.MissCount, MaxAutoRecoveryAttempts);
+                }
+                else if (hasHistory && tracker.FirstMissAt.HasValue &&
+                         DateTime.Now - tracker.FirstMissAt.Value < UnstableWindow)
+                {
+                    // 猶予2：一時不安定（UnstableWindow 以内）
+                    row = UserListRow.ForUnstable(f);
+                }
+                else
+                {
+                    // 時間窓超過 or 接続実績なし → 最終判定
+                    LanCandidate? candidate = FindCandidateForFriend(f, candidates);
+                    SwkNotificationListener.ShopInfo? visibleShop = FindVisibleShopForFriend(f, shopInfos);
+                    bool needsManual = f.HasCertificateMismatch || visibleShop is not null || candidate is not null;
+                    row = needsManual
+                        ? UserListRow.ForManualRequired(f, candidate, visibleShop)
+                        : UserListRow.ForUnreachableFriend(f);
+                }
+
+                // 状態遷移ログ（Kindが変わった時のみ）
+                if (tracker.LastKind != row.Kind)
+                {
+                    SwkLogger.Info(
+                        $"[UserList] StateTransition: FriendId={f.Id} " +
+                        $"{tracker.LastKind?.ToString() ?? "none"} → {row.Kind} missCount={tracker.MissCount}");
+                    tracker.LastKind = row.Kind;
+                }
+
+                rows.Add(row);
             }
         }
 
@@ -386,23 +431,29 @@ public partial class UserListWindow : Window
     private void SetStatusCountsText(
         int connected,
         int resumeRequired,
+        int autoRecovering,
+        int unstable,
         int relinkRequired,
-        int switchable,
+        int manualRequired,
         int unreach,
         int newShop,
         int windowsPcOnly,
         int installCandidate)
     {
         StatusTextBlock.Inlines.Clear();
-        AddStatusRun("登録済接続可能", connected, Color.FromRgb(76, 175, 80));
+        AddStatusRun("接続中", connected, Color.FromRgb(76, 175, 80));
         AddSeparatorRun();
-        AddStatusRun("再開待ち", resumeRequired, Color.FromRgb(191, 87, 0));
+        AddStatusRun("接続確認中", resumeRequired, Color.FromRgb(191, 87, 0));
         AddSeparatorRun();
-        AddStatusRun("接続更新候補", relinkRequired, Color.FromRgb(191, 87, 0));
+        AddStatusRun("復旧中", autoRecovering, Color.FromRgb(191, 87, 0));
         AddSeparatorRun();
-        AddStatusRun("切替候補", switchable, Color.FromRgb(191, 87, 0));
+        AddStatusRun("一時不安定", unstable, Color.FromRgb(191, 87, 0));
         AddSeparatorRun();
-        AddStatusRun("登録済不在", unreach, Color.FromRgb(150, 50, 40));
+        AddStatusRun("接続先更新あり", relinkRequired, Color.FromRgb(191, 87, 0));
+        AddSeparatorRun();
+        AddStatusRun("手動確認待ち", manualRequired, Color.FromRgb(150, 50, 40));
+        AddSeparatorRun();
+        AddStatusRun("接続不明", unreach, Color.FromRgb(150, 50, 40));
         AddSeparatorRun();
         AddStatusRun("登録可能", newShop, Color.FromRgb(255, 152, 0));
         AddSeparatorRun();
@@ -436,52 +487,58 @@ public partial class UserListWindow : Window
         await RunScanAndBuildAsync();
     }
 
-    private static bool TryFindRecoveryCandidateForFriend(
-        Friend friend,
-        IReadOnlyList<LanCandidate> candidates,
-        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos,
-        out LanCandidate? candidate,
-        out SwkNotificationListener.ShopInfo? shopInfo)
+    private static FriendConnectionTracker GetOrCreateTracker(string friendId)
     {
-        candidate = FindCandidateForFriend(friend, candidates);
-        shopInfo = null;
-        if (candidate is null)
+        if (!_connectionTrackers.TryGetValue(friendId, out FriendConnectionTracker? tracker))
         {
-            return false;
+            tracker = new FriendConnectionTracker();
+            _connectionTrackers[friendId] = tracker;
+        }
+        return tracker;
+    }
+
+    private static void ResetTracker(string friendId)
+    {
+        if (!_connectionTrackers.TryGetValue(friendId, out FriendConnectionTracker? tracker) ||
+            tracker.MissCount == 0)
+        {
+            return;
         }
 
-        string candidateHost = NormalizeHostName(candidate.HostName);
-        if (string.IsNullOrEmpty(candidateHost))
-        {
-            candidateHost = candidate.Address.ToString();
-        }
-        string candidateIp = candidate.Address.ToString();
-
-        shopInfo = shopInfos.FirstOrDefault(s =>
-            string.Equals(NormalizeHostName(s.MachineName), candidateHost, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(s.IpAddress, candidateIp, StringComparison.OrdinalIgnoreCase));
-        if (shopInfo is null)
-        {
-            return false;
-        }
-
-        bool sameShare = string.Equals(friend.ShareName, shopInfo.ShareName, StringComparison.OrdinalIgnoreCase);
-        bool sameHost = SameHost(friend.HostMachineName, candidate.HostName) ||
-            (!string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
-             string.Equals(friend.LastKnownAddress, candidateIp, StringComparison.OrdinalIgnoreCase));
-
-        if (sameHost && sameShare && !friend.HasCertificateMismatch)
-        {
-            return false;
-        }
-
-        return friend.HasCertificateMismatch || IsLikelySwitchMatch(friend, candidate, shopInfo);
+        UserListRowKind? prevKind = tracker.LastKind;
+        tracker.Reset();
+        SwkLogger.Info(
+            $"[UserList] StateTransition: FriendId={friendId} {prevKind?.ToString() ?? "none"} → recovered");
     }
 
     private async void ResumeButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button { Tag: UserListRow row } || row.Friend is null)
         {
+            return;
+        }
+
+        // 手動確認待ち：FriendsWindow を直接開いてユーザー判断を促す
+        if (row.Kind == UserListRowKind.ManualRequired)
+        {
+            _autoRefreshTimer.Stop();
+            try
+            {
+                IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
+                IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfosForManual = SwkNetworkCache.ShopInfos;
+                FriendsWindow pickup = new(this, row.Friend, row.Candidate, candidates, shopInfosForManual);
+                bool? result = pickup.ShowDialog();
+                SwkLogger.Info($"[UserList] ManualRequired FriendsWindow closed: FriendId={row.Friend.Id} result={result}");
+                if (result == true)
+                {
+                    _hasFriendUpdates = true;
+                    await RunScanAndBuildAsync();
+                }
+            }
+            finally
+            {
+                _autoRefreshTimer.Start();
+            }
             return;
         }
 
@@ -919,6 +976,29 @@ public partial class UserListWindow : Window
             SwkLogger.Warn($"UserListWindow.SaveUserListState failed: {ex.Message}");
         }
     }
+
+    private sealed class FriendConnectionTracker
+    {
+        public int MissCount { get; private set; }
+        public DateTime? FirstMissAt { get; private set; }
+        public UserListRowKind? LastKind { get; set; }
+
+        public void RecordMiss(bool hasHistory)
+        {
+            if (MissCount == 0 && hasHistory)
+            {
+                FirstMissAt = DateTime.Now;
+            }
+            MissCount++;
+        }
+
+        public void Reset()
+        {
+            MissCount = 0;
+            FirstMissAt = null;
+            LastKind = null;
+        }
+    }
 }
 
 file sealed class UserListSnapshotState
@@ -951,14 +1031,16 @@ file sealed class UserListSnapshotRow
 public enum UserListRowKind
 {
     // 値の小さい順に表示される(0 が先頭)。
-    ConnectedFriend = 0,        // Friend登録済み + 開店中 + 明示接続成功確認あり
-    ResumeRequiredFriend = 1,   // Friend登録済み + 開店中 + 接続成功確認待ち
-    RelinkCandidateFriend = 2,  // Friend登録済み + 同一相手っぽいが識別情報更新が必要
-    SwitchCandidate = 3,        // Friend登録済み + 接続先切替候補
-    NewShop = 4,                // Friend未登録 + 開店中
-    UnreachableFriend = 5,      // Friend登録済み + オフライン
-    WindowsPcOnly = 6,          // Friend未登録 + ShareWorkinなし（445+135応答）
-    InstallCandidate = 7,       // Friend未登録 + ポート21/22応答（インストール候補）
+    ConnectedFriend = 0,        // 接続中：Friend登録済み + 開店中 + 明示接続成功確認あり
+    ResumeRequiredFriend = 1,   // 接続確認中：Friend登録済み + 開店中 + 接続成功確認待ち
+    AutoRecovering = 2,         // 自動復旧中：liveShop消失後 MaxAutoRecoveryAttempts 回以内
+    Unstable = 3,               // 一時不安定：リトライ上限超過後 UnstableWindow 以内
+    RelinkCandidateFriend = 4,  // 接続先更新あり：同一ホストに別SwkInstanceIdが出現
+    ManualRequired = 5,         // 手動確認待ち：候補あり or cert-mismatch（元SwitchCandidate/UnreachableFriend統合）
+    NewShop = 6,                // 未登録：Friend未登録 + 開店中
+    UnreachableFriend = 7,      // 接続不明：候補なし・時間窓超過
+    WindowsPcOnly = 8,          // Friend未登録 + ShareWorkinなし（445+135応答）
+    InstallCandidate = 9,       // Friend未登録 + ポート21/22応答（インストール候補）
 }
 
 public sealed class UserListRow
@@ -1063,32 +1145,80 @@ public sealed class UserListRow
         ShopInfo = liveShop,
     };
 
-    public static UserListRow ForUnreachableFriend(
-        Friend friend,
-        LanCandidate? candidate = null,
-        SwkNotificationListener.ShopInfo? liveShop = null) => new()
+    public static UserListRow ForAutoRecovering(Friend friend, int missCount, int maxAttempts) => new()
     {
         NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "接続復旧中…",
         ShareFolderName = friend.ShareName,
-        StatusLabel = liveShop is not null
-            ? "登録済み / 要再確認"
-            : candidate is not null
-                ? "登録済み / 候補あり"
-                : "登録済み / 候補不明",
+        Memo = $"再試行 {missCount}/{maxAttempts}",
+        IpLabel = friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.AutoRecovering,
+        IconBrush = Brushes.White,
+        IconImage = LoadIconImage(friend.IconKey),
+        RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
+        NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
+        NameWeight = FontWeights.Normal,
+        Friend = friend,
+    };
+
+    public static UserListRow ForUnstable(Friend friend) => new()
+    {
+        NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "一時不安定",
+        ShareFolderName = friend.ShareName,
+        Memo = "接続先が一時的に見えません。自動復帰を試みています。",
+        IpLabel = friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.Unstable,
+        IconBrush = Brushes.White,
+        IconImage = LoadIconImage(friend.IconKey),
+        RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
+        NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
+        NameWeight = FontWeights.Normal,
+        Friend = friend,
+    };
+
+    public static UserListRow ForManualRequired(
+        Friend friend,
+        LanCandidate? candidate = null,
+        SwkNotificationListener.ShopInfo? visibleShop = null) => new()
+    {
+        NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "手動確認待ち",
+        ShareFolderName = friend.ShareName,
         Memo = friend.HasCertificateMismatch
-            ? "通知経路の確認が必要です。接続情報を再確認してください。"
-            : string.IsNullOrWhiteSpace(friend.Memo)
-                ? candidate is not null ? "接続先の見直し候補があります。" : "接続先を確認できていません。"
-                : friend.Memo,
-        IpLabel = liveShop?.IpAddress
-            ?? candidate?.Address.ToString()
-            ?? string.Empty,
-        Kind = UserListRowKind.UnreachableFriend,
+            ? "通知経路に問題があります。接続情報を再確認してください。"
+            : visibleShop is not null
+                ? $"候補：{visibleShop.MachineName}/{visibleShop.ShareName}。同じ相手か確認してください。"
+                : candidate is not null
+                    ? $"接続先候補（{(string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName)}）があります。"
+                    : "接続先を確認してください。",
+        IpLabel = visibleShop?.IpAddress ?? candidate?.Address.ToString() ?? friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.ManualRequired,
         IconBrush = Brushes.White,
         IconImage = LoadIconImage(friend.IconKey),
         RowBackground = new SolidColorBrush(Color.FromRgb(255, 235, 230)),
         NameForeground = new SolidColorBrush(Color.FromRgb(150, 50, 40)),
         NameWeight = FontWeights.SemiBold,
+        ResumeButtonLabel = "確認",
+        ResumeButtonVisibility = Visibility.Visible,
+        Friend = friend,
+        Candidate = candidate,
+        ShopInfo = visibleShop,
+    };
+
+    public static UserListRow ForUnreachableFriend(Friend friend) => new()
+    {
+        NameLabel = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName,
+        StatusLabel = "接続不明",
+        ShareFolderName = friend.ShareName,
+        Memo = "相手のPCが見つかりません。ネットワーク接続を確認してください。",
+        IpLabel = friend.LastKnownAddress ?? string.Empty,
+        Kind = UserListRowKind.UnreachableFriend,
+        IconBrush = Brushes.White,
+        IconImage = LoadIconImage(friend.IconKey),
+        RowBackground = new SolidColorBrush(Color.FromRgb(255, 235, 230)),
+        NameForeground = new SolidColorBrush(Color.FromRgb(150, 50, 40)),
+        NameWeight = FontWeights.Normal,
         Friend = friend,
     };
 
@@ -1106,32 +1236,6 @@ public sealed class UserListRow
             RowBackground = new SolidColorBrush(Color.FromRgb(255, 248, 225)),
             NameForeground = new SolidColorBrush(Color.FromRgb(255, 152, 0)),
             NameWeight = FontWeights.Normal,
-            Candidate = candidate,
-            ShopInfo = shopInfo,
-        };
-    }
-
-    public static UserListRow ForSwitchCandidate(
-        Friend friend,
-        LanCandidate candidate,
-        SwkNotificationListener.ShopInfo shopInfo)
-    {
-        string host = string.IsNullOrWhiteSpace(candidate.HostName) ? candidate.Address.ToString() : candidate.HostName!;
-        string friendName = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
-        return new UserListRow
-        {
-            NameLabel = friendName,
-            StatusLabel = "登録済み / 切替候補",
-            ShareFolderName = shopInfo.ShareName,
-            Memo = $"切替候補: {host}",
-            IpLabel = candidate.Address.ToString(),
-            Kind = UserListRowKind.SwitchCandidate,
-            IconBrush = Brushes.White,
-            IconImage = LoadIconImage(friend.IconKey),
-            RowBackground = new SolidColorBrush(Color.FromRgb(255, 243, 224)),
-            NameForeground = new SolidColorBrush(Color.FromRgb(191, 87, 0)),
-            NameWeight = FontWeights.SemiBold,
-            Friend = friend,
             Candidate = candidate,
             ShopInfo = shopInfo,
         };
