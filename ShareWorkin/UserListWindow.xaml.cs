@@ -247,6 +247,15 @@ public partial class UserListWindow : Window
             }
             else
             {
+                // cert-mismatch かつ liveShop が見えている → 即 ManualRequired（AutoRecovering/Unstable 不要）
+                if (f.HasCertificateMismatch && liveShop is not null)
+                {
+                    ResetTracker(f.Id);
+                    SwkLogger.Info($"[UserList] CertMismatch: FriendId={f.Id} → ManualRequired immediately");
+                    rows.Add(UserListRow.ForManualRequired(f, null, liveShop));
+                    continue;
+                }
+
                 // liveShop なし → 猶予状態を経由して最終判定
                 FriendConnectionTracker tracker = GetOrCreateTracker(f.Id);
                 bool hasHistory = !string.IsNullOrWhiteSpace(f.LastFoundAt);
