@@ -300,6 +300,9 @@ public partial class UserListWindow : Window
 
             SwkNotificationListener.ShopInfo? shopInfo = shopInfos
                 .FirstOrDefault(s => string.Equals(NormalizeHostName(s.MachineName), host, StringComparison.OrdinalIgnoreCase));
+            // hostname 一致失敗時は IP で再試行（mDNS suffix など正規化差異を吸収）
+            shopInfo ??= shopInfos
+                .FirstOrDefault(s => string.Equals(s.IpAddress, c.Address.ToString(), StringComparison.OrdinalIgnoreCase));
             if (IsCandidateCoveredByRegisteredFriend(c, shopInfo, friends))
                 continue;
             bool isOpen = shopInfo is not null;
@@ -776,7 +779,10 @@ public partial class UserListWindow : Window
             bool sameHost = SameHost(friend.HostMachineName, candidate.HostName);
             if (shopInfo is null)
             {
-                if (sameHost)
+                // hostname 不一致でも LastKnownAddress と candidate IP が一致すれば既登録扱い
+                bool sameIp = !string.IsNullOrWhiteSpace(friend.LastKnownAddress) &&
+                    string.Equals(friend.LastKnownAddress, candidate.Address.ToString(), StringComparison.OrdinalIgnoreCase);
+                if (sameHost || sameIp)
                 {
                     return true;
                 }
