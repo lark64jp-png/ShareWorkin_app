@@ -485,6 +485,11 @@ public partial class MainWindow : Window
                 return (int)System.Windows.DragDropEffects.None;
             }
 
+            if (_currentMode == DisplayMode.FriendShop && !IsInternalDestinationWritable(destinationFolder))
+            {
+                return (int)System.Windows.DragDropEffects.None;
+            }
+
             if (IsHoldFolderPath(destinationFolder))
             {
                 return (int)System.Windows.DragDropEffects.Move;
@@ -495,9 +500,15 @@ public partial class MainWindow : Window
                 : (int)System.Windows.DragDropEffects.Move;
         }
 
-        return data.GetDataPresent(Forms.DataFormats.FileDrop)
-            ? (int)System.Windows.DragDropEffects.Copy
-            : (int)System.Windows.DragDropEffects.None;
+        if (data.GetDataPresent(Forms.DataFormats.FileDrop))
+        {
+            if (_currentMode == DisplayMode.FriendShop && !IsInternalDestinationWritable(destinationFolder))
+            {
+                return (int)System.Windows.DragDropEffects.None;
+            }
+            return (int)System.Windows.DragDropEffects.Copy;
+        }
+        return (int)System.Windows.DragDropEffects.None;
     }
 
     internal async void HandleOleDrop(Forms.IDataObject data, DragDropKeyStates keyStates, System.Windows.Point screenPoint)
@@ -3732,6 +3743,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!Directory.Exists(destinationFolder)) return;
 
+        ShopItem? placeDestItem = ShopItems.FirstOrDefault(i =>
+            string.Equals(i.FullPath, destinationFolder, StringComparison.OrdinalIgnoreCase));
+        SwkLogger.Info(
+            $"Trace.DropDebug.Place: mode={_currentMode} dest={destinationFolder} " +
+            $"destInShopItems={placeDestItem is not null} destIsReadOnly={placeDestItem?.IsReadOnly} " +
+            $"count={paths.Count}");
+
+        if (_currentMode == DisplayMode.FriendShop && placeDestItem?.IsReadOnly == true)
+        {
+            SetTransientStatus("このフォルダーにはコピーできません。");
+            return;
+        }
+
         if (!TryConfirmInteractionAction("置く", paths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
         {
             return;
@@ -3850,6 +3874,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task MoveInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
+        ShopItem? moveDestItem = ShopItems.FirstOrDefault(i =>
+            string.Equals(i.FullPath, destinationFolder, StringComparison.OrdinalIgnoreCase));
+        SwkLogger.Info(
+            $"Trace.DropDebug.Move: mode={_currentMode} src={sourcePath} dest={destinationFolder} " +
+            $"destInShopItems={moveDestItem is not null} destIsReadOnly={moveDestItem?.IsReadOnly}");
+
         if (!TryConfirmInteractionAction("移す", [Path.GetFileName(sourcePath)], out string? interactionMessage))
         {
             return;
@@ -3940,6 +3970,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task CopyInternalDraggedItemAsync(string sourcePath, string destinationFolder)
     {
+        ShopItem? copyDestItem = ShopItems.FirstOrDefault(i =>
+            string.Equals(i.FullPath, destinationFolder, StringComparison.OrdinalIgnoreCase));
+        SwkLogger.Info(
+            $"Trace.DropDebug.Copy: mode={_currentMode} src={sourcePath} dest={destinationFolder} " +
+            $"destInShopItems={copyDestItem is not null} destIsReadOnly={copyDestItem?.IsReadOnly}");
+
         if (!TryConfirmInteractionAction("コピーする", [Path.GetFileName(sourcePath)], out string? interactionMessage))
         {
             return;
@@ -6107,6 +6143,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         out string? interactionMessage)
     {
         interactionMessage = null;
+
+        SwkLogger.Info(
+            $"Trace.DropDebug.TryConfirm: action={actionLabel} mode={_currentMode} " +
+            $"targets=[{string.Join(", ", targetNames)}]");
 
         if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null)
         {
@@ -8490,7 +8530,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return false;
             }
 
-            return destinationItem is not null && Directory.Exists(destinationItem.FullPath);
+            if (destinationItem is null || !Directory.Exists(destinationItem.FullPath))
+            {
+                return false;
+            }
+
+            if (_currentMode == DisplayMode.FriendShop && destinationItem.IsReadOnly)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         string? destination = destinationItem?.FullPath ?? _dropTargetItem?.FullPath ?? _currentFolder;
@@ -8502,7 +8552,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_currentMode == DisplayMode.FriendShop &&
             e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop))
         {
-            return IsDirectoryWritable(destination);
+            return IsInternalDestinationWritable(destination);
         }
 
         return true;
@@ -8796,6 +8846,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return false;
+    }
+
+    private bool IsInternalDestinationWritable(string destinationFolder)
+    {
+        return !ShopItems.Any(i =>
+            string.Equals(i.FullPath, destinationFolder, StringComparison.OrdinalIgnoreCase) &&
+            i.IsReadOnly);
     }
 
     private bool IsInternalDropTargetAllowed(string destinationFolder, System.Windows.IDataObject data, DragDropKeyStates keyStates)
@@ -9833,6 +9890,8 @@ internal sealed class ExplorerOleDropTarget : IOleDropTarget
             _owner.UpdateExternalDropTargetHighlightFromScreenPoint(new System.Windows.Point(pt.x, pt.y), data, keyStates));
         pdwEffect = ResolveEffect(data, keyStates, pt);
         _lastEffect = pdwEffect;
+        bool isInternal = _owner.HasInternalDraggedPaths(data);
+        SwkLogger.Info($"Trace.DropDebug.OleDrop: pdwEffect={pdwEffect} isInternal={isInternal} → HandleOleDrop unconditionally called");
         _ = _owner.Dispatcher.InvokeAsync(() =>
             _owner.HandleOleDrop(data, keyStates, new System.Windows.Point(pt.x, pt.y)));
         _currentData = null;
