@@ -43,16 +43,12 @@ public sealed class TrayApp : IDisposable
             Text = "ShareWorkin",
             Visible = false
         };
-        _notifyIcon.MouseDoubleClick += (_, _) => OpenUiProcess();
+        _notifyIcon.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) OpenUiProcess(); };
         _notifyIcon.BalloonTipClicked += (_, _) => OpenLastBalloonFolder();
 
         _trayMenu = new Forms.ContextMenuStrip();
-        var showItem = new Forms.ToolStripMenuItem("画面を開く");
-        showItem.Click += (_, _) => OpenUiProcess();
         var exitItem = new Forms.ToolStripMenuItem("アプリを終了");
         exitItem.Click += (_, _) => RequestExitWithAuth();
-        _trayMenu.Items.Add(showItem);
-        _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add(exitItem);
         _notifyIcon.ContextMenuStrip = _trayMenu;
     }
