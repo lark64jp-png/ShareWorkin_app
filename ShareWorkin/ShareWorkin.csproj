@@ -9,10 +9,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ShareWorkin</AssemblyName>
     <RootNamespace>ShareWorkin</RootNamespace>
-    <Version>1.22.0</Version>
-    <FileVersion>1.22.0.0</FileVersion>
-    <AssemblyVersion>1.22.0.0</AssemblyVersion>
-    <InformationalVersion>1.22</InformationalVersion>
+    <Version>1.23.0</Version>
+    <FileVersion>1.23.0.0</FileVersion>
+    <AssemblyVersion>1.23.0.0</AssemblyVersion>
+    <InformationalVersion>1.23</InformationalVersion>
     <AssemblyTitle>ShareWorkin</AssemblyTitle>
     <Description>共有相手と自分のPC内部のフォルダーを共有する ShareWorkin 管理アプリ</Description>
     <Company>株式会社メディアハウス</Company>
