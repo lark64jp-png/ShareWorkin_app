@@ -3741,18 +3741,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task PlaceExternalFilesAsync(IReadOnlyList<string> paths, string destinationFolder)
     {
-        if (!Directory.Exists(destinationFolder)) return;
+        bool destinationExists = Directory.Exists(destinationFolder);
+        if (!destinationExists) return;
 
         ShopItem? placeDestItem = ShopItems.FirstOrDefault(i =>
             string.Equals(i.FullPath, destinationFolder, StringComparison.OrdinalIgnoreCase));
+        bool writable = _currentMode != DisplayMode.FriendShop || IsDirectoryWritable(destinationFolder);
         SwkLogger.Info(
             $"Trace.DropDebug.Place: mode={_currentMode} dest={destinationFolder} " +
             $"destInShopItems={placeDestItem is not null} destIsReadOnly={placeDestItem?.IsReadOnly} " +
             $"count={paths.Count}");
 
+        if (_currentMode == DisplayMode.FriendShop && placeDestItem?.IsSharedOff == true)
+        {
+            ShowBlockedExternalDropMessage("このフォルダーにはコピーできません。");
+            return;
+        }
+
         if (_currentMode == DisplayMode.FriendShop && placeDestItem?.IsReadOnly == true)
         {
-            SetTransientStatus("このフォルダーにはコピーできません。");
+            ShowBlockedExternalDropMessage("このフォルダーにはコピーできません。");
             return;
         }
 
@@ -3766,11 +3774,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Info(
             $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={paths.Count} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
 
-        if (_currentMode == DisplayMode.FriendShop && !IsDirectoryWritable(destinationFolder))
+        if (_currentMode == DisplayMode.FriendShop && !writable)
         {
             SwkLogger.Info($"Explorer[{_currentMode}]: Place blocked - not writable: {destinationFolder}");
             SwkLogger.Info($"Trace.ExternalFlow.Sender.Blocked: mode={modeLabel} dest={destinationFolder} reason=not-writable");
-            SetTransientStatus("このフォルダーにはコピーできません。");
+            ShowBlockedExternalDropMessage("このフォルダーにはコピーできません。");
             return;
         }
 
@@ -8491,6 +8499,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         OpenStatusTextBlock.Text = message;
         _transientStatusTimer.Stop();
         _transientStatusTimer.Start();
+    }
+
+    private void ShowBlockedExternalDropMessage(string message)
+    {
+        SetTransientStatus(message);
+        System.Windows.MessageBox.Show(
+            this,
+            message,
+            "ShareWorkin",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     private void TransientStatusTimer_Tick(object? sender, EventArgs e)
