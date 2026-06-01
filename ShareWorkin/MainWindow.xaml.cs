@@ -198,6 +198,12 @@ public partial class MainWindow : Window
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
     private bool _suppressNotificationModeSelectionChanged;
+    private bool _shopRefreshAttentionNeeded;
+    private bool _skipNextShopRefreshAttentionClear;
+    private static readonly System.Windows.Media.Brush ShopRefreshAttentionBackgroundBrush =
+        new SolidColorBrush(System.Windows.Media.Color.FromRgb(218, 238, 248));
+    private static readonly System.Windows.Media.Brush ShopRefreshAttentionBorderBrush =
+        new SolidColorBrush(System.Windows.Media.Color.FromRgb(133, 193, 233));
 
     public ObservableCollection<ArrivedItem> ArrivedItems { get; } = [];
 
@@ -209,6 +215,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = this;
+        UpdateRefreshButtonHighlight();
 
         _pipeClient.TrayExiting += () =>
             _ = Dispatcher.InvokeAsync(() =>
@@ -738,6 +745,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        _skipNextShopRefreshAttentionClear = true;
+        SetShopRefreshAttentionNeeded(true);
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
@@ -2021,6 +2030,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private async Task ExecuteRefreshAsync()
     {
         using var _ = Processing();
+        SetShopRefreshAttentionNeeded(false);
         CancelDeferredRefresh();
         ShopItems.Clear();
 
@@ -2129,6 +2139,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? _activeFriendShop.HostMachineName
             : _activeFriendShop.DisplayName;
         SetTransientStatus($"{label} が見つかりません。ユーザー一覧で確認してください。");
+        SetShopRefreshAttentionNeeded(false);
         UserListWindow window = new(this) { Owner = this };
         bool? result = window.ShowDialog();
         PopulateExplorerDropdown();
@@ -5018,6 +5029,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
         CancelFolderSizeCalculation();
+        SetShopRefreshAttentionNeeded(false);
         _currentMode = DisplayMode.Hold;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
@@ -5033,6 +5045,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void NavigateToShopRoot(bool addHistory)
     {
         CancelFolderSizeCalculation();
+        if (!_skipNextShopRefreshAttentionClear)
+        {
+            SetShopRefreshAttentionNeeded(false);
+        }
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
@@ -6545,6 +6561,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void RefreshShopItems()
     {
         CancelFolderSizeCalculation();
+        bool skipShopRefreshAttentionClearOnce = _skipNextShopRefreshAttentionClear;
+        _skipNextShopRefreshAttentionClear = false;
         List<string> previousVisiblePaths = CaptureVisibleShopItemPaths();
         HashSet<string> selectedPaths = CaptureSelectedShopItemPaths();
 
@@ -6643,6 +6661,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             bool displayStateChanged = HasVisibleShopItemsChanged(previousVisiblePaths, nextVisibleItems);
 
             ReplaceVisibleShopItems(nextVisibleItems);
+            if (_currentMode == DisplayMode.Shop && !skipShopRefreshAttentionClearOnce)
+            {
+                SetShopRefreshAttentionNeeded(false);
+            }
 
             UpdateBreadcrumb();
             if (!ApplyPendingFocus() && !displayStateChanged)
@@ -7662,6 +7684,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (target.Friend is not Friend friend)
         {
             StopFriendShopPolling();
+            SetShopRefreshAttentionNeeded(false);
             _activeFriendShop = null;
             _activeFriendShopRootPath = null;
             _missingFriendShopStatus = null;
@@ -7976,6 +7999,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Info($"Investigation.NavigateToFriendShopAsync.Success: friend={label} resolved={accessiblePath}");
         FriendShareAccessTracker.MarkVerified(friend, liveShop);
         UpdateFriendExternalState(friend, liveShop);
+        SetShopRefreshAttentionNeeded(false);
         _activeFriendShopRootPath = accessiblePath;
         bool hadMissingStatus = _missingFriendShopStatus != null;
         _missingFriendShopStatus = null;
@@ -8243,6 +8267,36 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         _friendRefreshCooldownUntil[friend.Id] = DateTime.UtcNow + FriendReconnectRetryCooldown;
+    }
+
+    private void SetShopRefreshAttentionNeeded(bool needed)
+    {
+        _shopRefreshAttentionNeeded = needed;
+        if (!needed)
+        {
+            _skipNextShopRefreshAttentionClear = false;
+        }
+
+        UpdateRefreshButtonHighlight();
+    }
+
+    private void UpdateRefreshButtonHighlight()
+    {
+        if (RefreshButton is null)
+        {
+            return;
+        }
+
+        if (_shopRefreshAttentionNeeded)
+        {
+            RefreshButton.Background = ShopRefreshAttentionBackgroundBrush;
+            RefreshButton.BorderBrush = ShopRefreshAttentionBorderBrush;
+        }
+        else
+        {
+            RefreshButton.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+            RefreshButton.ClearValue(System.Windows.Controls.Control.BorderBrushProperty);
+        }
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)
