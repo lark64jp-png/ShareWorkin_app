@@ -896,6 +896,11 @@
                                        Text="最終通知テスト日時: 未実行"
                                        Margin="0,6,0,0"
                                        Foreground="#5D5448" />
+                            <TextBlock x:Name="NotificationSupportHintTextBlock"
+                                       Text="通知が表示されない場合は、Windows通知設定でShareWorkinがONか確認してください。"
+                                       Margin="0,6,0,0"
+                                       Foreground="#5D5448"
+                                       TextWrapping="Wrap" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="2">

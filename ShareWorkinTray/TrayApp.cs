@@ -371,8 +371,8 @@ public sealed class TrayApp : IDisposable
     public void ShowTestNotification(string? folder)
     {
         ShowBalloonTip(
-            "ShareWorkin のテスト通知",
-            "この通知が見えていれば、ShareWorkinの通知表示は有効です。",
+            "ShareWorkin 通知テスト",
+            "通知は正常に表示されています。",
             folder);
     }
 

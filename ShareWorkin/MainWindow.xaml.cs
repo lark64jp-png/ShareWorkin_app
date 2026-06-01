@@ -3026,6 +3026,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (NotificationSupportMonitorTextBlock is null ||
             NotificationSupportStateTextBlock is null ||
             NotificationSupportLastTestTextBlock is null ||
+            NotificationSupportHintTextBlock is null ||
             NotificationSupportButton is null ||
             OpenNotificationSettingsButton is null)
         {
@@ -3039,6 +3040,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         NotificationSupportLastTestTextBlock.Text = _lastNotificationTestAt.HasValue
             ? $"最終通知テスト日時: {_lastNotificationTestAt.Value:yyyy/MM/dd HH:mm}"
             : "最終通知テスト日時: 未実行";
+        NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled);
         UpdateNotificationSupportButtonHighlight(isAttentionNeeded);
     }
 
@@ -3053,6 +3055,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             NotificationSupportState.TestSent => "テスト送信済み",
             _ => "未確認"
+        };
+    }
+
+    private static string FormatNotificationSupportHint(NotificationSupportState state, bool windowsNotificationsEnabled)
+    {
+        if (!windowsNotificationsEnabled)
+        {
+            return "Windows通知設定で、ShareWorkin がONか確認してください。";
+        }
+
+        return state switch
+        {
+            NotificationSupportState.TestSent => "通知が表示されない場合は、Windows通知設定でShareWorkinがONか確認してください。",
+            _ => "まずは「テスト通知を送る」で表示を確認し、見えない場合はWindows通知設定を確認してください。"
         };
     }
 
@@ -5635,7 +5651,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        string summaryText = $"{count} 件の受け取りを検知しました。";
+        string summaryText = $"{count} 件のファイルを受け取りました。";
         AppendHistory(
             HistoryChannel.Notification,
             summaryText,
