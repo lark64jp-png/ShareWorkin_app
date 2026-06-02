@@ -18,7 +18,7 @@ Write-Host ""
 git rev-parse --show-toplevel | Out-Null
 
 # 同期対象
-$SyncTarget = "_works/GitHub同期"
+$SyncTarget = "_works"
 $ScriptTarget = "_works/同期実行"
 
 if (!(Test-Path $SyncTarget)) {
