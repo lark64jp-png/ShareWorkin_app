@@ -1,6 +1,13 @@
 # Local planning drafts
 _works/
 
+# AI / review working folders
+.codex/
+.claude/
+_chatgpt_review_staging/
+_minimal_review_package/
+_works/
+
 # Local account/workspace grouping folders
 ShareWorkin_git/
 

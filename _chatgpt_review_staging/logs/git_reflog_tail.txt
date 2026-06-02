@@ -1,5 +1,0 @@
-Recent reflog tail relevant to this issue
-
-1e9320a15a3ec6ea049609e4bc70ef87f7dda6d1 9557dcbb50b36addfa3f44bb26438359ec950ba1 ShareWorkin Developer <koita5959@gmail.com> 1779698308 +0900 commit: Fix receive notifications and history labels
-9557dcbb50b36addfa3f44bb26438359ec950ba1 97b5f63c66b2ca204a52690ef3813d9032a09d0f ShareWorkin Developer <koita5959@gmail.com> 1779699138 +0900 commit: Fix incoming sender resolution and receive message display
-97b5f63c66b2ca204a52690ef3813d9032a09d0f 304eb897ebfc60748a5ae2ca5b0f04c533d9b5c6 ShareWorkin Developer <koita5959@gmail.com> 1779701033 +0900 commit: Reflect notification channel issues in relationship status
