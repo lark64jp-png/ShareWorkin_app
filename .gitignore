@@ -5,8 +5,35 @@ backup/
 _chatgpt_review_staging/
 _minimal_review_package/
 
-# autosync is part of the repo layout, but user work area stays untracked
-autosync/_works/
+# _works stays excluded by default; only curated sync targets are tracked
+_works/**
+!_works/
+
+# GitHub sync documents
+!_works/GitHub同期/
+!_works/GitHub同期/**
+
+# Exclude generated/binary/log artifacts even under GitHub同期
+_works/GitHub同期/**/*.zip
+_works/GitHub同期/**/*.exe
+_works/GitHub同期/**/*.msi
+_works/GitHub同期/**/*.log
+_works/GitHub同期/**/*.tmp
+_works/GitHub同期/**/*.7z
+_works/GitHub同期/**/*.rar
+_works/GitHub同期/**/*.iso
+_works/GitHub同期/**/*.bin
+_works/GitHub同期/**/*.dmp
+_works/GitHub同期/**/*.pdb
+
+# Sync runner scripts only
+!_works/同期実行/
+_works/同期実行/**
+!_works/同期実行/*.bat
+!_works/同期実行/*.ps1
+
+# Trash always stays out of Git
+_works/Trash/
 
 # Build output
 **/bin/
