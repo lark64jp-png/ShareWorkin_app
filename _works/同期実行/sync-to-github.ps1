@@ -1,12 +1,10 @@
 # ShareWorkin _works GitHub sync helper
-# 実行位置:
-# H:\ShareWorkin_app\_works\同期実行\sync-to-github.ps1
 
 $ErrorActionPreference = "Stop"
 
-# このps1の位置から Git ルート H:\ShareWorkin_app へ戻る
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $ScriptDir "..\..")
+$ScriptTarget = $ScriptDir.Substring($ProjectRoot.Path.Length + 1).Replace('\', '/')
 
 Set-Location $ProjectRoot
 
@@ -14,38 +12,36 @@ Write-Host "=== ShareWorkin _works GitHub sync ==="
 Write-Host "ProjectRoot: $ProjectRoot"
 Write-Host ""
 
-# Gitリポジトリ確認
+# Verify git repository
 git rev-parse --show-toplevel | Out-Null
 
-# 同期対象
 $SyncTarget = "_works"
-$ScriptTarget = "_works/同期実行"
 
 if (!(Test-Path $SyncTarget)) {
     New-Item -ItemType Directory -Path $SyncTarget | Out-Null
-    Write-Host "作成: $SyncTarget"
+    Write-Host "Created: $SyncTarget"
 }
 
-Write-Host "現在の状態を確認します..."
+Write-Host "Current status:"
 git status --short
 
 Write-Host ""
-Write-Host "同期対象をステージします..."
+Write-Host "Staging sync target..."
 
-# 同期用フォルダーと実行スクリプトだけを対象にする
+# Stage _works plus the sync scripts. .gitignore exclusions still apply.
 git add ".gitignore"
 git add "$SyncTarget"
 git add "$ScriptTarget/*.ps1"
 git add "$ScriptTarget/*.bat"
 
 Write-Host ""
-Write-Host "ステージ後の状態:"
+Write-Host "Status after staging:"
 git status --short
 
 $HasStaged = git diff --cached --quiet
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
-    Write-Host "コミット対象の変更はありません。"
+    Write-Host "No staged changes."
     exit 0
 }
 
@@ -53,13 +49,13 @@ $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm"
 $CommitMessage = "Update _works files $Timestamp"
 
 Write-Host ""
-Write-Host "コミットします: $CommitMessage"
+Write-Host "Committing: $CommitMessage"
 git commit -m "$CommitMessage"
 
 Write-Host ""
-Write-Host "GitHubへpushします..."
+Write-Host "Pushing to GitHub..."
 git push origin main
 
 Write-Host ""
-Write-Host "完了しました。最終状態:"
+Write-Host "Done. Final status:"
 git status
