@@ -1,25 +1,24 @@
-# Local planning drafts
-_works/
-
-# AI / review working folders
+# Project management root exclusions
+backup/
 .codex/
 .claude/
 _chatgpt_review_staging/
 _minimal_review_package/
-_works/
 
-# Local account/workspace grouping folders
-ShareWorkin_git/
+# autosync is part of the repo layout, but user work area stays untracked
+autosync/_works/
 
 # Build output
-bin/
-obj/
-build/
-dist/
+**/bin/
+**/obj/
+repo/build/
+repo/dist/
 
 # Visual Studio / Rider
 .vs/
 .idea/
+**/.vs/
+**/.idea/
 *.user
 *.suo
 *.userosscache
@@ -33,12 +32,18 @@ TestResults/
 # Installer compiler temporary files
 *.tmp
 
-# Build artifacts and runtime installer (kept out of source history)
-ShareWorkin_v*_install*.exe
-ShareWorkin_v*_Setup.zip
-ShareWorkin_v*_SHA256*.txt
-ChatGPT相談用_*.zip
-windowsdesktop-runtime-*.exe
+# Managed artifacts under repo/builds: keep docs and hash text only
+repo/builds/**
+!repo/builds/
+!repo/builds/**/*.md
+!repo/builds/**/*SHA256*.txt
+
+# Build artifacts and runtime installer kept out of source history
+repo/ShareWorkin_v*_install*.exe
+repo/ShareWorkin_v*_Setup.zip
+repo/ShareWorkin_v*_SHA256*.txt
+repo/ChatGPT相談用_*.zip
+repo/windowsdesktop-runtime-*.exe
 
 # OS files
 Thumbs.db

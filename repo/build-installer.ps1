@@ -10,14 +10,15 @@ $root = $PSScriptRoot
 $project = Join-Path $root "ShareWorkin\ShareWorkin.csproj"
 $trayProject = Join-Path $root "ShareWorkinTray\ShareWorkinTray.csproj"
 $publishDir = Join-Path $root "dist\publish\ShareWorkin"
+$artifactsDir = Join-Path $root "builds"
 $innoScript = Join-Path $root "ShareWorkin.iss"
 $readmeName = -join ([char[]](0x3054, 0x5229, 0x7528, 0x306b, 0x3042, 0x305f, 0x3063, 0x3066)) + ".txt"
 $readme = Join-Path $root $readmeName
 $runtimeInstallerName = "windowsdesktop-runtime-8.0.24-win-x64.exe"
-$runtimeInstaller = Join-Path $root $runtimeInstallerName
-$hashFile = Join-Path $root "ShareWorkin_v1.23_SHA256.txt"
-$zipFile = Join-Path $root "ShareWorkin_v1.23_Setup.zip"
-$installer = Join-Path $root "ShareWorkin_v1.23_install.exe"
+$runtimeInstaller = Join-Path $artifactsDir $runtimeInstallerName
+$hashFile = Join-Path $artifactsDir "ShareWorkin_v1.23_SHA256.txt"
+$zipFile = Join-Path $artifactsDir "ShareWorkin_v1.23_Setup.zip"
+$installer = Join-Path $artifactsDir "ShareWorkin_v1.23_install.exe"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 $appVersion = "1.23"
 $informationalVersion = $appVersion
@@ -143,6 +144,7 @@ if (Test-Path -LiteralPath $publishDir) {
     Remove-Item -LiteralPath $publishDir -Recurse -Force
 }
 
+New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 $cleanupPatterns = @(
     "ShareWorkin_v1.20_install*.exe",
@@ -202,7 +204,7 @@ $cleanupPatterns = @(
     "ShareWorkin1.02_SHA256.txt"
 )
 foreach ($pattern in $cleanupPatterns) {
-    Get-ChildItem -LiteralPath $root -Filter $pattern -File -ErrorAction SilentlyContinue |
+    Get-ChildItem -LiteralPath $artifactsDir -Filter $pattern -File -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 }
 

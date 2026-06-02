@@ -8,13 +8,13 @@ RUNTIME="${2:-win-x64}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$ROOT_DIR/ShareWorkin/ShareWorkin.csproj"
 PUBLISH_DIR="$ROOT_DIR/dist/publish/ShareWorkin"
-OUTPUT_DIR="$ROOT_DIR"
+OUTPUT_DIR="$ROOT_DIR/builds"
 INNO_SCRIPT="$ROOT_DIR/ShareWorkin.iss"
 README_TXT="$ROOT_DIR/ご利用にあたって.txt"
 RUNTIME_INSTALLER="windowsdesktop-runtime-8.0.24-win-x64.exe"
-RUNTIME_EXE="$ROOT_DIR/$RUNTIME_INSTALLER"
-HASH_FILE="$ROOT_DIR/ShareWorkin_v1.04_SHA256.txt"
-ZIP_FILE="$ROOT_DIR/ShareWorkin_v1.04_Setup.zip"
+RUNTIME_EXE="$OUTPUT_DIR/$RUNTIME_INSTALLER"
+HASH_FILE="$OUTPUT_DIR/ShareWorkin_v1.04_SHA256.txt"
+ZIP_FILE="$OUTPUT_DIR/ShareWorkin_v1.04_Setup.zip"
 DOTNET_DIR="${DOTNET_DIR:-$HOME/.dotnet-msft}"
 DOTNET_BIN="$DOTNET_DIR/dotnet"
 
@@ -55,9 +55,11 @@ if [[ -z "$ISCC_PATH" ]]; then
   exit 1
 fi
 
+mkdir -p "$OUTPUT_DIR"
+
 if [[ ! -f "$RUNTIME_EXE" ]]; then
   echo "Runtime installer not found: $RUNTIME_EXE" >&2
-  echo "Place '$RUNTIME_INSTALLER' in ShareWorkin_app before running." >&2
+  echo "Place '$RUNTIME_INSTALLER' in repo/builds before running." >&2
   exit 1
 fi
 
