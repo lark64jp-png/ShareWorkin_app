@@ -441,9 +441,14 @@ public static class SmbNtfsManager
             return false;
         }
 
-        if (!RunIcacls(new[] { folderPath, "/setowner", $"*{ownerSid}" }, "Hold owner"))
+        bool ownerAligned = RunIcacls(new[] { folderPath, "/setowner", $"*{ownerSid}" }, "Hold owner");
+        if (!ownerAligned && !CanModifyAcl(folderPath))
         {
             return false;
+        }
+        if (!ownerAligned)
+        {
+            SwkLogger.Warn($"SetPrivateHoldFolderPermissions: owner alignment skipped but ACL is writable ({folderPath})");
         }
 
         if (!RunIcacls(new[] { folderPath, "/inheritance:r" }, "Hold disable inheritance"))
