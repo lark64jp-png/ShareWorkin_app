@@ -195,6 +195,7 @@ public partial class MainWindow : Window
     private string? _pendingInteractionMessage;
     private DateTime? _lastNotificationTestAt;
     private NotificationSupportState _notificationSupportState = NotificationSupportState.Unverified;
+    private const string NotificationSettingsAppId = "ShareWorkin.MediaHouse";
     private int _processingDepth;
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
@@ -3047,21 +3048,27 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
-        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled);
+        bool shareWorkinNotificationsEnabled = AreShareWorkinNotificationsEnabled();
+        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
         NotificationSupportMonitorTextBlock.Text = $"共有監視: {(_isShopOpen ? "ON" : "OFF")}";
-        NotificationSupportStateTextBlock.Text = $"通知状態: {FormatNotificationSupportState(_notificationSupportState, windowsNotificationsEnabled)}";
+        NotificationSupportStateTextBlock.Text = $"通知状態: {FormatNotificationSupportState(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationsEnabled)}";
         NotificationSupportLastTestTextBlock.Text = _lastNotificationTestAt.HasValue
             ? $"最終通知テスト日時: {_lastNotificationTestAt.Value:yyyy/MM/dd HH:mm}"
             : "最終通知テスト日時: 未実行";
-        NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled);
+        NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
         UpdateNotificationSupportButtonHighlight(isAttentionNeeded);
     }
 
-    private static string FormatNotificationSupportState(NotificationSupportState state, bool windowsNotificationsEnabled)
+    private static string FormatNotificationSupportState(NotificationSupportState state, bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
     {
         if (!windowsNotificationsEnabled)
         {
             return "Windows通知OFF";
+        }
+
+        if (!shareWorkinNotificationsEnabled)
+        {
+            return "ShareWorkin通知未確認";
         }
 
         return state switch
@@ -3071,11 +3078,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         };
     }
 
-    private static string FormatNotificationSupportHint(NotificationSupportState state, bool windowsNotificationsEnabled)
+    private static string FormatNotificationSupportHint(NotificationSupportState state, bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
     {
         if (!windowsNotificationsEnabled)
         {
             return "Windows通知設定で、ShareWorkin がONか確認してください。";
+        }
+
+        if (!shareWorkinNotificationsEnabled)
+        {
+            return "Windows通知設定で、ShareWorkin が送信者一覧に現れてONになっているか確認してください。";
         }
 
         return state switch
@@ -3105,9 +3117,38 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled)
+    private static bool AreShareWorkinNotificationsEnabled()
+    {
+        try
+        {
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(
+                $@"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\{NotificationSettingsAppId}",
+                false);
+
+            if (key is null)
+            {
+                return false;
+            }
+
+            object? value = key.GetValue("Enabled");
+            return value switch
+            {
+                int intValue => intValue != 0,
+                byte byteValue => byteValue != 0,
+                _ => true
+            };
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"AreShareWorkinNotificationsEnabled failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
     {
         return !windowsNotificationsEnabled ||
+               !shareWorkinNotificationsEnabled ||
                _notificationMode == NotificationMode.Off ||
                _notificationSupportState == NotificationSupportState.Unverified;
     }
