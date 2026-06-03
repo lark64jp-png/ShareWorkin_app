@@ -37,6 +37,11 @@ public partial class MainWindow : Window
 
     private const int MaxArrivedItemCount = 100;
     private const string HoldFolderName = "保留";
+    private enum ShopRestoreMode
+    {
+        PreserveManagedPermissions,
+        NormalizeSharedFolderOnly,
+    }
     internal const string InternalDragPathFormat = "ShareWorkin.InternalPath";
     internal const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
     private static readonly bool EnableExplorerOleDropTarget = true;
@@ -5307,7 +5312,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _wasOpenAtLastShutdown = true;
         SaveSettings();
 
-        ReapplyPermissionMapToNtfs(_shopFolder, runInBackground: false);
+        ApplyShopRestorePolicyOnOpen(_shopFolder);
 
         UpdateShopState(true);
         if (_currentMode == DisplayMode.Shop)
@@ -5354,6 +5359,148 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         else
         {
             Apply();
+        }
+    }
+
+    private void ApplyShopRestorePolicyOnOpen(string? shopRoot)
+    {
+        if (string.IsNullOrWhiteSpace(shopRoot) || !Directory.Exists(shopRoot))
+        {
+            return;
+        }
+
+        string root = Path.GetFullPath(shopRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        ShopRestoreMode restoreMode = DetermineShopRestoreMode(root);
+        SwkLogger.Info($"ApplyShopRestorePolicyOnOpen: root={root} mode={restoreMode}");
+
+        if (restoreMode == ShopRestoreMode.PreserveManagedPermissions)
+        {
+            if (!HasStoredPermissionEntriesForShop(root))
+            {
+                bool imported = ImportOwnerPermissionsFromManifest(root);
+                SwkLogger.Info($"ApplyShopRestorePolicyOnOpen: importedManifest={imported}");
+            }
+
+            ReapplyPermissionMapToNtfs(root, runInBackground: false);
+            return;
+        }
+
+        NormalizeShopToDefaultFullShare(root);
+    }
+
+    private ShopRestoreMode DetermineShopRestoreMode(string shopRoot)
+    {
+        if (HasStoredPermissionEntriesForShop(shopRoot))
+        {
+            return ShopRestoreMode.PreserveManagedPermissions;
+        }
+
+        string manifestPath = Path.Combine(shopRoot, ShopPermissionManifest.FileName);
+        if (File.Exists(PermissionsPath) && File.Exists(manifestPath))
+        {
+            return ShopRestoreMode.PreserveManagedPermissions;
+        }
+
+        return ShopRestoreMode.NormalizeSharedFolderOnly;
+    }
+
+    private bool HasStoredPermissionEntriesForShop(string shopRoot)
+    {
+        string root = shopRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return _permissionMap.Any(kv =>
+            kv.Key.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            (kv.Value.Users.Count > 0 || kv.Value.IsReadOnly || kv.Value.IsSharedOff));
+    }
+
+    private bool ImportOwnerPermissionsFromManifest(string shopRoot)
+    {
+        ShopPermissionManifest manifest = ShopPermissionManifest.Load(shopRoot);
+        if (manifest.Entries.Count == 0)
+        {
+            return false;
+        }
+
+        ClearStoredPermissionsForShop(shopRoot, saveAfterClear: false);
+        bool importedAny = false;
+        foreach (ShopPermissionManifestEntry entry in manifest.Entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.RelativePath))
+            {
+                continue;
+            }
+
+            string fullPath = Path.Combine(shopRoot, entry.RelativePath.Replace('/', '\\'));
+            if (!Directory.Exists(fullPath))
+            {
+                continue;
+            }
+
+            List<string> users = entry.Users
+                .Where(user => !string.IsNullOrWhiteSpace(user))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (users.Count == 0 && !entry.IsReadOnly && !entry.IsSharedOff)
+            {
+                continue;
+            }
+
+            _permissionMap[fullPath] = (users, entry.IsReadOnly, entry.IsSharedOff);
+            importedAny = true;
+        }
+
+        if (importedAny)
+        {
+            SavePermissionMap();
+        }
+
+        return importedAny;
+    }
+
+    private void NormalizeShopToDefaultFullShare(string shopRoot)
+    {
+        SwkLogger.Info($"NormalizeShopToDefaultFullShare start: {shopRoot}");
+        foreach (string entry in Directory.EnumerateFileSystemEntries(shopRoot))
+        {
+            if (string.Equals(Path.GetFileName(entry), HoldFolderName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!_pipeClient.ResetPathToInherited(entry))
+            {
+                SwkLogger.Warn($"NormalizeShopToDefaultFullShare reset failed: {entry}");
+            }
+        }
+
+        ClearStoredPermissionsForShop(shopRoot, saveAfterClear: false);
+        SavePermissionMap();
+        PublishPermissionManifest();
+        SwkLogger.Info($"NormalizeShopToDefaultFullShare done: {shopRoot}");
+    }
+
+    private void ClearStoredPermissionsForShop(string shopRoot, bool saveAfterClear = true)
+    {
+        string root = shopRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        List<string> permissionKeys = _permissionMap.Keys
+            .Where(path => path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (string path in permissionKeys)
+        {
+            _permissionMap.Remove(path);
+        }
+
+        List<string> holdDisplayKeys = _holdDisplayPermissionMap.Keys
+            .Where(path => path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (string path in holdDisplayKeys)
+        {
+            _holdDisplayPermissionMap.Remove(path);
+        }
+
+        if (saveAfterClear)
+        {
+            SavePermissionMap();
         }
     }
 
