@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
@@ -196,7 +197,45 @@ public static class SmbNtfsManager
     }
 
     public static bool TakeOwnershipRecursive(string shopRootPath)
-        => TakeOwnershipPath(shopRootPath);
+    {
+        ArgumentException.ThrowIfNullOrEmpty(shopRootPath);
+        if (!Directory.Exists(shopRootPath))
+        {
+            SwkLogger.Warn($"TakeOwnershipRecursive skipped: path not found ({shopRootPath})");
+            return false;
+        }
+
+        SwkLogger.Info($"TakeOwnershipRecursive start: {shopRootPath}");
+        if (!TakeOwnershipPath(shopRootPath))
+        {
+            SwkLogger.Warn($"TakeOwnershipRecursive: root ownership repair failed ({shopRootPath})");
+            return false;
+        }
+
+        if (TryVerifyAclRepairReady(shopRootPath, "TakeOwnershipRecursive initial"))
+        {
+            SwkLogger.Info("TakeOwnershipRecursive ok");
+            return true;
+        }
+
+        foreach (string blockedPath in EnumerateBlockedOwnershipTargets(shopRootPath))
+        {
+            if (!TryRepairOwnershipTarget(blockedPath))
+            {
+                SwkLogger.Warn($"TakeOwnershipRecursive: targeted repair failed ({blockedPath})");
+            }
+        }
+
+        bool verified = TryVerifyAclRepairReady(shopRootPath, "TakeOwnershipRecursive retry");
+        if (!verified)
+        {
+            SwkLogger.Warn($"TakeOwnershipRecursive: verification failed after retry ({shopRootPath})");
+            return false;
+        }
+
+        SwkLogger.Info("TakeOwnershipRecursive ok after retry");
+        return true;
+    }
 
     public static bool TakeOwnershipPath(string path)
     {
@@ -553,5 +592,60 @@ public static class SmbNtfsManager
         }
 
         return RunIcacls(args, "Set PC owner");
+    }
+
+    private static bool TryVerifyAclRepairReady(string shopRootPath, string label)
+    {
+        AclRepairPreflight preflight = PreflightAclRepair(shopRootPath);
+        bool ok = !preflight.NeedsOwnershipChange && !preflight.EnumerationBlocked && preflight.BlockedPaths.Count == 0;
+        SwkLogger.Info(
+            $"{label}: verified={ok}, needsOwnership={preflight.NeedsOwnershipChange}, enumBlocked={preflight.EnumerationBlocked}, blockedCount={preflight.BlockedPaths.Count}");
+        return ok;
+    }
+
+    private static IEnumerable<string> EnumerateBlockedOwnershipTargets(string shopRootPath)
+    {
+        HashSet<string> targets = new(StringComparer.OrdinalIgnoreCase);
+        AclRepairPreflight aclPreflight = PreflightAclRepair(shopRootPath);
+        foreach (string path in aclPreflight.BlockedPaths)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                targets.Add(path);
+            }
+        }
+
+        TakeOwnershipPreflight ownershipPreflight = PreflightTakeOwnership(shopRootPath);
+        foreach (string path in ownershipPreflight.BlockedPaths)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                targets.Add(path);
+            }
+        }
+
+        return targets
+            .OrderBy(path => path.Count(ch => ch == Path.DirectorySeparatorChar || ch == Path.AltDirectorySeparatorChar))
+            .ToList();
+    }
+
+    private static bool TryRepairOwnershipTarget(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return true;
+        }
+
+        bool exists = Directory.Exists(path) || File.Exists(path);
+        if (!exists)
+        {
+            SwkLogger.Warn($"TryRepairOwnershipTarget skipped: path not found ({path})");
+            return true;
+        }
+
+        SwkLogger.Info($"TryRepairOwnershipTarget start: {path}");
+        bool ok = TakeOwnershipPath(path);
+        SwkLogger.Info($"TryRepairOwnershipTarget done: {path} ok={ok}");
+        return ok;
     }
 }
