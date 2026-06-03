@@ -237,7 +237,7 @@ if (-not (Test-Path -LiteralPath $installer)) {
 
 $items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), (Join-Path $publishDir "ShareWorkinTray.exe"), $readme, $runtimeInstaller)
 $lines = @(
-    "ShareWorkin 1.21 SHA-256",
+    "ShareWorkin $appVersion SHA-256",
     "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
     ""
 )
