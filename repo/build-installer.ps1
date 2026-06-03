@@ -36,7 +36,7 @@ function Resolve-GitContext([string]$Path) {
         $candidateGitDir = Join-Path $resolvedTopLevel ".git"
         if (Test-Path -LiteralPath $candidateGitDir) {
             return @{
-                WorkTree = $Path
+                WorkTree = $resolvedTopLevel
                 GitDir = $candidateGitDir
             }
         }
@@ -54,7 +54,7 @@ function Resolve-GitContext([string]$Path) {
         }
 
         return @{
-            WorkTree = $Path
+            WorkTree = $resolvedTopLevel
             GitDir = $resolvedGitDir
         }
     }
