@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -384,6 +385,55 @@ public partial class UserListWindow : Window
         catch (Exception ex)
         {
             SwkLogger.Warn($"UserListWindow.TrySaveSnapshot failed: {ex.Message}");
+        }
+    }
+
+    public static UserListRowKind? TryGetSnapshotFriendKind(string friendId, TimeSpan? maxAge = null)
+    {
+        if (string.IsNullOrWhiteSpace(friendId))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!File.Exists(UserListStatePath))
+            {
+                return null;
+            }
+
+            UserListSnapshotState? state = JsonSerializer.Deserialize<UserListSnapshotState>(
+                File.ReadAllText(UserListStatePath, Encoding.UTF8),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (state?.Rows is not { Count: > 0 })
+            {
+                return null;
+            }
+
+            if (maxAge.HasValue &&
+                DateTime.TryParse(
+                    state.SavedAt,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out DateTime savedAtUtc) &&
+                DateTime.UtcNow - savedAtUtc > maxAge.Value)
+            {
+                return null;
+            }
+
+            UserListSnapshotRow? row = state.Rows.FirstOrDefault(r =>
+                string.Equals(r.FriendId, friendId, StringComparison.Ordinal));
+            if (row is null || !Enum.TryParse(row.Kind, out UserListRowKind kind))
+            {
+                return null;
+            }
+
+            return kind;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"UserListWindow.TryGetSnapshotFriendKind failed: {ex.Message}");
+            return null;
         }
     }
 
@@ -1029,6 +1079,9 @@ file sealed class UserListSnapshotRow
 {
     [JsonPropertyName("kind")]
     public string? Kind { get; set; }
+
+    [JsonPropertyName("friendId")]
+    public string? FriendId { get; set; }
 
     [JsonPropertyName("statusLabel")]
     public string? StatusLabel { get; set; }

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -200,6 +201,7 @@ public partial class MainWindow : Window
     private bool _suppressNotificationModeSelectionChanged;
     private bool _shopRefreshAttentionNeeded;
     private bool _skipNextShopRefreshAttentionClear;
+    private static readonly TimeSpan FriendRefreshAttentionWindow = TimeSpan.FromMinutes(5);
     private static readonly System.Windows.Media.Brush ShopRefreshAttentionBackgroundBrush =
         new SolidColorBrush(System.Windows.Media.Color.FromRgb(218, 238, 248));
     private static readonly System.Windows.Media.Brush ShopRefreshAttentionBorderBrush =
@@ -746,7 +748,6 @@ public partial class MainWindow : Window
         }
 
         _skipNextShopRefreshAttentionClear = true;
-        SetShopRefreshAttentionNeeded(true);
         _currentMode = DisplayMode.Shop;
         _activeFriendShop = null;
         _activeFriendShopRootPath = null;
@@ -2139,7 +2140,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? _activeFriendShop.HostMachineName
             : _activeFriendShop.DisplayName;
         SetTransientStatus($"{label} が見つかりません。ユーザー一覧で確認してください。");
-        SetShopRefreshAttentionNeeded(false);
+        RefreshShopRefreshAttentionForCurrentTarget();
         UserListWindow window = new(this) { Owner = this };
         bool? result = window.ShowDialog();
         PopulateExplorerDropdown();
@@ -6807,6 +6808,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (liveShop is null)
             {
                 _friendShopLiveMissCount++;
+                RefreshShopRefreshAttentionForCurrentTarget();
                 if (_friendShopLiveMissCount >= FriendShopOfflineMissThreshold)
                 {
                     MarkActiveFriendShopOffline();
@@ -6816,6 +6818,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             _friendShopLiveMissCount = 0;
             SwkNetworkCache.UpsertShop(liveShop);
+            RefreshShopRefreshAttentionForCurrentTarget();
 
             bool needsReconnect = string.IsNullOrWhiteSpace(_currentFolder) ||
                 !string.Equals(activeFriend.HostMachineName, liveShop.MachineName, StringComparison.OrdinalIgnoreCase) ||
@@ -6930,6 +6933,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string offlineMessage = $"{label} のお店が見つかりません。";
         _missingFriendShopStatus = offlineMessage;
         SetTransientStatus(offlineMessage);
+        RefreshShopRefreshAttentionForCurrentTarget();
     }
 
     private void StartFriendShopPermissionListener(string friendMachineName)
@@ -7981,6 +7985,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 $"Investigation.NavigateToFriendShopAsync.Fail: friend={label} candidates={string.Join(" | ", uncCandidates)}");
             FriendShareAccessTracker.ClearVerified(friend);
             UpdateFriendExternalState(friend, liveShop);
+            RefreshShopRefreshAttentionForCurrentTarget();
             AppendHistory(
                 HistoryChannel.Access,
                 $"{label} に接続できませんでした。",
@@ -7999,7 +8004,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Info($"Investigation.NavigateToFriendShopAsync.Success: friend={label} resolved={accessiblePath}");
         FriendShareAccessTracker.MarkVerified(friend, liveShop);
         UpdateFriendExternalState(friend, liveShop);
-        SetShopRefreshAttentionNeeded(false);
+        RefreshShopRefreshAttentionForCurrentTarget();
         _activeFriendShopRootPath = accessiblePath;
         bool hadMissingStatus = _missingFriendShopStatus != null;
         _missingFriendShopStatus = null;
@@ -8278,6 +8283,95 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         UpdateRefreshButtonHighlight();
+    }
+
+    private void RefreshShopRefreshAttentionForCurrentTarget()
+    {
+        SetShopRefreshAttentionNeeded(ShouldHighlightRefreshButtonForCurrentTarget());
+    }
+
+    private bool ShouldHighlightRefreshButtonForCurrentTarget()
+    {
+        if (_currentMode != DisplayMode.FriendShop || _activeFriendShop is null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_missingFriendShopStatus) || _friendShopLiveMissCount > 0)
+        {
+            return true;
+        }
+
+        return ShouldHighlightRefreshButtonForFriend(_activeFriendShop);
+    }
+
+    private static bool ShouldHighlightRefreshButtonForFriend(Friend friend)
+    {
+        UserListRowKind? snapshotKind = UserListWindow.TryGetSnapshotFriendKind(
+            friend.Id,
+            FriendRefreshAttentionWindow);
+        if (snapshotKind.HasValue)
+        {
+            return snapshotKind.Value is UserListRowKind.ResumeRequiredFriend
+                or UserListRowKind.AutoRecovering
+                or UserListRowKind.Unstable
+                or UserListRowKind.RelinkCandidateFriend
+                or UserListRowKind.ManualRequired;
+        }
+
+        SwkNotificationListener.ShopInfo? liveShop = FindLiveShopInfo(friend);
+        if (liveShop is not null)
+        {
+            return friend.HasCertificateMismatch || !FriendShareAccessTracker.IsVerifiedFor(friend, liveShop);
+        }
+
+        if (!friend.HasCertificateMismatch && FindRelinkCandidateShopInfo(friend) is not null)
+        {
+            return true;
+        }
+
+        if (friend.HasCertificateMismatch ||
+            FriendRecognitionService.FindVisibleShopForFriend(friend, SwkNetworkCache.ShopInfos) is not null ||
+            HasLanCandidateForFriend(friend) ||
+            HasRecentFriendObservation(friend))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasLanCandidateForFriend(Friend friend)
+    {
+        string friendHost = NormalizeHostName(friend.HostMachineName);
+        if (string.IsNullOrWhiteSpace(friendHost))
+        {
+            return false;
+        }
+
+        return SwkNetworkCache.Candidates.Any(candidate =>
+            string.Equals(friendHost, NormalizeHostName(candidate.HostName), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasRecentFriendObservation(Friend friend)
+    {
+        return IsRecentUtcTimestamp(friend.LastFoundAt, FriendRefreshAttentionWindow) ||
+               IsRecentUtcTimestamp(friend.LastSeenAt, FriendRefreshAttentionWindow);
+    }
+
+    private static bool IsRecentUtcTimestamp(string? value, TimeSpan window)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            !DateTime.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out DateTime timestampUtc))
+        {
+            return false;
+        }
+
+        return DateTime.UtcNow - timestampUtc <= window;
     }
 
     private void UpdateRefreshButtonHighlight()
