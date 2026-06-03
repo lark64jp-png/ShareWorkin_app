@@ -1,4 +1,4 @@
-﻿ShareWorkin 1.21 SHA-256
+﻿ShareWorkin 1.23 SHA-256
 Generated: 2026-06-03 21:42:34 +09:00
 
 [ShareWorkin_v1.23_install.exe]
