@@ -61,6 +61,39 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="MutedNotificationButtonStyle" TargetType="{x:Type Button}">
+            <Setter Property="Background" Value="#FCF1D6" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="#2F2412" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#F9EAC5" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#F2E0AF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.65" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="ShopListViewItemStyle" TargetType="{x:Type ListViewItem}">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -855,12 +888,14 @@
                                    Margin="0,14,0,0">
                             <Button x:Name="OpenNotificationSettingsButton"
                                     Content="通知設定を開く"
+                                    Style="{StaticResource MutedNotificationButtonStyle}"
                                     Width="132"
                                     Height="30"
                                     Padding="0"
                                     Margin="0,0,12,12"
                                     Click="OpenNotificationSettingsButton_Click" />
-                            <Button Content="テスト通知を送る"
+                            <Button x:Name="SendTestNotificationButton"
+                                    Content="テスト通知を送る"
                                     Width="132"
                                     Height="30"
                                     Padding="0"
@@ -963,6 +998,7 @@
                 <Button Grid.Column="8"
                         x:Name="NotificationSupportButton"
                         Content="通知設定"
+                        Style="{StaticResource MutedNotificationButtonStyle}"
                         Width="86"
                         Height="26"
                         Click="NotificationSupportButton_Click" />

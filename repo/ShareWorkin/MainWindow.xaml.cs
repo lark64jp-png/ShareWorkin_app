@@ -3040,7 +3040,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             NotificationSupportLastTestTextBlock is null ||
             NotificationSupportHintTextBlock is null ||
             NotificationSupportButton is null ||
-            OpenNotificationSettingsButton is null)
+            OpenNotificationSettingsButton is null ||
+            SendTestNotificationButton is null)
         {
             return;
         }
@@ -3115,28 +3116,32 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (isAttentionNeeded)
         {
+            System.Windows.Media.Brush mutedBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFB, 0xF6, 0xEA));
+            System.Windows.Media.Brush mutedForeground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2F, 0x24, 0x12));
             System.Windows.Media.Brush highlightBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF4, 0xD6));
             System.Windows.Media.Brush highlightBorder = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC9, 0x94, 0x12));
 
-            NotificationSupportButton.Background = highlightBackground;
-            NotificationSupportButton.BorderBrush = highlightBorder;
-            NotificationSupportButton.BorderThickness = new Thickness(2);
-            NotificationSupportButton.FontWeight = FontWeights.SemiBold;
-            OpenNotificationSettingsButton.Background = highlightBackground;
-            OpenNotificationSettingsButton.BorderBrush = highlightBorder;
-            OpenNotificationSettingsButton.BorderThickness = new Thickness(2);
-            OpenNotificationSettingsButton.FontWeight = FontWeights.SemiBold;
+            NotificationSupportButton.Background = mutedBackground;
+            NotificationSupportButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            NotificationSupportButton.BorderThickness = new Thickness(0);
+            NotificationSupportButton.Foreground = mutedForeground;
+            NotificationSupportButton.FontWeight = FontWeights.Normal;
+            SendTestNotificationButton.Background = highlightBackground;
+            SendTestNotificationButton.BorderBrush = highlightBorder;
+            SendTestNotificationButton.BorderThickness = new Thickness(2);
+            SendTestNotificationButton.FontWeight = FontWeights.SemiBold;
             return;
         }
 
         NotificationSupportButton.ClearValue(BackgroundProperty);
         NotificationSupportButton.ClearValue(BorderBrushProperty);
         NotificationSupportButton.ClearValue(BorderThicknessProperty);
+        NotificationSupportButton.ClearValue(ForegroundProperty);
         NotificationSupportButton.ClearValue(FontWeightProperty);
-        OpenNotificationSettingsButton.ClearValue(BackgroundProperty);
-        OpenNotificationSettingsButton.ClearValue(BorderBrushProperty);
-        OpenNotificationSettingsButton.ClearValue(BorderThicknessProperty);
-        OpenNotificationSettingsButton.ClearValue(FontWeightProperty);
+        SendTestNotificationButton.ClearValue(BackgroundProperty);
+        SendTestNotificationButton.ClearValue(BorderBrushProperty);
+        SendTestNotificationButton.ClearValue(BorderThicknessProperty);
+        SendTestNotificationButton.ClearValue(FontWeightProperty);
     }
 
     private void SizeCalcCheckBox_Changed(object sender, RoutedEventArgs e)
