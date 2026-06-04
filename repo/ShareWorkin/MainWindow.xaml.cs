@@ -2276,9 +2276,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!acknowledged)
         {
             SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-            await Task.Delay(500);
-            bool windowsOn = AreWindowsNotificationsEnabled();
-            bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
+            (bool windowsOn, bool shareWorkinOn) = await WaitForStableNotificationStateAsync();
             if (!windowsOn || !shareWorkinOn)
             {
                 ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
@@ -2294,6 +2292,30 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SaveSettings();
         RefreshNotificationSupportUi();
         SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
+    }
+
+    private static async Task<(bool windowsOn, bool shareWorkinOn)> WaitForStableNotificationStateAsync()
+    {
+        const int intervalMs = 200;
+        const int maxAttempts = 8;
+
+        bool prevWindowsOn = AreWindowsNotificationsEnabled();
+        bool prevShareWorkinOn = AreShareWorkinNotificationsEnabled();
+
+        for (int i = 0; i < maxAttempts; i++)
+        {
+            await Task.Delay(intervalMs);
+            bool windowsOn = AreWindowsNotificationsEnabled();
+            bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
+            if (windowsOn == prevWindowsOn && shareWorkinOn == prevShareWorkinOn)
+            {
+                return (windowsOn, shareWorkinOn);
+            }
+            prevWindowsOn = windowsOn;
+            prevShareWorkinOn = shareWorkinOn;
+        }
+
+        return (prevWindowsOn, prevShareWorkinOn);
     }
 
     private async void ShowTestNotificationFeedback(string message)
