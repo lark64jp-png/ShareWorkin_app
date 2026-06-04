@@ -2265,6 +2265,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private async void SendTestNotificationButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Info("NotificationSettings.SendTestNotification requested");
+
+        bool windowsOn = AreWindowsNotificationsEnabled();
+        bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
+        if (!windowsOn || !shareWorkinOn)
+        {
+            SwkLogger.Info("NotificationSettings.SendTestNotification blocked: notifications are off");
+            ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+            return;
+        }
+
         if (!await EnsureTrayConnectedAsync())
         {
             SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray connection unavailable");
@@ -2276,8 +2286,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!acknowledged)
         {
             SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-            (bool windowsOn, bool shareWorkinOn) = await WaitForStableNotificationStateAsync();
-            if (!windowsOn || !shareWorkinOn)
+            (bool windowsOnNow, bool shareWorkinOnNow) = await WaitForStableNotificationStateAsync();
+            if (!windowsOnNow || !shareWorkinOnNow)
             {
                 ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
             }
