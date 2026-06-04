@@ -2235,6 +2235,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void LogNotificationSupportSnapshot(string source)
     {
         bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
+        bool shareWorkinNotificationsEnabled = AreShareWorkinNotificationsEnabled();
+        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
+        string attentionReason = isAttentionNeeded
+            ? string.Join(",", new[]
+            {
+                !windowsNotificationsEnabled ? "WindowsOff" : null,
+                !shareWorkinNotificationsEnabled ? "ShareWorkinOff" : null,
+                _notificationMode == NotificationMode.Off ? "ModeOff" : null,
+                _notificationSupportState == NotificationSupportState.Unverified ? "Unverified" : null,
+            }.Where(r => r != null))
+            : "none";
         int trayProcessCount = Process.GetProcessesByName("ShareWorkinTray").Length;
         bool pipeConnected = _pipeClient.IsConnected;
         TrayStatus? trayStatus = pipeConnected ? _pipeClient.GetStatus(timeoutMs: 500) : null;
@@ -2243,6 +2254,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         SwkLogger.Info(
             $"NotificationSettings snapshot: source={source} windowsNotificationsEnabled={windowsNotificationsEnabled} " +
+            $"shareWorkinNotificationsEnabled={shareWorkinNotificationsEnabled} " +
+            $"isAttentionNeeded={isAttentionNeeded} attentionReason={attentionReason} " +
             $"notificationMode={_notificationMode} supportState={_notificationSupportState} panelVisible={panelVisible} " +
             $"shopOpen={_isShopOpen} trayProcessCount={trayProcessCount} pipeConnected={pipeConnected} " +
             $"trayStatusOpen={trayStatus?.IsShopOpen.ToString() ?? "null"} trayStatusFolder={trayStatus?.ShopFolder ?? "null"} " +
