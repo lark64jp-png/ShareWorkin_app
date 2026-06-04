@@ -2282,6 +2282,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         SwkLogger.Info("NotificationSettings.SendTestNotification acknowledged by tray");
         _testNotificationFeedbackCts?.Cancel();
+        TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
         _lastNotificationTestAt = DateTime.Now;
         _notificationSupportState = NotificationSupportState.TestSent;
         SaveSettings();
