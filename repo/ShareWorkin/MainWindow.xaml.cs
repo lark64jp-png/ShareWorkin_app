@@ -2276,7 +2276,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!acknowledged)
         {
             SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-            ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+            bool windowsOn = AreWindowsNotificationsEnabled();
+            bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
+            if (!windowsOn || !shareWorkinOn)
+            {
+                ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+            }
             return;
         }
 
