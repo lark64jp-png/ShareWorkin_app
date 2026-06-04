@@ -2275,14 +2275,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool acknowledged = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
         if (!acknowledged)
         {
-            SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
+            SwkLogger.Warn("NotificationSettings.SendTestNotification failed on first attempt, checking conditions");
             bool windowsOn = AreWindowsNotificationsEnabled();
             bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
-            if (!windowsOn || !shareWorkinOn)
+            if (windowsOn && shareWorkinOn)
             {
-                ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+                SwkLogger.Info("NotificationSettings.SendTestNotification retrying after 1s (tray may still be warming up)");
+                await Task.Delay(1000);
+                acknowledged = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
+                SwkLogger.Info($"NotificationSettings.SendTestNotification retry result: acknowledged={acknowledged}");
             }
-            return;
+            if (!acknowledged)
+            {
+                if (!windowsOn || !shareWorkinOn)
+                {
+                    ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+                }
+                return;
+            }
         }
 
         SwkLogger.Info("NotificationSettings.SendTestNotification acknowledged by tray");
