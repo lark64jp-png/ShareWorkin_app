@@ -3178,7 +3178,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             System.Windows.Media.Brush highlightBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF4, 0xD6));
             System.Windows.Media.Brush highlightBorder = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC9, 0x94, 0x12));
 
-            OpenNotificationSettingsButton.Background = mutedBackground;
+            bool settingsOpen = Process.GetProcessesByName("SystemSettings").Length > 0;
+            if (settingsOpen)
+            {
+                OpenNotificationSettingsButton.ClearValue(BackgroundProperty);
+                OpenNotificationSettingsButton.ClearValue(BorderBrushProperty);
+                OpenNotificationSettingsButton.ClearValue(BorderThicknessProperty);
+            }
+            else
+            {
+                OpenNotificationSettingsButton.Background = mutedBackground;
+                OpenNotificationSettingsButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+                OpenNotificationSettingsButton.BorderThickness = new Thickness(0);
+            }
             NotificationSupportButton.Background = mutedBackground;
             NotificationSupportButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
             NotificationSupportButton.BorderThickness = new Thickness(0);
@@ -3192,6 +3204,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         OpenNotificationSettingsButton.ClearValue(BackgroundProperty);
+        OpenNotificationSettingsButton.ClearValue(BorderBrushProperty);
+        OpenNotificationSettingsButton.ClearValue(BorderThicknessProperty);
         NotificationSupportButton.ClearValue(BackgroundProperty);
         NotificationSupportButton.ClearValue(BorderBrushProperty);
         NotificationSupportButton.ClearValue(BorderThicknessProperty);
