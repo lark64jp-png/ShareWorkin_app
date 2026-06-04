@@ -2270,9 +2270,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
         if (!windowsOn || !shareWorkinOn)
         {
-            SwkLogger.Info("NotificationSettings.SendTestNotification blocked: notifications are off");
-            ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
-            return;
+            (windowsOn, shareWorkinOn) = await WaitForStableNotificationStateAsync();
+            if (!windowsOn || !shareWorkinOn)
+            {
+                SwkLogger.Info("NotificationSettings.SendTestNotification blocked: notifications are off");
+                ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+                return;
+            }
         }
 
         if (!await EnsureTrayConnectedAsync())
