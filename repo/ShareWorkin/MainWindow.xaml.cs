@@ -650,6 +650,9 @@ public partial class MainWindow : Window
 
     private async Task<bool> EnsureTrayConnectedAsync()
     {
+        if (_pipeClient.IsConnected)
+            return true;
+
         if (_pipeClient.Connect(timeoutMs: 150))
             return true;
 
