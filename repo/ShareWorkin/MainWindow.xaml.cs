@@ -2242,7 +2242,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 !windowsNotificationsEnabled ? "WindowsOff" : null,
                 !shareWorkinNotificationsEnabled ? "ShareWorkinOff" : null,
-                _notificationMode == NotificationMode.Off ? "ModeOff" : null,
                 _notificationSupportState == NotificationSupportState.Unverified ? "Unverified" : null,
             }.Where(r => r != null))
             : "none";
@@ -3167,7 +3166,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         return !windowsNotificationsEnabled ||
                !shareWorkinNotificationsEnabled ||
-               _notificationMode == NotificationMode.Off ||
                _notificationSupportState == NotificationSupportState.Unverified;
     }
 
@@ -3180,6 +3178,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             System.Windows.Media.Brush highlightBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF4, 0xD6));
             System.Windows.Media.Brush highlightBorder = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC9, 0x94, 0x12));
 
+            OpenNotificationSettingsButton.Background = mutedBackground;
             NotificationSupportButton.Background = mutedBackground;
             NotificationSupportButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
             NotificationSupportButton.BorderThickness = new Thickness(0);
@@ -3192,6 +3191,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        OpenNotificationSettingsButton.ClearValue(BackgroundProperty);
         NotificationSupportButton.ClearValue(BackgroundProperty);
         NotificationSupportButton.ClearValue(BorderBrushProperty);
         NotificationSupportButton.ClearValue(BorderThicknessProperty);
