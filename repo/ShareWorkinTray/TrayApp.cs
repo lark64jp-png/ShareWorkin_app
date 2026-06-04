@@ -130,8 +130,8 @@ public sealed class TrayApp : IDisposable
         if (!Directory.Exists(_shopFolder))
         {
             PatchSettingsOpenState(false, _shopFolder);
-            ShowBalloonTip("お店を再開できませんでした",
-                "前回のお店のフォルダーが見つかりません。\n画面を開いて設定を確認してください。", null);
+            ShowBalloonTip("共有を再開できませんでした",
+                "前回の共有フォルダーが見つかりません。\n画面を開いて設定を確認してください。", null);
             return;
         }
 
@@ -143,7 +143,7 @@ public sealed class TrayApp : IDisposable
         {
             SwkLogger.Warn($"TrayApp.RestoreOpenShopIfNeeded failed: {error}");
             PatchSettingsOpenState(false, _shopFolder);
-            ShowBalloonTip("お店を再開できませんでした",
+            ShowBalloonTip("共有を再開できませんでした",
                 "前回の状態と異なる可能性があります。\n画面を開いて確認してください。", _shopFolder);
         }
     }
@@ -379,7 +379,7 @@ public sealed class TrayApp : IDisposable
     public void NotifyUiDisconnected()
     {
         if (_isShopOpen)
-            ShowBalloonTip("お店は開いたままです", "お店は開いたまま、管理画面は閉じています。", _shopFolder);
+            ShowBalloonTip("共有は続いています", "共有は続いています。管理画面は閉じています。", _shopFolder);
     }
 
     private void OpenLastBalloonFolder()
@@ -423,7 +423,7 @@ public sealed class TrayApp : IDisposable
     {
         if (EntryPasswordManager.IsConfigured)
         {
-            string? pw = TrayPasswordDialog.Show("終了するとお店も閉まります。\nパスワードを入力してください。");
+            string? pw = TrayPasswordDialog.Show("終了すると共有も閉じます。\nパスワードを入力してください。");
             if (pw == null) return;
             if (!EntryPasswordManager.Verify(pw))
             {
@@ -435,7 +435,7 @@ public sealed class TrayApp : IDisposable
         }
         else
         {
-            var r = Forms.MessageBox.Show("ShareWorkin を終了しますか？\nお店は閉まります。",
+            var r = Forms.MessageBox.Show("ShareWorkin を終了しますか？\n共有は閉じます。",
                 "ShareWorkin", Forms.MessageBoxButtons.OKCancel, Forms.MessageBoxIcon.Question);
             if (r == Forms.DialogResult.OK) ExitApp();
         }
