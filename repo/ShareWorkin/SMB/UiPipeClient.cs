@@ -306,7 +306,8 @@ public sealed class UiPipeClient : IDisposable
         catch (Exception ex) { SwkLogger.Debug($"UiPipeClient.ReceiveLoopAsync ended: {ex.Message}"); }
         finally
         {
-            Disconnect();
+            if (!ct.IsCancellationRequested)
+                Disconnect();
         }
     }
 
