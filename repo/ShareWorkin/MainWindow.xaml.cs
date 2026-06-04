@@ -2281,6 +2281,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         SwkLogger.Info("NotificationSettings.SendTestNotification acknowledged by tray");
+        _testNotificationFeedbackCts?.Cancel();
         _lastNotificationTestAt = DateTime.Now;
         _notificationSupportState = NotificationSupportState.TestSent;
         SaveSettings();
@@ -2302,7 +2303,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             await Task.Delay(5000, cts.Token);
             TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void UseWithoutNotificationsButton_Click(object sender, RoutedEventArgs e)
