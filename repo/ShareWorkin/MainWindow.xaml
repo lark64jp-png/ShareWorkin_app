@@ -807,7 +807,7 @@
                 BorderThickness="0,1,0,1"
                 Padding="28,14"
                 Visibility="Collapsed">
-            <Border Background="#FFF9EE"
+            <Border Background="#FFFDF5"
                     BorderBrush="#D6C8AE"
                     BorderThickness="1"
                     CornerRadius="8"
@@ -883,30 +883,37 @@
                             </ComboBox>
                         </StackPanel>
 
-                        <WrapPanel Grid.Column="2"
-                                   VerticalAlignment="Top"
-                                   Margin="0,14,0,0">
-                            <Button x:Name="OpenNotificationSettingsButton"
-                                    Content="通知設定を開く"
-                                    Width="132"
-                                    Height="30"
-                                    Padding="0"
-                                    Margin="0,0,12,12"
-                                    Click="OpenNotificationSettingsButton_Click" />
-                            <Button x:Name="SendTestNotificationButton"
-                                    Content="テスト通知を送る"
-                                    Width="132"
-                                    Height="30"
-                                    Padding="0"
-                                    Margin="0,0,12,12"
-                                    Click="SendTestNotificationButton_Click" />
-                            <Button Content="通知なしで使う"
-                                    Width="132"
-                                    Height="30"
-                                    Padding="0"
-                                    Margin="0,0,12,12"
-                                    Click="UseWithoutNotificationsButton_Click" />
-                        </WrapPanel>
+                        <StackPanel Grid.Column="2">
+                            <WrapPanel VerticalAlignment="Top"
+                                       Margin="0,14,0,0">
+                                <Button x:Name="OpenNotificationSettingsButton"
+                                        Content="通知設定を開く"
+                                        Width="132"
+                                        Height="30"
+                                        Padding="0"
+                                        Margin="0,0,12,12"
+                                        Click="OpenNotificationSettingsButton_Click" />
+                                <Button x:Name="SendTestNotificationButton"
+                                        Content="テスト通知を送る"
+                                        Width="132"
+                                        Height="30"
+                                        Padding="0"
+                                        Margin="0,0,12,12"
+                                        Click="SendTestNotificationButton_Click" />
+                                <Button Content="未規定ボタン"
+                                        Width="132"
+                                        Height="30"
+                                        Padding="0"
+                                        Margin="0,0,12,12"
+                                        Click="UseWithoutNotificationsButton_Click" />
+                            </WrapPanel>
+                            <TextBlock x:Name="TestNotificationFeedbackTextBlock"
+                                       Visibility="Collapsed"
+                                       Foreground="#B05010"
+                                       FontWeight="Medium"
+                                       TextWrapping="Wrap"
+                                       Margin="0,0,0,4" />
+                        </StackPanel>
                     </Grid>
 
                     <Grid Grid.Row="4">

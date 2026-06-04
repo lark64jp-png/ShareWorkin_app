@@ -142,6 +142,7 @@ public partial class MainWindow : Window
     private FileSystemWatcher? _contentsSensor;
     private CancellationTokenSource? _folderSizeCancellation;
     private CancellationTokenSource? _subfolderCountCancellation;
+    private CancellationTokenSource? _testNotificationFeedbackCts;
     private DispatcherTimer? _friendShopPollTimer;
     private string? _shopFolder;
     private string? _currentFolder;
@@ -2275,7 +2276,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!acknowledged)
         {
             SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-            SetTransientStatus("テスト通知を送信できませんでした。");
+            ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
             return;
         }
 
@@ -2287,10 +2288,25 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
     }
 
+    private async void ShowTestNotificationFeedback(string message)
+    {
+        _testNotificationFeedbackCts?.Cancel();
+        _testNotificationFeedbackCts = new CancellationTokenSource();
+        var cts = _testNotificationFeedbackCts;
+
+        TestNotificationFeedbackTextBlock.Text = message;
+        TestNotificationFeedbackTextBlock.Visibility = Visibility.Visible;
+
+        try
+        {
+            await Task.Delay(5000, cts.Token);
+            TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
+        }
+        catch (OperationCanceledException) { }
+    }
+
     private void UseWithoutNotificationsButton_Click(object sender, RoutedEventArgs e)
     {
-        ApplyNotificationMode(NotificationMode.Off, updateSelection: true);
-        SetTransientStatus("通知なしで使う設定にしました。共有は使えますが、受け取りに気づきにくくなります。");
     }
 
     private async void UserListButton_Click(object sender, RoutedEventArgs e)
@@ -3173,7 +3189,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (isAttentionNeeded)
         {
-            System.Windows.Media.Brush mutedBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFB, 0xF6, 0xEA));
+            System.Windows.Media.Brush mutedBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFA, 0xE8, 0xB8));
             System.Windows.Media.Brush mutedForeground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2F, 0x24, 0x12));
             System.Windows.Media.Brush highlightBackground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF4, 0xD6));
             System.Windows.Media.Brush highlightBorder = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xC9, 0x94, 0x12));
