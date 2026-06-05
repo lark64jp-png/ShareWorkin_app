@@ -22,9 +22,11 @@ public sealed class TrayApp : IDisposable
     private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
         Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     private static readonly string SettingsPath = Path.Combine(AppHomeDirectory, "settings.json");
+    private static readonly TimeSpan BalloonTipShownTimeout = TimeSpan.FromSeconds(2);
 
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
+    private readonly object _balloonTipSync = new();
     internal readonly TrayPipeServer PipeServer;
     private FileSystemWatcher? _shopContentsWatcher;
 
@@ -36,6 +38,7 @@ public sealed class TrayApp : IDisposable
     private bool _wasOpenAtLastShutdown;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private string? _lastBalloonFolder;
+    private TaskCompletionSource<bool>? _pendingBalloonTipShown;
 
     public bool IsShopOpen => _isShopOpen;
     public string? ShopFolder => _shopFolder;
@@ -51,7 +54,23 @@ public sealed class TrayApp : IDisposable
             Visible = false
         };
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) OpenUiProcess(); };
-        _notifyIcon.BalloonTipClicked += (_, _) => OpenLastBalloonFolder();
+        _notifyIcon.BalloonTipShown += (_, _) =>
+        {
+            SwkLogger.Info("NotifyIcon.BalloonTipShown");
+            TaskCompletionSource<bool>? pending;
+            lock (_balloonTipSync)
+            {
+                pending = _pendingBalloonTipShown;
+            }
+
+            pending?.TrySetResult(true);
+        };
+        _notifyIcon.BalloonTipClosed += (_, _) => SwkLogger.Info("NotifyIcon.BalloonTipClosed");
+        _notifyIcon.BalloonTipClicked += (_, _) =>
+        {
+            SwkLogger.Info("NotifyIcon.BalloonTipClicked");
+            OpenLastBalloonFolder();
+        };
 
         _trayMenu = new Forms.ContextMenuStrip();
         var exitItem = new Forms.ToolStripMenuItem("アプリを終了");
@@ -371,16 +390,38 @@ public sealed class TrayApp : IDisposable
 
         try
         {
+            var shownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_balloonTipSync)
+            {
+                _pendingBalloonTipShown = shownTcs;
+            }
+
             _notifyIcon.BalloonTipTitle = title;
             _notifyIcon.BalloonTipText = text;
             _notifyIcon.ShowBalloonTip(5000);
-            SwkLogger.Info($"ShowBalloonTip fallback: title={title}");
-            return NotificationDisplayResult.Fallback;
+            SwkLogger.Info($"ShowBalloonTip fallback requested: title={title}");
+
+            bool shown = shownTcs.Task.Wait(BalloonTipShownTimeout);
+            if (shown)
+            {
+                SwkLogger.Info($"ShowBalloonTip fallback confirmed: title={title}");
+                return NotificationDisplayResult.Fallback;
+            }
+
+            SwkLogger.Warn($"ShowBalloonTip fallback timed out without BalloonTipShown: title={title}");
+            return NotificationDisplayResult.Failed;
         }
         catch (Exception ex)
         {
             SwkLogger.Warn($"ShowBalloonTip failed: title={title} ({ex.Message})");
             return NotificationDisplayResult.Failed;
+        }
+        finally
+        {
+            lock (_balloonTipSync)
+            {
+                _pendingBalloonTipShown = null;
+            }
         }
     }
 
