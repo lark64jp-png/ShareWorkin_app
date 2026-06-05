@@ -87,36 +87,69 @@ internal static class WindowsToastNotificationService
 
     private static bool ShowDirectToast(string xml, string title)
     {
-        SwkLogger.Info(
-            $"WindowsToastNotificationService.ShowDirectToast start: appId={AppUserModelId} " +
-            $"processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()} title={title}");
+        try
+        {
+            SwkLogger.Info(
+                $"WindowsToastNotificationService.ShowDirectToast start: appId={AppUserModelId} " +
+                $"processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()} title={title}");
 
-        Type xmlDocumentType = Type.GetType(
-            "Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime",
-            throwOnError: true)!;
-        object xmlDocument = Activator.CreateInstance(xmlDocumentType)!;
-        xmlDocumentType.GetMethod("LoadXml")!.Invoke(xmlDocument, [xml]);
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-xmldocument:start");
+            Type xmlDocumentType = Type.GetType(
+                "Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime",
+                throwOnError: true)!;
+            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-xmldocument:done type={xmlDocumentType.FullName}");
 
-        Type toastNotificationType = Type.GetType(
-            "Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime",
-            throwOnError: true)!;
-        object toast = Activator.CreateInstance(toastNotificationType, xmlDocument)!;
-        toastNotificationType.GetProperty("ExpirationTime")!.SetValue(toast, DateTimeOffset.Now.AddMinutes(10));
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-xmldocument:start");
+            object xmlDocument = Activator.CreateInstance(xmlDocumentType)!;
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-xmldocument:done");
 
-        AttachToastEventHandler(toast, toastNotificationType, "Activated", nameof(OnToastActivated));
-        AttachToastEventHandler(toast, toastNotificationType, "Dismissed", nameof(OnToastDismissed));
-        AttachToastEventHandler(toast, toastNotificationType, "Failed", nameof(OnToastFailed));
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=loadxml:start");
+            xmlDocumentType.GetMethod("LoadXml")!.Invoke(xmlDocument, [xml]);
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=loadxml:done");
 
-        Type toastManagerType = Type.GetType(
-            "Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime",
-            throwOnError: true)!;
-        object notifier = toastManagerType.GetMethod("CreateToastNotifier", [typeof(string)])!
-            .Invoke(null, [AppUserModelId])!;
-        notifier.GetType().GetMethod("Show")!.Invoke(notifier, [toast]);
-        SwkLogger.Info(
-            $"WindowsToastNotificationService.ShowDirectToast requested: appId={AppUserModelId} " +
-            $"processPath={Environment.ProcessPath ?? "null"} title={title}");
-        return true;
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-toast:start");
+            Type toastNotificationType = Type.GetType(
+                "Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime",
+                throwOnError: true)!;
+            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-toast:done type={toastNotificationType.FullName}");
+
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-toast:start");
+            object toast = Activator.CreateInstance(toastNotificationType, xmlDocument)!;
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-toast:done");
+
+            toastNotificationType.GetProperty("ExpirationTime")!.SetValue(toast, DateTimeOffset.Now.AddMinutes(10));
+
+            AttachToastEventHandler(toast, toastNotificationType, "Activated", nameof(OnToastActivated));
+            AttachToastEventHandler(toast, toastNotificationType, "Dismissed", nameof(OnToastDismissed));
+            AttachToastEventHandler(toast, toastNotificationType, "Failed", nameof(OnToastFailed));
+
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-manager:start");
+            Type toastManagerType = Type.GetType(
+                "Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime",
+                throwOnError: true)!;
+            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-manager:done type={toastManagerType.FullName}");
+
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-notifier:start");
+            object notifier = toastManagerType.GetMethod("CreateToastNotifier", [typeof(string)])!
+                .Invoke(null, [AppUserModelId])!;
+            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=create-notifier:done notifierType={notifier.GetType().FullName}");
+
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=show:start");
+            notifier.GetType().GetMethod("Show")!.Invoke(notifier, [toast]);
+            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=show:done");
+
+            SwkLogger.Info(
+                $"WindowsToastNotificationService.ShowDirectToast requested: appId={AppUserModelId} " +
+                $"processPath={Environment.ProcessPath ?? "null"} title={title}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn(
+                $"WindowsToastNotificationService.ShowDirectToast failed: type={ex.GetType().FullName} " +
+                $"message={ex.Message} stack={ex.StackTrace ?? "null"}");
+            throw;
+        }
     }
 
     private static void AttachToastEventHandler(object toast, Type toastNotificationType, string eventName, string handlerMethodName)
