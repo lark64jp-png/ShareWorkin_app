@@ -2360,18 +2360,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _testNotificationFeedbackCts?.Cancel();
             TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
             _lastNotificationTestAt = DateTime.Now;
-            _notificationSupportState = NotificationSupportState.TestSent;
+            _notificationSupportState = NotificationSupportState.PendingConfirmation;
             SaveSettings();
             await WaitForStableNotificationStateAsync();
             RefreshNotificationSupportUi();
-            if (testResult == NotificationCommandResult.Fallback)
-            {
-                SetTransientStatus("簡易通知で表示を確認しました。通知表示は利用できます。");
-            }
-            else
-            {
-                SetTransientStatus("通知を送信しました。表示を確認してください。");
-            }
+            SetTransientStatus("通知を送信しました。表示されましたか？");
         }
         finally
         {
@@ -2455,6 +2448,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UseWithoutNotificationsButton_Click(object sender, RoutedEventArgs e)
     {
+        _notificationSupportState = NotificationSupportState.ProceedWithoutNotifications;
+        SaveSettings();
+        RefreshNotificationSupportUi();
+        SetTransientStatus("通知が表示されなくても共有は利用できます。必要に応じて Windows 通知設定を確認してください。");
+    }
+
+    private void ConfirmNotificationDisplayedButton_Click(object sender, RoutedEventArgs e)
+    {
+        _notificationSupportState = NotificationSupportState.Confirmed;
+        SaveSettings();
+        RefreshNotificationSupportUi();
+        SetTransientStatus("通知表示を確認しました。");
     }
 
     private async void UserListButton_Click(object sender, RoutedEventArgs e)
@@ -3223,7 +3228,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             NotificationSupportHintTextBlock is null ||
             NotificationSupportButton is null ||
             OpenNotificationSettingsButton is null ||
-            SendTestNotificationButton is null)
+            SendTestNotificationButton is null ||
+            ConfirmNotificationDisplayedButton is null ||
+            UseWithoutNotificationsButton is null)
         {
             return;
         }
@@ -3237,6 +3244,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? $"最終通知テスト日時: {_lastNotificationTestAt.Value:yyyy/MM/dd HH:mm}"
             : "最終通知テスト日時: 未実行";
         NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationStatus);
+        bool isPendingConfirmation = _notificationSupportState == NotificationSupportState.PendingConfirmation;
+        ConfirmNotificationDisplayedButton.Visibility = isPendingConfirmation ? Visibility.Visible : Visibility.Collapsed;
+        UseWithoutNotificationsButton.Content = isPendingConfirmation ? "表示されない" : "通知なしで使う";
         UpdateNotificationSupportButtonHighlight(isAttentionNeeded);
     }
 
@@ -3247,22 +3257,20 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!windowsNotificationsEnabled)
         {
-            return "Windows通知OFF";
-        }
-
-        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
-        {
-            return state == NotificationSupportState.TestSent ? "通知表示確認済み" : "通知表示未確認";
-        }
-
-        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
-        {
-            return "ShareWorkin通知OFF";
+            return state switch
+            {
+                NotificationSupportState.Confirmed => "表示確認済み",
+                NotificationSupportState.PendingConfirmation => "表示確認待ち",
+                NotificationSupportState.ProceedWithoutNotifications => "通知なしで利用",
+                _ => "Windows通知OFF"
+            };
         }
 
         return state switch
         {
-            NotificationSupportState.TestSent => "テスト送信済み",
+            NotificationSupportState.PendingConfirmation => "表示確認待ち",
+            NotificationSupportState.Confirmed => "表示確認済み",
+            NotificationSupportState.ProceedWithoutNotifications => "通知なしで利用",
             _ => "未確認"
         };
     }
@@ -3274,25 +3282,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (!windowsNotificationsEnabled)
         {
-            return "Windows通知設定で、ShareWorkin がONか確認してください。";
-        }
-
-        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
-        {
-            return state == NotificationSupportState.TestSent
-                ? "通知表示は確認済みです。送信者一覧に表示されない場合も、まずは通知が表示できていれば利用できます。"
-                : "「テスト通知を送る」で通知が表示されるか確認してください。簡易通知でも表示できれば利用できます。";
-        }
-
-        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
-        {
-            return "Windows通知設定で、ShareWorkin がONになっているか確認してください。";
+            return state switch
+            {
+                NotificationSupportState.Confirmed => "通知表示は確認済みです。通知が必要な場合は、Windows 通知設定も確認してください。",
+                NotificationSupportState.PendingConfirmation => "通知を送信しました。表示されましたか？ 見えたら「表示された」、見えない場合は「表示されない」を選んでください。",
+                NotificationSupportState.ProceedWithoutNotifications => "通知が表示されなくても共有は利用できます。必要に応じて Windows 通知設定を確認してください。",
+                _ => "通知が必要な場合は Windows 通知設定を確認してください。通知なしでも共有は利用できます。"
+            };
         }
 
         return state switch
         {
-            NotificationSupportState.TestSent => "通知表示を確認済みです。表示されない場合だけWindows通知設定を確認してください。",
-            _ => "まずは「テスト通知を送る」で通知表示を確認してください。簡易通知でも表示できれば利用できます。"
+            NotificationSupportState.PendingConfirmation => "通知を送信しました。表示されましたか？ 見えたら「表示された」、見えない場合は「表示されない」を選んでください。",
+            NotificationSupportState.Confirmed => "通知表示を確認済みです。Windows 通知一覧への登録有無にかかわらず、このまま利用できます。",
+            NotificationSupportState.ProceedWithoutNotifications => "通知が表示されなくても共有は利用できます。必要に応じて Windows 通知設定を確認してください。",
+            _ => "まずは「テスト通知を送る」で通知表示を確認してください。見えない場合も通知なしで共有は利用できます。"
         };
     }
 
@@ -3394,9 +3398,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled, ShareWorkinNotificationStatus shareWorkinNotificationStatus)
     {
-        return !windowsNotificationsEnabled ||
-               shareWorkinNotificationStatus != ShareWorkinNotificationStatus.Enabled ||
-               _notificationSupportState == NotificationSupportState.Unverified;
+        return _notificationSupportState == NotificationSupportState.Unverified ||
+               _notificationSupportState == NotificationSupportState.PendingConfirmation;
     }
 
     private void UpdateNotificationSupportButtonHighlight(bool isAttentionNeeded)
@@ -9884,7 +9887,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         return settings?.LastNotificationTestAt.HasValue == true
-            ? NotificationSupportState.TestSent
+            ? NotificationSupportState.PendingConfirmation
             : NotificationSupportState.Unverified;
     }
 
@@ -10394,7 +10397,9 @@ public enum NotificationMode
 public enum NotificationSupportState
 {
     Unverified,
-    TestSent,
+    PendingConfirmation,
+    Confirmed,
+    ProceedWithoutNotifications,
 }
 
 public enum ShareWorkinNotificationStatus

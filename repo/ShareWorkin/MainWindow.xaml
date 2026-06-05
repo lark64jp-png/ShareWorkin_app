@@ -900,7 +900,16 @@
                                         Padding="0"
                                         Margin="0,0,12,12"
                                         Click="SendTestNotificationButton_Click" />
-                                <Button Content="未規定ボタン"
+                                <Button x:Name="ConfirmNotificationDisplayedButton"
+                                        Content="表示された"
+                                        Width="132"
+                                        Height="30"
+                                        Padding="0"
+                                        Margin="0,0,12,12"
+                                        Visibility="Collapsed"
+                                        Click="ConfirmNotificationDisplayedButton_Click" />
+                                <Button x:Name="UseWithoutNotificationsButton"
+                                        Content="通知なしで使う"
                                         Width="132"
                                         Height="30"
                                         Padding="0"
