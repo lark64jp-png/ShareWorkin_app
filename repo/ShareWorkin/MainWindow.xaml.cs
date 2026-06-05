@@ -2311,11 +2311,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                         _shopFolder);
                     SwkLogger.Info($"NotificationSettings.SendTestNotification registration attempt={attempt} delivery={registrationResult}");
 
-                    if (registrationResult != NotificationCommandResult.Toast)
+                    if (registrationResult == NotificationCommandResult.Failed)
                     {
-                        string message = registrationResult == NotificationCommandResult.Fallback
-                            ? "登録用通知は簡易通知で、Windows Toast 登録確認は完了していません。Windows通知設定を開いて ShareWorkin の表示を確認してください。"
-                            : "登録用通知を送信できませんでした。通知設定を開いて確認してください。";
+                        string message = "通知表示確認の準備通知を送信できませんでした。少し待ってからもう一度お試しください。";
                         ShowTestNotificationFeedback(message);
                         RefreshNotificationSupportUi();
                         return;
@@ -2341,18 +2339,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            if (currentSnapshot.ShareWorkinStatus == ShareWorkinNotificationStatus.Unregistered)
-            {
-                SwkLogger.Info("NotificationSettings.SendTestNotification blocked: ShareWorkin is still unregistered");
-                ShowTestNotificationFeedback("通知送信者への登録確認ができませんでした。Windows通知設定を開いて確認してください。");
-                RefreshNotificationSupportUi();
-                return;
-            }
-
-            if (currentSnapshot.ShareWorkinStatus != ShareWorkinNotificationStatus.Enabled)
+            if (currentSnapshot.ShareWorkinStatus == ShareWorkinNotificationStatus.Disabled)
             {
                 SwkLogger.Info($"NotificationSettings.SendTestNotification blocked: ShareWorkin status is {currentSnapshot.ShareWorkinStatus}");
-                ShowTestNotificationFeedback("ShareWorkin は認識されましたが、Windows通知設定でOFFです。ONにしてください。");
+                ShowTestNotificationFeedback("ShareWorkin の通知がOFFです。Windows通知設定でONにしてからお試しください。");
                 RefreshNotificationSupportUi();
                 return;
             }
@@ -2376,11 +2366,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             RefreshNotificationSupportUi();
             if (testResult == NotificationCommandResult.Fallback)
             {
-                SetTransientStatus("テスト通知は簡易通知として表示されました。Windows Toast の成功確認は未完了です。Windows通知設定で ShareWorkin の表示も確認してください。");
+                SetTransientStatus("簡易通知で表示を確認しました。通知表示は利用できます。");
             }
             else
             {
-                SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
+                SetTransientStatus("通知を送信しました。表示を確認してください。");
             }
         }
         finally
@@ -2437,9 +2427,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         return attempt switch
         {
-            1 => "ShareWorkin を通知送信者として登録中です。数秒お待ちください。",
-            2 => "まだ登録確認中です。再度通知を試しています。しばらくお待ちください。",
-            _ => "まだ登録確認中です。もう一度通知を試しています。しばらくお待ちください。"
+            1 => "通知表示の準備をしています。数秒お待ちください。",
+            2 => "まだ通知表示を確認中です。再度通知を試しています。しばらくお待ちください。",
+            _ => "まだ通知表示を確認中です。もう一度通知を試しています。しばらくお待ちください。"
         };
     }
 
@@ -3262,7 +3252,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
         {
-            return "ShareWorkin通知未確認";
+            return state == NotificationSupportState.TestSent ? "通知表示確認済み" : "通知表示未確認";
         }
 
         if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
@@ -3289,7 +3279,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
         {
-            return "ShareWorkin が送信者一覧にまだ無い場合は、「テスト通知を送る」で認識確認を行ってからWindows通知設定を確認してください。";
+            return state == NotificationSupportState.TestSent
+                ? "通知表示は確認済みです。送信者一覧に表示されない場合も、まずは通知が表示できていれば利用できます。"
+                : "「テスト通知を送る」で通知が表示されるか確認してください。簡易通知でも表示できれば利用できます。";
         }
 
         if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
@@ -3299,8 +3291,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         return state switch
         {
-            NotificationSupportState.TestSent => "通知が表示されない場合は、Windows通知設定でShareWorkinがONか確認してください。",
-            _ => "まずは「テスト通知を送る」で表示を確認し、見えない場合はWindows通知設定を確認してください。"
+            NotificationSupportState.TestSent => "通知表示を確認済みです。表示されない場合だけWindows通知設定を確認してください。",
+            _ => "まずは「テスト通知を送る」で通知表示を確認してください。簡易通知でも表示できれば利用できます。"
         };
     }
 
