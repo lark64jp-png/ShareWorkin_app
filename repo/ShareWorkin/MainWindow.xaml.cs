@@ -1213,6 +1213,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return true;
     }
 
+    private NotificationCommandResult ShowBalloonTipWithTrace(
+        string route,
+        string title,
+        string text,
+        string? folder,
+        string? eventId = null,
+        int? count = null)
+    {
+        string corr = BuildNotificationCorrelationId(title, text, folder);
+        string folderText = string.IsNullOrWhiteSpace(folder) ? "-" : folder;
+        string eventText = string.IsNullOrWhiteSpace(eventId) ? "-" : eventId;
+        string countText = count?.ToString(CultureInfo.InvariantCulture) ?? "-";
+        int textLen = text?.Length ?? 0;
+
+        SwkLogger.Info(
+            $"NotificationTrace.Send route={route} corr={corr} title={title} folder={folderText} textLen={textLen} eventId={eventText} count={countText}");
+        NotificationCommandResult result = _pipeClient.ShowBalloonTip(title, text, folder);
+        SwkLogger.Info(
+            $"NotificationTrace.Result route={route} corr={corr} title={title} folder={folderText} textLen={textLen} eventId={eventText} count={countText} delivery={result}");
+        return result;
+    }
+
+    private static string BuildNotificationCorrelationId(string title, string text, string? folder)
+    {
+        string raw = $"{title}\n{text}\n{folder ?? string.Empty}";
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (char ch in raw)
+            {
+                hash ^= ch;
+                hash *= 16777619;
+            }
+
+            return hash.ToString("x8", CultureInfo.InvariantCulture);
+        }
+    }
+
     private void AppendHistory(
         HistoryChannel channel,
         string message,
@@ -2305,7 +2343,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 {
                     ShowTestNotificationFeedback(GetNotificationRegistrationAttemptMessage(attempt));
                     SwkLogger.Info($"NotificationSettings.SendTestNotification phase=registration-notice attempt={attempt}");
-                    registrationResult = _pipeClient.ShowBalloonTip(
+                    registrationResult = ShowBalloonTipWithTrace(
+                        "NotificationSettings.RegistrationNotice",
                         "ShareWorkin 通知準備",
                         "システムのアプリ認識確認をしています",
                         _shopFolder);
@@ -6081,7 +6120,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             notificationText,
             "Notify",
             HistoryOutcome.Info);
-        _pipeClient.ShowBalloonTip("ShareWorkin のお知らせ", notificationText, _shopFolder);
+        _ = ShowBalloonTipWithTrace(
+            "NotifyShopMaintenance",
+            "ShareWorkin のお知らせ",
+            notificationText,
+            _shopFolder);
     }
 
     private void NotificationTimer_Tick(object? sender, EventArgs e)
@@ -6117,7 +6160,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 pathText: firstItem.FolderPath,
                 note: "交流通知と未照合のため、送信元はまだ特定できていません。",
                 destinationFolder: firstItem.FolderPath);
-            _pipeClient.ShowBalloonTip("ShareWorkin の受信(通知なし)", notificationText, notifFolder);
+            _ = ShowBalloonTipWithTrace(
+                "ShowNotification.Single",
+                "ShareWorkin の受信(通知なし)",
+                notificationText,
+                notifFolder,
+                count: count);
             return;
         }
 
@@ -6131,7 +6179,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             pathText: notifFolder,
             note: "交流通知と未照合の受信です。詳細は更新履歴で確認できます。",
             destinationFolder: notifFolder);
-        _pipeClient.ShowBalloonTip("ShareWorkin の受信(通知なし)", summaryText, notifFolder);
+        _ = ShowBalloonTipWithTrace(
+            "ShowNotification.Batch",
+            "ShareWorkin の受信(通知なし)",
+            summaryText,
+            notifFolder,
+            count: count);
     }
 
     private void RecordConfirmedInteraction(InteractionEventEntry interactionEvent, Friend? friend)
@@ -6436,10 +6489,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 destinationFolder: entry.TargetFolder);
             if (displayedAt is null)
             {
-                _pipeClient.ShowBalloonTip(
+                _ = ShowBalloonTipWithTrace(
+                    "AcceptIncomingInteraction",
                     GetIncomingNotificationTitle(isVerified),
                     notificationText,
-                    entry.TargetFolder ?? _shopFolder);
+                    entry.TargetFolder ?? _shopFolder,
+                    eventId: entry.EventId);
                 DateTime now = DateTime.Now;
                 InteractionEventRepository.MarkDisplayed(entry.EventId, now);
                 SwkIncomingInteractionInbox.MarkDisplayed(entry.EventId, now.ToUniversalTime());

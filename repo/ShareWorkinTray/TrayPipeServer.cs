@@ -23,6 +23,22 @@ public sealed class TrayPipeServer
 
     public TrayPipeServer(TrayApp tray) => _tray = tray;
 
+    internal static string BuildNotificationCorrelationId(string title, string? text, string? folder)
+    {
+        string raw = $"{title}\n{text ?? string.Empty}\n{folder ?? string.Empty}";
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (char ch in raw)
+            {
+                hash ^= ch;
+                hash *= 16777619;
+            }
+
+            return hash.ToString("x8");
+        }
+    }
+
     public void Start()
     {
         _cts = new CancellationTokenSource();
@@ -210,10 +226,17 @@ internal sealed class TrayPipeSession : IDisposable
                 case "SHOW_BALLOON":
                 {
                     string title = root.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-                    string text = root.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "";
+                    string? text = root.TryGetProperty("text", out var tx) ? tx.GetString() : null;
+                    string safeText = text ?? string.Empty;
                     string? folder = root.TryGetProperty("folder", out var f) && f.ValueKind != JsonValueKind.Null ? f.GetString() : null;
-                    SwkLogger.Info($"TrayPipeServer SHOW_BALLOON received: title={title}");
-                    NotificationDisplayResult result = _tray.ShowBalloonTip(title, text, folder);
+                    string corr = TrayPipeServer.BuildNotificationCorrelationId(title, safeText, folder);
+                    string folderText = string.IsNullOrWhiteSpace(folder) ? "-" : folder;
+                    int textLen = safeText.Length;
+                    SwkLogger.Info(
+                        $"NotificationTrace.Received corr={corr} title={title} folder={folderText} textLen={textLen}");
+                    NotificationDisplayResult result = _tray.ShowBalloonTip(title, safeText, folder);
+                    SwkLogger.Info(
+                        $"NotificationTrace.Completed corr={corr} title={title} folder={folderText} textLen={textLen} delivery={result}");
                     await SendAsync(JsonSerializer.Serialize(new
                     {
                         type = "SHOW_BALLOON_RESULT",
