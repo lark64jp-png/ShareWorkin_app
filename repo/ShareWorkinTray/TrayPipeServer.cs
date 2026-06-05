@@ -213,8 +213,18 @@ internal sealed class TrayPipeSession : IDisposable
                     string text = root.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "";
                     string? folder = root.TryGetProperty("folder", out var f) && f.ValueKind != JsonValueKind.Null ? f.GetString() : null;
                     SwkLogger.Info($"TrayPipeServer SHOW_BALLOON received: title={title}");
-                    _tray.ShowBalloonTip(title, text, folder);
-                    await SendAsync("{\"type\":\"SHOW_BALLOON_RESULT\",\"ok\":true}");
+                    NotificationDisplayResult result = _tray.ShowBalloonTip(title, text, folder);
+                    await SendAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "SHOW_BALLOON_RESULT",
+                        ok = result != NotificationDisplayResult.Failed,
+                        delivery = result switch
+                        {
+                            NotificationDisplayResult.Toast => "toast",
+                            NotificationDisplayResult.Fallback => "fallback",
+                            _ => "failed"
+                        }
+                    }));
                     break;
                 }
 
@@ -224,8 +234,18 @@ internal sealed class TrayPipeSession : IDisposable
                         ? f.GetString()
                         : null;
                     SwkLogger.Info("TrayPipeServer TEST_NOTIFICATION received");
-                    _tray.ShowTestNotification(folder);
-                    await SendAsync("{\"type\":\"TEST_NOTIFICATION_RESULT\",\"ok\":true}");
+                    NotificationDisplayResult result = _tray.ShowTestNotification(folder);
+                    await SendAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "TEST_NOTIFICATION_RESULT",
+                        ok = result != NotificationDisplayResult.Failed,
+                        delivery = result switch
+                        {
+                            NotificationDisplayResult.Toast => "toast",
+                            NotificationDisplayResult.Fallback => "fallback",
+                            _ => "failed"
+                        }
+                    }));
                     break;
                 }
 

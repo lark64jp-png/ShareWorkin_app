@@ -201,7 +201,9 @@ public partial class MainWindow : Window
     private string? _pendingInteractionMessage;
     private DateTime? _lastNotificationTestAt;
     private NotificationSupportState _notificationSupportState = NotificationSupportState.Unverified;
+    private bool _isNotificationTestInProgress;
     private const string NotificationSettingsAppId = "ShareWorkin.MediaHouse";
+    private const int MaxNotificationRegistrationAttempts = 3;
     private int _processingDepth;
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
@@ -2239,13 +2241,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     private void LogNotificationSupportSnapshot(string source)
     {
         bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
-        bool shareWorkinNotificationsEnabled = AreShareWorkinNotificationsEnabled();
-        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
+        ShareWorkinNotificationStatus shareWorkinNotificationStatus = GetShareWorkinNotificationStatus();
+        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationStatus);
         string attentionReason = isAttentionNeeded
             ? string.Join(",", new[]
             {
                 !windowsNotificationsEnabled ? "WindowsOff" : null,
-                !shareWorkinNotificationsEnabled ? "ShareWorkinOff" : null,
+                shareWorkinNotificationStatus != ShareWorkinNotificationStatus.Enabled ? $"ShareWorkin{shareWorkinNotificationStatus}" : null,
                 _notificationSupportState == NotificationSupportState.Unverified ? "Unverified" : null,
             }.Where(r => r != null))
             : "none";
@@ -2257,82 +2259,188 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         SwkLogger.Info(
             $"NotificationSettings snapshot: source={source} windowsNotificationsEnabled={windowsNotificationsEnabled} " +
-            $"shareWorkinNotificationsEnabled={shareWorkinNotificationsEnabled} " +
+            $"shareWorkinNotificationStatus={shareWorkinNotificationStatus} " +
             $"isAttentionNeeded={isAttentionNeeded} attentionReason={attentionReason} " +
             $"notificationMode={_notificationMode} supportState={_notificationSupportState} panelVisible={panelVisible} " +
             $"shopOpen={_isShopOpen} trayProcessCount={trayProcessCount} pipeConnected={pipeConnected} " +
             $"trayStatusOpen={trayStatus?.IsShopOpen.ToString() ?? "null"} trayStatusFolder={trayStatus?.ShopFolder ?? "null"} " +
             $"shopFolder={_shopFolder ?? "null"} lastTestAt={lastTest}");
+        SwkLogger.Info($"NotificationSettings registry probe: {DescribeNotificationSettingsRegistry()}");
     }
 
     private async void SendTestNotificationButton_Click(object sender, RoutedEventArgs e)
     {
-        SwkLogger.Info("NotificationSettings.SendTestNotification requested");
-
-        bool windowsOn = AreWindowsNotificationsEnabled();
-        bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
-        if (!windowsOn || !shareWorkinOn)
+        if (_isNotificationTestInProgress)
         {
-            (windowsOn, shareWorkinOn) = await WaitForStableNotificationStateAsync();
-            if (!windowsOn || !shareWorkinOn)
+            return;
+        }
+
+        _isNotificationTestInProgress = true;
+        SendTestNotificationButton.IsEnabled = false;
+        SwkLogger.Info("NotificationSettings.SendTestNotification requested");
+        try
+        {
+            var initialSnapshot = await WaitForStableNotificationStateAsync();
+            if (!initialSnapshot.WindowsEnabled)
             {
-                SwkLogger.Info("NotificationSettings.SendTestNotification blocked: notifications are off");
-                ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+                SwkLogger.Info("NotificationSettings.SendTestNotification blocked: windows notifications are off");
+                ShowTestNotificationFeedback("Windows通知をONにしてからテストを行ってください");
+                RefreshNotificationSupportUi();
                 return;
             }
-        }
 
-        if (!await EnsureTrayConnectedAsync())
-        {
-            SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray connection unavailable");
-            SetTransientStatus("ShareWorkinTray に接続できませんでした。");
-            return;
-        }
-
-        bool acknowledged = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
-        if (!acknowledged)
-        {
-            SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-            (bool windowsOnNow, bool shareWorkinOnNow) = await WaitForStableNotificationStateAsync();
-            if (!windowsOnNow || !shareWorkinOnNow)
+            if (!await EnsureTrayConnectedAsync())
             {
-                ShowTestNotificationFeedback("通知設定をONにしてからテストを行ってください");
+                SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray connection unavailable");
+                SetTransientStatus("ShareWorkinTray に接続できませんでした。");
+                RefreshNotificationSupportUi();
+                return;
             }
-            return;
-        }
 
-        SwkLogger.Info("NotificationSettings.SendTestNotification acknowledged by tray");
-        _testNotificationFeedbackCts?.Cancel();
-        TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
-        _lastNotificationTestAt = DateTime.Now;
-        _notificationSupportState = NotificationSupportState.TestSent;
-        SaveSettings();
-        RefreshNotificationSupportUi();
-        SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
+            NotificationStateSnapshot currentSnapshot = initialSnapshot;
+            if (currentSnapshot.ShareWorkinStatus == ShareWorkinNotificationStatus.Unregistered)
+            {
+                NotificationCommandResult registrationResult = NotificationCommandResult.Failed;
+                for (int attempt = 1; attempt <= MaxNotificationRegistrationAttempts; attempt++)
+                {
+                    ShowTestNotificationFeedback(GetNotificationRegistrationAttemptMessage(attempt));
+                    SwkLogger.Info($"NotificationSettings.SendTestNotification phase=registration-notice attempt={attempt}");
+                    registrationResult = _pipeClient.ShowBalloonTip(
+                        "ShareWorkin 通知準備",
+                        "システムのアプリ認識確認をしています",
+                        _shopFolder);
+                    SwkLogger.Info($"NotificationSettings.SendTestNotification registration attempt={attempt} delivery={registrationResult}");
+
+                    if (registrationResult != NotificationCommandResult.Toast)
+                    {
+                        string message = registrationResult == NotificationCommandResult.Fallback
+                            ? "登録用通知は簡易通知で、Windows Toast 登録確認は完了していません。Windows通知設定を開いて ShareWorkin の表示を確認してください。"
+                            : "登録用通知を送信できませんでした。通知設定を開いて確認してください。";
+                        ShowTestNotificationFeedback(message);
+                        RefreshNotificationSupportUi();
+                        return;
+                    }
+
+                    currentSnapshot = await WaitForShareWorkinNotificationStatusAsync(
+                        ShareWorkinNotificationStatus.Unregistered,
+                        TimeSpan.FromSeconds(8));
+
+                    if (!currentSnapshot.WindowsEnabled ||
+                        currentSnapshot.ShareWorkinStatus != ShareWorkinNotificationStatus.Unregistered)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!currentSnapshot.WindowsEnabled)
+            {
+                SwkLogger.Info("NotificationSettings.SendTestNotification blocked after wait: windows notifications are off");
+                ShowTestNotificationFeedback("Windows通知をONにしてからテストを行ってください");
+                RefreshNotificationSupportUi();
+                return;
+            }
+
+            if (currentSnapshot.ShareWorkinStatus == ShareWorkinNotificationStatus.Unregistered)
+            {
+                SwkLogger.Info("NotificationSettings.SendTestNotification blocked: ShareWorkin is still unregistered");
+                ShowTestNotificationFeedback("通知送信者への登録確認ができませんでした。Windows通知設定を開いて確認してください。");
+                RefreshNotificationSupportUi();
+                return;
+            }
+
+            if (currentSnapshot.ShareWorkinStatus != ShareWorkinNotificationStatus.Enabled)
+            {
+                SwkLogger.Info($"NotificationSettings.SendTestNotification blocked: ShareWorkin status is {currentSnapshot.ShareWorkinStatus}");
+                ShowTestNotificationFeedback("ShareWorkin は認識されましたが、Windows通知設定でOFFです。ONにしてください。");
+                RefreshNotificationSupportUi();
+                return;
+            }
+
+            NotificationCommandResult testResult = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
+            if (testResult == NotificationCommandResult.Failed)
+            {
+                SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
+                ShowTestNotificationFeedback("テスト通知を送信できませんでした。少し待ってからもう一度お試しください。");
+                RefreshNotificationSupportUi();
+                return;
+            }
+
+            SwkLogger.Info($"NotificationSettings.SendTestNotification acknowledged by tray delivery={testResult}");
+            _testNotificationFeedbackCts?.Cancel();
+            TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
+            _lastNotificationTestAt = DateTime.Now;
+            _notificationSupportState = NotificationSupportState.TestSent;
+            SaveSettings();
+            await WaitForStableNotificationStateAsync();
+            RefreshNotificationSupportUi();
+            if (testResult == NotificationCommandResult.Fallback)
+            {
+                SetTransientStatus("テスト通知は簡易通知として表示されました。Windows Toast の成功確認は未完了です。Windows通知設定で ShareWorkin の表示も確認してください。");
+            }
+            else
+            {
+                SetTransientStatus("テスト通知を送信しました。表示されない場合は通知設定を確認してください。");
+            }
+        }
+        finally
+        {
+            _isNotificationTestInProgress = false;
+            SendTestNotificationButton.IsEnabled = true;
+        }
     }
 
-    private static async Task<(bool windowsOn, bool shareWorkinOn)> WaitForStableNotificationStateAsync()
+    private static async Task<NotificationStateSnapshot> WaitForStableNotificationStateAsync()
     {
         const int intervalMs = 200;
         const int maxAttempts = 8;
 
-        bool prevWindowsOn = AreWindowsNotificationsEnabled();
-        bool prevShareWorkinOn = AreShareWorkinNotificationsEnabled();
+        var previous = CaptureNotificationStateSnapshot();
 
         for (int i = 0; i < maxAttempts; i++)
         {
             await Task.Delay(intervalMs);
-            bool windowsOn = AreWindowsNotificationsEnabled();
-            bool shareWorkinOn = AreShareWorkinNotificationsEnabled();
-            if (windowsOn == prevWindowsOn && shareWorkinOn == prevShareWorkinOn)
+            var current = CaptureNotificationStateSnapshot();
+            if (current.WindowsEnabled == previous.WindowsEnabled &&
+                current.ShareWorkinStatus == previous.ShareWorkinStatus)
             {
-                return (windowsOn, shareWorkinOn);
+                return current;
             }
-            prevWindowsOn = windowsOn;
-            prevShareWorkinOn = shareWorkinOn;
+            previous = current;
         }
 
-        return (prevWindowsOn, prevShareWorkinOn);
+        return previous;
+    }
+
+    private static async Task<NotificationStateSnapshot> WaitForShareWorkinNotificationStatusAsync(
+        ShareWorkinNotificationStatus initialStatus,
+        TimeSpan timeout)
+    {
+        const int intervalMs = 300;
+        DateTime deadline = DateTime.UtcNow.Add(timeout);
+        var lastSnapshot = CaptureNotificationStateSnapshot();
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(intervalMs);
+            lastSnapshot = CaptureNotificationStateSnapshot();
+            if (!lastSnapshot.WindowsEnabled || lastSnapshot.ShareWorkinStatus != initialStatus)
+            {
+                return lastSnapshot;
+            }
+        }
+
+        return lastSnapshot;
+    }
+
+    private static string GetNotificationRegistrationAttemptMessage(int attempt)
+    {
+        return attempt switch
+        {
+            1 => "ShareWorkin を通知送信者として登録中です。数秒お待ちください。",
+            2 => "まだ登録確認中です。再度通知を試しています。しばらくお待ちください。",
+            _ => "まだ登録確認中です。もう一度通知を試しています。しばらくお待ちください。"
+        };
     }
 
     private async void ShowTestNotificationFeedback(string message)
@@ -3131,27 +3239,35 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         bool windowsNotificationsEnabled = AreWindowsNotificationsEnabled();
-        bool shareWorkinNotificationsEnabled = AreShareWorkinNotificationsEnabled();
-        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
+        ShareWorkinNotificationStatus shareWorkinNotificationStatus = GetShareWorkinNotificationStatus();
+        bool isAttentionNeeded = IsNotificationAttentionNeeded(windowsNotificationsEnabled, shareWorkinNotificationStatus);
         NotificationSupportMonitorTextBlock.Text = $"共有監視: {(_isShopOpen ? "ON" : "OFF")}";
-        NotificationSupportStateTextBlock.Text = $"通知状態: {FormatNotificationSupportState(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationsEnabled)}";
+        NotificationSupportStateTextBlock.Text = $"通知状態: {FormatNotificationSupportState(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationStatus)}";
         NotificationSupportLastTestTextBlock.Text = _lastNotificationTestAt.HasValue
             ? $"最終通知テスト日時: {_lastNotificationTestAt.Value:yyyy/MM/dd HH:mm}"
             : "最終通知テスト日時: 未実行";
-        NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationsEnabled);
+        NotificationSupportHintTextBlock.Text = FormatNotificationSupportHint(_notificationSupportState, windowsNotificationsEnabled, shareWorkinNotificationStatus);
         UpdateNotificationSupportButtonHighlight(isAttentionNeeded);
     }
 
-    private static string FormatNotificationSupportState(NotificationSupportState state, bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
+    private static string FormatNotificationSupportState(
+        NotificationSupportState state,
+        bool windowsNotificationsEnabled,
+        ShareWorkinNotificationStatus shareWorkinNotificationStatus)
     {
         if (!windowsNotificationsEnabled)
         {
             return "Windows通知OFF";
         }
 
-        if (!shareWorkinNotificationsEnabled)
+        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
         {
             return "ShareWorkin通知未確認";
+        }
+
+        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
+        {
+            return "ShareWorkin通知OFF";
         }
 
         return state switch
@@ -3161,16 +3277,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         };
     }
 
-    private static string FormatNotificationSupportHint(NotificationSupportState state, bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
+    private static string FormatNotificationSupportHint(
+        NotificationSupportState state,
+        bool windowsNotificationsEnabled,
+        ShareWorkinNotificationStatus shareWorkinNotificationStatus)
     {
         if (!windowsNotificationsEnabled)
         {
             return "Windows通知設定で、ShareWorkin がONか確認してください。";
         }
 
-        if (!shareWorkinNotificationsEnabled)
+        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Unregistered)
         {
-            return "Windows通知設定で、ShareWorkin が送信者一覧に現れてONになっているか確認してください。";
+            return "ShareWorkin が送信者一覧にまだ無い場合は、「テスト通知を送る」で認識確認を行ってからWindows通知設定を確認してください。";
+        }
+
+        if (shareWorkinNotificationStatus == ShareWorkinNotificationStatus.Disabled)
+        {
+            return "Windows通知設定で、ShareWorkin がONになっているか確認してください。";
         }
 
         return state switch
@@ -3200,7 +3324,55 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private static bool AreShareWorkinNotificationsEnabled()
+    private static NotificationStateSnapshot CaptureNotificationStateSnapshot()
+    {
+        return new NotificationStateSnapshot(
+            AreWindowsNotificationsEnabled(),
+            GetShareWorkinNotificationStatus());
+    }
+
+    private static string DescribeNotificationSettingsRegistry()
+    {
+        try
+        {
+            using RegistryKey? settingsKey = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings",
+                false);
+            if (settingsKey is null)
+            {
+                return "settingsKey=null";
+            }
+
+            string[] candidates = settingsKey.GetSubKeyNames()
+                .Where(name => name.Contains("ShareWorkin", StringComparison.OrdinalIgnoreCase) ||
+                               name.Contains("MediaHouse", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            string targetInfo;
+            using RegistryKey? targetKey = settingsKey.OpenSubKey(NotificationSettingsAppId, false);
+            if (targetKey is null)
+            {
+                targetInfo = $"{NotificationSettingsAppId}=missing";
+            }
+            else
+            {
+                object? enabled = targetKey.GetValue("Enabled");
+                targetInfo = $"{NotificationSettingsAppId}.Enabled={enabled ?? "null"}";
+            }
+
+            string candidateInfo = candidates.Length == 0
+                ? "candidates=none"
+                : $"candidates=[{string.Join(", ", candidates)}]";
+            return $"{targetInfo} {candidateInfo}";
+        }
+        catch (Exception ex)
+        {
+            return $"registry-probe-failed:{ex.Message}";
+        }
+    }
+
+    private static ShareWorkinNotificationStatus GetShareWorkinNotificationStatus()
     {
         try
         {
@@ -3210,28 +3382,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             if (key is null)
             {
-                return false;
+                return ShareWorkinNotificationStatus.Unregistered;
             }
 
             object? value = key.GetValue("Enabled");
             return value switch
             {
-                int intValue => intValue != 0,
-                byte byteValue => byteValue != 0,
-                _ => true
+                int intValue => intValue != 0 ? ShareWorkinNotificationStatus.Enabled : ShareWorkinNotificationStatus.Disabled,
+                byte byteValue => byteValue != 0 ? ShareWorkinNotificationStatus.Enabled : ShareWorkinNotificationStatus.Disabled,
+                _ => ShareWorkinNotificationStatus.Enabled
             };
         }
         catch (Exception ex)
         {
-            SwkLogger.Warn($"AreShareWorkinNotificationsEnabled failed: {ex.Message}");
-            return false;
+            SwkLogger.Warn($"GetShareWorkinNotificationStatus failed: {ex.Message}");
+            return ShareWorkinNotificationStatus.Unregistered;
         }
     }
 
-    private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled, bool shareWorkinNotificationsEnabled)
+    private bool IsNotificationAttentionNeeded(bool windowsNotificationsEnabled, ShareWorkinNotificationStatus shareWorkinNotificationStatus)
     {
         return !windowsNotificationsEnabled ||
-               !shareWorkinNotificationsEnabled ||
+               shareWorkinNotificationStatus != ShareWorkinNotificationStatus.Enabled ||
                _notificationSupportState == NotificationSupportState.Unverified;
     }
 
@@ -10232,6 +10404,17 @@ public enum NotificationSupportState
     Unverified,
     TestSent,
 }
+
+public enum ShareWorkinNotificationStatus
+{
+    Unregistered,
+    Disabled,
+    Enabled,
+}
+
+public readonly record struct NotificationStateSnapshot(
+    bool WindowsEnabled,
+    ShareWorkinNotificationStatus ShareWorkinStatus);
 
 public sealed record ArrivedItem(string Name, string FolderPath, DateTime ArrivedAt)
 {

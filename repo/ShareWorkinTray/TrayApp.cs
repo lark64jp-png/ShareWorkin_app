@@ -10,6 +10,13 @@ using Forms = System.Windows.Forms;
 
 namespace ShareWorkinTray;
 
+public enum NotificationDisplayResult
+{
+    Failed,
+    Fallback,
+    Toast,
+}
+
 public sealed class TrayApp : IDisposable
 {
     private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
@@ -353,24 +360,33 @@ public sealed class TrayApp : IDisposable
             : Path.Combine(shopFolder, relativePath);
     }
 
-    public void ShowBalloonTip(string title, string text, string? folder)
+    public NotificationDisplayResult ShowBalloonTip(string title, string text, string? folder)
     {
         _lastBalloonFolder = folder;
         if (WindowsToastNotificationService.TryShow(title, text))
         {
             SwkLogger.Info($"ShowToastNotification: title={title}");
-            return;
+            return NotificationDisplayResult.Toast;
         }
 
-        _notifyIcon.BalloonTipTitle = title;
-        _notifyIcon.BalloonTipText = text;
-        _notifyIcon.ShowBalloonTip(5000);
-        SwkLogger.Info($"ShowBalloonTip fallback: title={title}");
+        try
+        {
+            _notifyIcon.BalloonTipTitle = title;
+            _notifyIcon.BalloonTipText = text;
+            _notifyIcon.ShowBalloonTip(5000);
+            SwkLogger.Info($"ShowBalloonTip fallback: title={title}");
+            return NotificationDisplayResult.Fallback;
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"ShowBalloonTip failed: title={title} ({ex.Message})");
+            return NotificationDisplayResult.Failed;
+        }
     }
 
-    public void ShowTestNotification(string? folder)
+    public NotificationDisplayResult ShowTestNotification(string? folder)
     {
-        ShowBalloonTip(
+        return ShowBalloonTip(
             "ShareWorkin 通知テスト",
             "通知は正常に表示されています。",
             folder);

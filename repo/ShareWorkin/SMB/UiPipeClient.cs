@@ -10,6 +10,13 @@ using System.Threading.Tasks;
 
 namespace ShareWorkin.SMB;
 
+public enum NotificationCommandResult
+{
+    Failed,
+    Fallback,
+    Toast,
+}
+
 public sealed record TrayStatus(bool IsShopOpen, string? ShopFolder);
 public sealed record IncomingInteractionMessage(SwkIncomingInteractionRecord Entry);
 
@@ -136,12 +143,12 @@ public sealed class UiPipeClient : IDisposable
     public void BroadcastPermission() => FireAndForget("{\"cmd\":\"BROADCAST_PERMISSION\"}");
     public void ReloadSettings() => FireAndForget("{\"cmd\":\"RELOAD_SETTINGS\"}");
 
-    public void ShowBalloonTip(string title, string text, string? folder)
+    public NotificationCommandResult ShowBalloonTip(string title, string text, string? folder)
     {
-        SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "SHOW_BALLOON", title, text, folder }));
+        return SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "SHOW_BALLOON", title, text, folder }));
     }
 
-    public bool SendTestNotification(string? folder)
+    public NotificationCommandResult SendTestNotification(string? folder)
     {
         return SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "TEST_NOTIFICATION", folder }));
     }
@@ -228,21 +235,56 @@ public sealed class UiPipeClient : IDisposable
         finally { _cmdLock.Release(); }
     }
 
-    private bool SendNotificationCommand(string json)
+    private NotificationCommandResult SendNotificationCommand(string json)
     {
         if (!IsConnected)
         {
             SwkLogger.Debug("UiPipeClient.SendNotificationCommand skipped: not connected");
-            return false;
+            return NotificationCommandResult.Failed;
         }
 
-        bool ok = ReadOk(SendCommand(json));
-        if (!ok)
+        string? responseJson = SendCommand(json);
+        NotificationCommandResult result = ReadNotificationCommandResult(responseJson);
+        if (result == NotificationCommandResult.Failed)
         {
             SwkLogger.Warn("UiPipeClient.SendNotificationCommand failed: tray did not acknowledge notification command");
         }
 
-        return ok;
+        return result;
+    }
+
+    private static NotificationCommandResult ReadNotificationCommandResult(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return NotificationCommandResult.Failed;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            bool ok = root.TryGetProperty("ok", out var okElement) && okElement.GetBoolean();
+            if (!ok)
+            {
+                return NotificationCommandResult.Failed;
+            }
+
+            string? delivery = root.TryGetProperty("delivery", out var deliveryElement)
+                ? deliveryElement.GetString()
+                : null;
+
+            return delivery switch
+            {
+                "toast" => NotificationCommandResult.Toast,
+                "fallback" => NotificationCommandResult.Fallback,
+                _ => NotificationCommandResult.Failed
+            };
+        }
+        catch
+        {
+            return NotificationCommandResult.Failed;
+        }
     }
 
     private void FireAndForget(string json)

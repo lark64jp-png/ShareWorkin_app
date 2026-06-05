@@ -35,7 +35,9 @@ internal static class WindowsToastNotificationService
             SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
             EnsureStartMenuShortcut();
             _isAvailable = true;
-            SwkLogger.Info("WindowsToastNotificationService initialized");
+            SwkLogger.Info(
+                $"WindowsToastNotificationService initialized: appId={AppUserModelId} processPath={Environment.ProcessPath ?? "null"} " +
+                $"shortcutPath={GetShortcutPath()}");
             return true;
         }
         catch (Exception ex)
@@ -110,32 +112,80 @@ internal static class WindowsToastNotificationService
         };
         process.Start();
         process.WaitForExit(5000);
+        SwkLogger.Info(
+            $"WindowsToastNotificationService.InvokeToastScript exitCode={process.ExitCode} " +
+            $"appId={AppUserModelId} processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()}");
         return process.ExitCode == 0;
     }
 
     private static void EnsureStartMenuShortcut()
     {
-        string startMenuPrograms = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
-        string shortcutPath = Path.Combine(startMenuPrograms, ShortcutName);
-        string executablePath = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Process path could not be resolved.");
+        string shortcutPath = GetShortcutPath();
+        string executablePath = ResolveNotificationShortcutExecutablePath();
+
+        if (ShortcutMatchesExpectedConfiguration(shortcutPath, executablePath))
+        {
+            SwkLogger.Info($"WindowsToastNotificationService shortcut kept: path={shortcutPath} target={executablePath} appId={AppUserModelId}");
+            return;
+        }
 
         if (File.Exists(shortcutPath))
         {
-            if (ShortcutHasExpectedAppId(shortcutPath))
-            {
-                return;
-            }
-
+            SwkLogger.Info($"WindowsToastNotificationService shortcut recreated: path={shortcutPath} reason=configuration-mismatch");
             File.Delete(shortcutPath);
         }
 
         CreateShortcut(shortcutPath, executablePath);
+        SwkLogger.Info(
+            $"WindowsToastNotificationService shortcut created: path={shortcutPath} target={executablePath} appId={AppUserModelId}");
     }
 
-    private static bool ShortcutHasExpectedAppId(string shortcutPath)
+    private static string ResolveNotificationShortcutExecutablePath()
+    {
+        string? processPath = Environment.ProcessPath;
+        string? processDirectory = Path.GetDirectoryName(processPath);
+        if (string.IsNullOrWhiteSpace(processDirectory))
+        {
+            throw new InvalidOperationException("Process path could not be resolved.");
+        }
+
+        string sameDirectoryUiPath = Path.Combine(processDirectory, "ShareWorkin.exe");
+        if (File.Exists(sameDirectoryUiPath))
+        {
+            return sameDirectoryUiPath;
+        }
+
+        DirectoryInfo? current = new DirectoryInfo(processDirectory);
+        while (current is not null)
+        {
+            string siblingBuildUiPath = Path.Combine(
+                current.FullName,
+                "ShareWorkin",
+                "bin",
+                "Debug",
+                "net8.0-windows",
+                "ShareWorkin.exe");
+            if (File.Exists(siblingBuildUiPath))
+            {
+                return siblingBuildUiPath;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("ShareWorkin.exe for notification shortcut could not be resolved.");
+    }
+
+    private static string GetShortcutPath()
+    {
+        string startMenuPrograms = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+        return Path.Combine(startMenuPrograms, ShortcutName);
+    }
+
+    private static bool ShortcutMatchesExpectedConfiguration(string shortcutPath, string executablePath)
     {
         object? shellLink = null;
+        IShellLinkW? shellLinkInterface = null;
         IPersistFile? persistFile = null;
         IPropertyStore? propertyStore = null;
 
@@ -143,16 +193,22 @@ internal static class WindowsToastNotificationService
         {
             shellLink = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!)
                 ?? throw new InvalidOperationException("ShellLink COM object could not be created.");
+            shellLinkInterface = (IShellLinkW)shellLink;
             persistFile = (IPersistFile)shellLink;
             persistFile.Load(shortcutPath, 0);
             propertyStore = (IPropertyStore)shellLink;
+
+            var pathBuffer = new System.Text.StringBuilder(260);
+            shellLinkInterface.GetPath(pathBuffer, pathBuffer.Capacity, out _, 0);
+            string? existingTarget = pathBuffer.Length > 0 ? pathBuffer.ToString() : null;
 
             PropertyKey appUserModelId = PropertyKeys.AppUserModelId;
             propertyStore.GetValue(ref appUserModelId, out PropVariant value);
             using (value)
             {
                 string? existing = value.GetValue();
-                return string.Equals(existing, AppUserModelId, StringComparison.Ordinal);
+                return string.Equals(existing, AppUserModelId, StringComparison.Ordinal) &&
+                       PathsEqual(existingTarget, executablePath);
             }
         }
         catch
@@ -164,6 +220,26 @@ internal static class WindowsToastNotificationService
             if (propertyStore is not null) Marshal.ReleaseComObject(propertyStore);
             if (persistFile is not null) Marshal.ReleaseComObject(persistFile);
             if (shellLink is not null) Marshal.ReleaseComObject(shellLink);
+        }
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(left),
+                Path.GetFullPath(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 
