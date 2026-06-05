@@ -1,10 +1,10 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
-using System.Xml.Linq;
-using System.Diagnostics;
 using System.Text;
+using System.Xml.Linq;
 using ShareWorkin.SMB;
 
 namespace ShareWorkinTray;
@@ -63,7 +63,7 @@ internal static class WindowsToastNotificationService
         try
         {
             string xml = BuildToastXml(title, text);
-            return InvokeToastScript(xml);
+            return ShowDirectToast(xml, title);
         }
         catch (Exception ex)
         {
@@ -85,37 +85,77 @@ internal static class WindowsToastNotificationService
         return toast.ToString(SaveOptions.DisableFormatting);
     }
 
-    private static bool InvokeToastScript(string xml)
+    private static bool ShowDirectToast(string xml, string title)
     {
-        string escapedXml = xml.Replace("'", "''");
-        string escapedAppId = AppUserModelId.Replace("'", "''");
-        string script =
-            "$xml = @'" + Environment.NewLine +
-            escapedXml + Environment.NewLine +
-            "'@; " +
-            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null; " +
-            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; " +
-            "$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; " +
-            "$doc.LoadXml($xml); " +
-            "$toast = [Windows.UI.Notifications.ToastNotification]::new($doc); " +
-            "$toast.ExpirationTime = [DateTimeOffset]::Now.AddMinutes(10); " +
-            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('" + escapedAppId + "').Show($toast);";
-
-        using var process = new Process();
-        string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        process.StartInfo = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encodedScript,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        process.Start();
-        process.WaitForExit(5000);
         SwkLogger.Info(
-            $"WindowsToastNotificationService.InvokeToastScript exitCode={process.ExitCode} " +
-            $"appId={AppUserModelId} processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()}");
-        return process.ExitCode == 0;
+            $"WindowsToastNotificationService.ShowDirectToast start: appId={AppUserModelId} " +
+            $"processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()} title={title}");
+
+        Type xmlDocumentType = Type.GetType(
+            "Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime",
+            throwOnError: true)!;
+        object xmlDocument = Activator.CreateInstance(xmlDocumentType)!;
+        xmlDocumentType.GetMethod("LoadXml")!.Invoke(xmlDocument, [xml]);
+
+        Type toastNotificationType = Type.GetType(
+            "Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime",
+            throwOnError: true)!;
+        object toast = Activator.CreateInstance(toastNotificationType, xmlDocument)!;
+        toastNotificationType.GetProperty("ExpirationTime")!.SetValue(toast, DateTimeOffset.Now.AddMinutes(10));
+
+        AttachToastEventHandler(toast, toastNotificationType, "Activated", nameof(OnToastActivated));
+        AttachToastEventHandler(toast, toastNotificationType, "Dismissed", nameof(OnToastDismissed));
+        AttachToastEventHandler(toast, toastNotificationType, "Failed", nameof(OnToastFailed));
+
+        Type toastManagerType = Type.GetType(
+            "Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime",
+            throwOnError: true)!;
+        object notifier = toastManagerType.GetMethod("CreateToastNotifier", [typeof(string)])!
+            .Invoke(null, [AppUserModelId])!;
+        notifier.GetType().GetMethod("Show")!.Invoke(notifier, [toast]);
+        SwkLogger.Info(
+            $"WindowsToastNotificationService.ShowDirectToast requested: appId={AppUserModelId} " +
+            $"processPath={Environment.ProcessPath ?? "null"} title={title}");
+        return true;
+    }
+
+    private static void AttachToastEventHandler(object toast, Type toastNotificationType, string eventName, string handlerMethodName)
+    {
+        EventInfo? eventInfo = toastNotificationType.GetEvent(eventName);
+        if (eventInfo?.EventHandlerType is null)
+        {
+            SwkLogger.Warn($"WindowsToastNotificationService.AttachToastEventHandler skipped: event={eventName}");
+            return;
+        }
+
+        MethodInfo handlerMethod = typeof(WindowsToastNotificationService).GetMethod(
+            handlerMethodName,
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        Delegate handler = Delegate.CreateDelegate(eventInfo.EventHandlerType, handlerMethod);
+        eventInfo.AddEventHandler(toast, handler);
+    }
+
+    private static void OnToastActivated(object sender, object args)
+    {
+        SwkLogger.Info($"WindowsToastNotificationService.ToastActivated: appId={AppUserModelId}");
+    }
+
+    private static void OnToastDismissed(object sender, object args)
+    {
+        string reason = args.GetType().GetProperty("Reason")?.GetValue(args)?.ToString() ?? "unknown";
+        SwkLogger.Info($"WindowsToastNotificationService.ToastDismissed: appId={AppUserModelId} reason={reason}");
+    }
+
+    private static void OnToastFailed(object sender, object args)
+    {
+        object? error = args.GetType().GetProperty("ErrorCode")?.GetValue(args);
+        string errorText = error?.ToString() ?? "unknown";
+        string? message = error?.GetType().GetProperty("Message")?.GetValue(error)?.ToString();
+        int? hResult = error?.GetType().GetProperty("HResult")?.GetValue(error) as int?;
+
+        SwkLogger.Warn(
+            $"WindowsToastNotificationService.ToastFailed: appId={AppUserModelId} " +
+            $"hr={(hResult.HasValue ? $"0x{hResult.Value:X8}" : "unknown")} error={errorText} message={message ?? "null"}");
     }
 
     private static void EnsureStartMenuShortcut()
