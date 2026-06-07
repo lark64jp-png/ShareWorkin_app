@@ -53,8 +53,8 @@ Source: ".\ご利用にあたって.txt"; DestDir: "{app}"; Flags: ignoreversion
 Name: "desktopicon"; Description: "デスクトップにショートカットを作る"; GroupDescription: "追加アイコン:"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "ShareWorkin.MediaHouse"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "ShareWorkin.MediaHouse"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; AppUserModelID: "ShareWorkin.MediaHouse.App"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "ShareWorkin.MediaHouse.App"
 
 [Code]
 const
@@ -573,10 +573,16 @@ function CreateScheduledTaskOrWarn(): Boolean;
 var
   ResultCode: Integer;
 begin
+  // Recreate the task so older /RL HIGHEST definitions are replaced during reinstall.
+  RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
+    ResultCode);
+
   Result := RunHiddenSystemCommand(
     ExpandConstant('{sys}\schtasks.exe'),
     '/Create /TN "ShareWorkin\ShareWorkinTray" /TR "\"' +
-    ExpandConstant('{app}\' + TRAY_EXE) + '\"" /SC ONLOGON /RL HIGHEST /F',
+    ExpandConstant('{app}\' + TRAY_EXE) + '\" --startup-source=scheduled-task" /SC ONLOGON /RL LIMITED /F',
     ResultCode) and (ResultCode = 0);
 
   if not Result then

@@ -78,6 +78,22 @@ public partial class MainWindow : Window
     private static extern int RegisterDragDrop(IntPtr hwnd, IOleDropTarget pDropTarget);
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(IntPtr tokenHandle, int tokenInformationClass, out TOKEN_ELEVATION tokenInformation, int tokenInformationLength, out int returnLength);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const uint TokenQuery = 0x0008;
+    private const int TokenElevationClass = 20;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TOKEN_ELEVATION
+    {
+        public int TokenIsElevated;
+    }
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
     {
@@ -202,7 +218,7 @@ public partial class MainWindow : Window
     private DateTime? _lastNotificationTestAt;
     private NotificationSupportState _notificationSupportState = NotificationSupportState.Unverified;
     private bool _isNotificationTestInProgress;
-    private const string NotificationSettingsAppId = "ShareWorkin.MediaHouse";
+    private const string NotificationSettingsAppId = SwkNotificationIdentity.AppUserModelId;
     private const int MaxNotificationRegistrationAttempts = 3;
     private int _processingDepth;
     private int _deferredPermissionSaveDepth;
@@ -658,7 +674,18 @@ public partial class MainWindow : Window
         if (_pipeClient.Connect(timeoutMs: 150))
             return true;
 
-        bool trayAlreadyRunning = Process.GetProcessesByName("ShareWorkinTray").Length > 0;
+        Process[] trayProcesses = Process.GetProcessesByName("ShareWorkinTray");
+        bool trayAlreadyRunning = trayProcesses.Length > 0;
+        LogTrayProcesses("EnsureTrayConnectedAsync.detected", trayProcesses);
+        if (trayAlreadyRunning && ShouldRestartTrayProcesses(trayProcesses))
+        {
+            SwkLogger.Warn("EnsureTrayConnectedAsync restarting existing tray process(es): reason=ElevatedOrMultiple");
+            StopTrayProcesses(trayProcesses);
+            trayProcesses = Process.GetProcessesByName("ShareWorkinTray");
+            trayAlreadyRunning = trayProcesses.Length > 0;
+            LogTrayProcesses("EnsureTrayConnectedAsync.after-stop", trayProcesses);
+        }
+
         if (!trayAlreadyRunning)
         {
             if (!StartTrayFromScheduledTask())
@@ -690,6 +717,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            SwkLogger.Info("TrayStartup route=scheduled-task action=start-request");
             using Process? process = Process.Start(new ProcessStartInfo
             {
                 FileName = "schtasks.exe",
@@ -718,13 +746,105 @@ public partial class MainWindow : Window
 
         try
         {
-            Process.Start(new ProcessStartInfo(trayExe) { UseShellExecute = true });
+            SwkLogger.Info($"TrayStartup route=direct-process action=start-request path={trayExe}");
+            Process.Start(new ProcessStartInfo(trayExe, "--startup-source=direct-process") { UseShellExecute = true });
             return true;
         }
         catch (Exception ex)
         {
             SwkLogger.Warn($"StartTrayProcess failed: {ex.Message}");
             return false;
+        }
+    }
+
+    private static bool ShouldRestartTrayProcesses(IEnumerable<Process> trayProcesses)
+    {
+        int count = 0;
+        foreach (Process process in trayProcesses)
+        {
+            count++;
+            if (IsProcessElevated(process))
+            {
+                return true;
+            }
+        }
+
+        return count > 1;
+    }
+
+    private static void StopTrayProcesses(IEnumerable<Process> trayProcesses)
+    {
+        foreach (Process process in trayProcesses)
+        {
+            try
+            {
+                SwkLogger.Warn($"TrayStartup stopping process: pid={process.Id} elevated={IsProcessElevated(process)}");
+                process.Kill(entireProcessTree: false);
+                if (!process.WaitForExit(5000))
+                {
+                    SwkLogger.Warn($"TrayStartup stop timeout: pid={process.Id}");
+                }
+            }
+            catch (Exception ex)
+            {
+                SwkLogger.Warn($"TrayStartup stop failed: pid={process.Id} message={ex.Message}");
+            }
+        }
+    }
+
+    private static void LogTrayProcesses(string context, IEnumerable<Process> trayProcesses)
+    {
+        Process[] processArray = trayProcesses.ToArray();
+        if (processArray.Length == 0)
+        {
+            SwkLogger.Info($"{context}: count=0");
+            return;
+        }
+
+        foreach (Process process in processArray)
+        {
+            SwkLogger.Info($"{context}: pid={process.Id} elevated={IsProcessElevated(process)} name={process.ProcessName}");
+        }
+    }
+
+    private static bool IsProcessElevated(Process process)
+    {
+        IntPtr processHandle = IntPtr.Zero;
+        IntPtr tokenHandle = IntPtr.Zero;
+
+        try
+        {
+            processHandle = OpenProcess(ProcessQueryLimitedInformation, false, process.Id);
+            if (processHandle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            if (!OpenProcessToken(processHandle, TokenQuery, out tokenHandle))
+            {
+                return false;
+            }
+
+            if (!GetTokenInformation(
+                    tokenHandle,
+                    TokenElevationClass,
+                    out TOKEN_ELEVATION elevation,
+                    Marshal.SizeOf<TOKEN_ELEVATION>(),
+                    out _))
+            {
+                return false;
+            }
+
+            return elevation.TokenIsElevated != 0;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (tokenHandle != IntPtr.Zero) CloseHandle(tokenHandle);
+            if (processHandle != IntPtr.Zero) CloseHandle(processHandle);
         }
     }
 

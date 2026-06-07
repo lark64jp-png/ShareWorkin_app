@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -81,6 +82,7 @@ public sealed class TrayApp : IDisposable
 
     public void Start()
     {
+        SwkLogger.Info($"TrayApp.Start: elevated={IsRunningAsAdmin()} processPath={Environment.ProcessPath ?? "null"}");
         WindowsToastNotificationService.Initialize();
         LoadSettings();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
@@ -384,7 +386,7 @@ public sealed class TrayApp : IDisposable
         _lastBalloonFolder = folder;
         if (WindowsToastNotificationService.TryShow(title, text))
         {
-            SwkLogger.Info($"ShowToastNotification: title={title}");
+            SwkLogger.Info($"NotificationDelivery.ToastRequestNoFailureDetected: title={title}");
             return NotificationDisplayResult.Toast;
         }
 
@@ -399,21 +401,21 @@ public sealed class TrayApp : IDisposable
             _notifyIcon.BalloonTipTitle = title;
             _notifyIcon.BalloonTipText = text;
             _notifyIcon.ShowBalloonTip(5000);
-            SwkLogger.Info($"ShowBalloonTip fallback requested: title={title}");
+            SwkLogger.Info($"NotificationDelivery.FallbackRequested: title={title}");
 
             bool shown = shownTcs.Task.Wait(BalloonTipShownTimeout);
             if (shown)
             {
-                SwkLogger.Info($"ShowBalloonTip fallback confirmed: title={title}");
+                SwkLogger.Info($"NotificationDelivery.FallbackSuccess: title={title} signal=BalloonTipShown");
                 return NotificationDisplayResult.Fallback;
             }
 
-            SwkLogger.Warn($"ShowBalloonTip fallback timed out without BalloonTipShown: title={title}");
+            SwkLogger.Warn($"NotificationDelivery.FallbackFailed: title={title} signal=BalloonTipShownTimeout");
             return NotificationDisplayResult.Failed;
         }
         catch (Exception ex)
         {
-            SwkLogger.Warn($"ShowBalloonTip failed: title={title} ({ex.Message})");
+            SwkLogger.Warn($"NotificationDelivery.FallbackFailed: title={title} signal=Exception message={ex.Message}");
             return NotificationDisplayResult.Failed;
         }
         finally
@@ -660,5 +662,12 @@ public sealed class TrayApp : IDisposable
         if (!string.IsNullOrEmpty(name)) return name;
         string root = Path.GetPathRoot(shopFolder) ?? string.Empty;
         return root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimEnd(':');
+    }
+
+    private static bool IsRunningAsAdmin()
+    {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        WindowsPrincipal principal = new(identity);
+        return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 }

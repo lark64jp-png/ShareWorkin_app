@@ -6,13 +6,17 @@ using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using System.Xml.Linq;
 using ShareWorkin.SMB;
+using Windows.Data.Xml.Dom;
+using Windows.Foundation;
+using Windows.UI.Notifications;
 
 namespace ShareWorkinTray;
 
 internal static class WindowsToastNotificationService
 {
-    private const string AppUserModelId = "ShareWorkin.MediaHouse";
+    private const string AppUserModelId = SwkNotificationIdentity.AppUserModelId;
     private const string ShortcutName = "ShareWorkin.lnk";
+    private static readonly TimeSpan ToastFailureDetectionTimeout = TimeSpan.FromMilliseconds(1500);
 
     [DllImport("shell32.dll", SetLastError = true)]
     private static extern void SetCurrentProcessExplicitAppUserModelID(
@@ -74,69 +78,70 @@ internal static class WindowsToastNotificationService
 
     private static string BuildToastXml(string title, string text)
     {
-        var toast = new XElement("toast",
-            new XAttribute("scenario", "default"),
-            new XElement("visual",
-                new XElement("binding",
-                    new XAttribute("template", "ToastGeneric"),
-                    new XElement("text", title ?? string.Empty),
-                    new XElement("text", text ?? string.Empty))));
-
-        return toast.ToString(SaveOptions.DisableFormatting);
+        return
+            "<toast scenario=\"default\"><visual><binding template=\"ToastGeneric\">" +
+            $"<text>{System.Security.SecurityElement.Escape(title) ?? string.Empty}</text>" +
+            $"<text>{System.Security.SecurityElement.Escape(text) ?? string.Empty}</text>" +
+            "</binding></visual></toast>";
     }
 
     private static bool ShowDirectToast(string xml, string title)
     {
+        TaskCompletionSource<ToastFailedEventArgs>? failedTcs = null;
+        ToastNotification? toast = null;
+        TypedEventHandler<ToastNotification, object>? activatedHandler = null;
+        TypedEventHandler<ToastNotification, ToastDismissedEventArgs>? dismissedHandler = null;
+        TypedEventHandler<ToastNotification, ToastFailedEventArgs>? failedHandler = null;
+
         try
         {
             SwkLogger.Info(
                 $"WindowsToastNotificationService.ShowDirectToast start: appId={AppUserModelId} " +
                 $"processPath={Environment.ProcessPath ?? "null"} shortcutPath={GetShortcutPath()} title={title}");
 
-            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-xmldocument:start");
-            Type xmlDocumentType = Type.GetType(
-                "Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime",
-                throwOnError: true)!;
-            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-xmldocument:done type={xmlDocumentType.FullName}");
-
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-xmldocument:start");
-            object xmlDocument = Activator.CreateInstance(xmlDocumentType)!;
+            var xmlDocument = new XmlDocument();
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-xmldocument:done");
 
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=loadxml:start");
-            xmlDocumentType.GetMethod("LoadXml")!.Invoke(xmlDocument, [xml]);
+            xmlDocument.LoadXml(xml);
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=loadxml:done");
 
-            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-toast:start");
-            Type toastNotificationType = Type.GetType(
-                "Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime",
-                throwOnError: true)!;
-            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-toast:done type={toastNotificationType.FullName}");
-
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-toast:start");
-            object toast = Activator.CreateInstance(toastNotificationType, xmlDocument)!;
+            toast = new ToastNotification(xmlDocument)
+            {
+                ExpirationTime = DateTimeOffset.Now.AddMinutes(10)
+            };
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-toast:done");
 
-            toastNotificationType.GetProperty("ExpirationTime")!.SetValue(toast, DateTimeOffset.Now.AddMinutes(10));
+            activatedHandler = (_, _) => OnToastActivated();
+            dismissedHandler = (_, args) => OnToastDismissed(args.Reason.ToString());
+            failedTcs = new TaskCompletionSource<ToastFailedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            failedHandler = (_, args) =>
+            {
+                OnToastFailed(args.ErrorCode);
+                failedTcs.TrySetResult(args);
+            };
 
-            AttachToastEventHandler(toast, toastNotificationType, "Activated", nameof(OnToastActivated));
-            AttachToastEventHandler(toast, toastNotificationType, "Dismissed", nameof(OnToastDismissed));
-            AttachToastEventHandler(toast, toastNotificationType, "Failed", nameof(OnToastFailed));
-
-            SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=resolve-manager:start");
-            Type toastManagerType = Type.GetType(
-                "Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime",
-                throwOnError: true)!;
-            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=resolve-manager:done type={toastManagerType.FullName}");
+            toast.Activated += activatedHandler;
+            toast.Dismissed += dismissedHandler;
+            toast.Failed += failedHandler;
 
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=create-notifier:start");
-            object notifier = toastManagerType.GetMethod("CreateToastNotifier", [typeof(string)])!
-                .Invoke(null, [AppUserModelId])!;
+            SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast notifierAppId={AppUserModelId}");
+            ToastNotifier notifier = ToastNotificationManager.CreateToastNotifier(AppUserModelId);
             SwkLogger.Info($"WindowsToastNotificationService.ShowDirectToast step=create-notifier:done notifierType={notifier.GetType().FullName}");
 
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=show:start");
-            notifier.GetType().GetMethod("Show")!.Invoke(notifier, [toast]);
+            notifier.Show(toast);
             SwkLogger.Info("WindowsToastNotificationService.ShowDirectToast step=show:done");
+
+            Task completedTask = Task.WhenAny(failedTcs.Task, Task.Delay(ToastFailureDetectionTimeout)).GetAwaiter().GetResult();
+            if (completedTask == failedTcs.Task)
+            {
+                SwkLogger.Warn("WindowsToastNotificationService.ShowDirectToast result=failed-detected");
+                return false;
+            }
 
             SwkLogger.Info(
                 $"WindowsToastNotificationService.ShowDirectToast requested: appId={AppUserModelId} " +
@@ -150,45 +155,43 @@ internal static class WindowsToastNotificationService
                 $"message={ex.Message} stack={ex.StackTrace ?? "null"}");
             throw;
         }
-    }
-
-    private static void AttachToastEventHandler(object toast, Type toastNotificationType, string eventName, string handlerMethodName)
-    {
-        EventInfo? eventInfo = toastNotificationType.GetEvent(eventName);
-        if (eventInfo?.EventHandlerType is null)
+        finally
         {
-            SwkLogger.Warn($"WindowsToastNotificationService.AttachToastEventHandler skipped: event={eventName}");
-            return;
-        }
+            if (toast is not null)
+            {
+                if (activatedHandler is not null)
+                {
+                    toast.Activated -= activatedHandler;
+                }
 
-        MethodInfo handlerMethod = typeof(WindowsToastNotificationService).GetMethod(
-            handlerMethodName,
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-        Delegate handler = Delegate.CreateDelegate(eventInfo.EventHandlerType, handlerMethod);
-        eventInfo.AddEventHandler(toast, handler);
+                if (dismissedHandler is not null)
+                {
+                    toast.Dismissed -= dismissedHandler;
+                }
+
+                if (failedHandler is not null)
+                {
+                    toast.Failed -= failedHandler;
+                }
+            }
+        }
     }
 
-    private static void OnToastActivated(object sender, object args)
+    private static void OnToastActivated()
     {
         SwkLogger.Info($"WindowsToastNotificationService.ToastActivated: appId={AppUserModelId}");
     }
 
-    private static void OnToastDismissed(object sender, object args)
+    private static void OnToastDismissed(string reason)
     {
-        string reason = args.GetType().GetProperty("Reason")?.GetValue(args)?.ToString() ?? "unknown";
         SwkLogger.Info($"WindowsToastNotificationService.ToastDismissed: appId={AppUserModelId} reason={reason}");
     }
 
-    private static void OnToastFailed(object sender, object args)
+    private static void OnToastFailed(Exception error)
     {
-        object? error = args.GetType().GetProperty("ErrorCode")?.GetValue(args);
-        string errorText = error?.ToString() ?? "unknown";
-        string? message = error?.GetType().GetProperty("Message")?.GetValue(error)?.ToString();
-        int? hResult = error?.GetType().GetProperty("HResult")?.GetValue(error) as int?;
-
         SwkLogger.Warn(
             $"WindowsToastNotificationService.ToastFailed: appId={AppUserModelId} " +
-            $"hr={(hResult.HasValue ? $"0x{hResult.Value:X8}" : "unknown")} error={errorText} message={message ?? "null"}");
+            $"hr=0x{error.HResult:X8} error={error} message={error.Message}");
     }
 
     private static void EnsureStartMenuShortcut()
@@ -196,57 +199,57 @@ internal static class WindowsToastNotificationService
         string shortcutPath = GetShortcutPath();
         string executablePath = ResolveNotificationShortcutExecutablePath();
 
-        if (ShortcutMatchesExpectedConfiguration(shortcutPath, executablePath))
-        {
-            SwkLogger.Info($"WindowsToastNotificationService shortcut kept: path={shortcutPath} target={executablePath} appId={AppUserModelId}");
-            return;
-        }
-
         if (File.Exists(shortcutPath))
         {
-            SwkLogger.Info($"WindowsToastNotificationService shortcut recreated: path={shortcutPath} reason=configuration-mismatch");
+            SwkLogger.Info($"WindowsToastNotificationService shortcut refresh: path={shortcutPath} reason=force-rewrite");
             File.Delete(shortcutPath);
         }
 
         CreateShortcut(shortcutPath, executablePath);
         SwkLogger.Info(
-            $"WindowsToastNotificationService shortcut created: path={shortcutPath} target={executablePath} appId={AppUserModelId}");
+            $"WindowsToastNotificationService shortcut written: path={shortcutPath} " +
+            $"target={executablePath} appId={AppUserModelId}");
     }
 
     private static string ResolveNotificationShortcutExecutablePath()
     {
         string? processPath = Environment.ProcessPath;
-        string? processDirectory = Path.GetDirectoryName(processPath);
-        if (string.IsNullOrWhiteSpace(processDirectory))
+        if (string.IsNullOrWhiteSpace(processPath))
         {
             throw new InvalidOperationException("Process path could not be resolved.");
         }
 
-        string sameDirectoryUiPath = Path.Combine(processDirectory, "ShareWorkin.exe");
-        if (File.Exists(sameDirectoryUiPath))
+        string trayExecutablePath = Path.GetFullPath(processPath);
+        if (File.Exists(trayExecutablePath))
         {
-            return sameDirectoryUiPath;
+            return trayExecutablePath;
+        }
+
+        string? processDirectory = Path.GetDirectoryName(trayExecutablePath);
+        if (string.IsNullOrWhiteSpace(processDirectory))
+        {
+            throw new InvalidOperationException("Process directory could not be resolved.");
         }
 
         DirectoryInfo? current = new DirectoryInfo(processDirectory);
         while (current is not null)
         {
-            string siblingBuildUiPath = Path.Combine(
+            string siblingBuildTrayPath = Path.Combine(
                 current.FullName,
-                "ShareWorkin",
+                "ShareWorkinTray",
                 "bin",
                 "Debug",
-                "net8.0-windows",
-                "ShareWorkin.exe");
-            if (File.Exists(siblingBuildUiPath))
+                "net8.0-windows10.0.19041.0",
+                "ShareWorkinTray.exe");
+            if (File.Exists(siblingBuildTrayPath))
             {
-                return siblingBuildUiPath;
+                return siblingBuildTrayPath;
             }
 
             current = current.Parent;
         }
 
-        throw new FileNotFoundException("ShareWorkin.exe for notification shortcut could not be resolved.");
+        throw new FileNotFoundException("ShareWorkinTray.exe for notification shortcut could not be resolved.");
     }
 
     private static string GetShortcutPath()
@@ -255,71 +258,11 @@ internal static class WindowsToastNotificationService
         return Path.Combine(startMenuPrograms, ShortcutName);
     }
 
-    private static bool ShortcutMatchesExpectedConfiguration(string shortcutPath, string executablePath)
-    {
-        object? shellLink = null;
-        IShellLinkW? shellLinkInterface = null;
-        IPersistFile? persistFile = null;
-        IPropertyStore? propertyStore = null;
-
-        try
-        {
-            shellLink = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!)
-                ?? throw new InvalidOperationException("ShellLink COM object could not be created.");
-            shellLinkInterface = (IShellLinkW)shellLink;
-            persistFile = (IPersistFile)shellLink;
-            persistFile.Load(shortcutPath, 0);
-            propertyStore = (IPropertyStore)shellLink;
-
-            var pathBuffer = new System.Text.StringBuilder(260);
-            shellLinkInterface.GetPath(pathBuffer, pathBuffer.Capacity, out _, 0);
-            string? existingTarget = pathBuffer.Length > 0 ? pathBuffer.ToString() : null;
-
-            PropertyKey appUserModelId = PropertyKeys.AppUserModelId;
-            propertyStore.GetValue(ref appUserModelId, out PropVariant value);
-            using (value)
-            {
-                string? existing = value.GetValue();
-                return string.Equals(existing, AppUserModelId, StringComparison.Ordinal) &&
-                       PathsEqual(existingTarget, executablePath);
-            }
-        }
-        catch
-        {
-            return false;
-        }
-        finally
-        {
-            if (propertyStore is not null) Marshal.ReleaseComObject(propertyStore);
-            if (persistFile is not null) Marshal.ReleaseComObject(persistFile);
-            if (shellLink is not null) Marshal.ReleaseComObject(shellLink);
-        }
-    }
-
-    private static bool PathsEqual(string? left, string? right)
-    {
-        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
-        {
-            return false;
-        }
-
-        try
-        {
-            return string.Equals(
-                Path.GetFullPath(left),
-                Path.GetFullPath(right),
-                StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     private static void CreateShortcut(string shortcutPath, string executablePath)
     {
         object shellLink = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"))!)
             ?? throw new InvalidOperationException("ShellLink COM object could not be created.");
+        IPropertyStore? propertyStore = null;
         try
         {
             IShellLinkW shellLinkInterface = (IShellLinkW)shellLink;
@@ -328,7 +271,7 @@ internal static class WindowsToastNotificationService
             shellLinkInterface.SetIconLocation(executablePath, 0);
             shellLinkInterface.SetDescription("ShareWorkin");
 
-            IPropertyStore propertyStore = (IPropertyStore)shellLink;
+            propertyStore = (IPropertyStore)shellLink;
             using (PropVariant appId = new(AppUserModelId))
             {
                 PropertyKey appUserModelId = PropertyKeys.AppUserModelId;
@@ -337,10 +280,20 @@ internal static class WindowsToastNotificationService
             propertyStore.Commit();
 
             ((IPersistFile)shellLink).Save(shortcutPath, true);
-            Marshal.ReleaseComObject(propertyStore);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn(
+                $"WindowsToastNotificationService.CreateShortcut failed: type={ex.GetType().FullName} " +
+                $"message={ex.Message}");
+            throw;
         }
         finally
         {
+            if (propertyStore is not null)
+            {
+                Marshal.ReleaseComObject(propertyStore);
+            }
             Marshal.ReleaseComObject(shellLink);
         }
     }

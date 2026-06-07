@@ -12,7 +12,7 @@ namespace ShareWorkin;
 
 public partial class App : System.Windows.Application
 {
-    internal const string AppUserModelId = "ShareWorkin.MediaHouse";
+    internal const string AppUserModelId = SwkNotificationIdentity.AppUserModelId;
     private const int TokenAssignPrimary = 0x0001;
     private const int TokenDuplicate = 0x0002;
     private const int TokenQuery = 0x0008;

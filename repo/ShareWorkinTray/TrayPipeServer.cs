@@ -41,6 +41,7 @@ public sealed class TrayPipeServer
 
     public void Start()
     {
+        SwkLogger.Info("TrayPipeServer start requested");
         _cts = new CancellationTokenSource();
         _ = AcceptLoopAsync(_cts.Token);
     }
@@ -58,8 +59,11 @@ public sealed class TrayPipeServer
         {
             try
             {
+                SwkLogger.Info("TrayPipeServer accept waiting");
                 var pipe = CreatePipeServer();
+                SwkLogger.Info("TrayPipeServer pipe created");
                 await pipe.WaitForConnectionAsync(ct);
+                SwkLogger.Info("TrayPipeServer accept connected");
                 var session = new TrayPipeSession(pipe, _tray);
                 var prev = _activeSession;
                 _activeSession = session;
@@ -86,7 +90,7 @@ public sealed class TrayPipeServer
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                SwkLogger.Warn($"TrayPipeServer accept error: {ex.Message}");
+                SwkLogger.Warn($"TrayPipeServer accept error: type={ex.GetType().FullName} message={ex.Message}");
                 try { await Task.Delay(1000, ct); } catch (OperationCanceledException) { break; }
             }
         }
@@ -112,11 +116,14 @@ public sealed class TrayPipeServer
         var security = new PipeSecurity();
         var adminsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
         var authUsersSid = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
+        SecurityIdentifier currentUserSid = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Current user SID could not be resolved.");
 
         security.AddAccessRule(new PipeAccessRule(adminsSid, PipeAccessRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(authUsersSid,
             PipeAccessRights.ReadWrite,
             AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(currentUserSid, PipeAccessRights.FullControl, AccessControlType.Allow));
 
         return security;
     }
