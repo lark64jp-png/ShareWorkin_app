@@ -392,6 +392,14 @@ begin
     Result := (ResultCode = 0);
 end;
 
+function BoolText(Value: Boolean): String;
+begin
+  if Value then
+    Result := 'True'
+  else
+    Result := 'False';
+end;
+
 procedure RemoveScheduledTaskIfExists(const TaskName: String); forward;
 procedure RemoveShareWorkinScheduledTasks(); forward;
 
@@ -1246,15 +1254,22 @@ begin
         'ShareWorkin Tray (TCP Inbound)',
         'advfirewall firewall add rule name="ShareWorkin Tray (TCP Inbound)" dir=in action=allow protocol=TCP program="' + INSTALL_DIR + '\' + TRAY_EXE + '" profile=private,domain') then
         FirewallReady := False;
+      Log('CurStepChanged bool: FirewallReady=' + BoolText(FirewallReady));
 
       TaskReady := CreateScheduledTaskOrWarn();
+      Log('CurStepChanged bool: TaskReady=' + BoolText(TaskReady));
       AdminTaskReady := CreateAdminScheduledTaskOrWarn();
+      Log('CurStepChanged bool: AdminTaskReady=' + BoolText(AdminTaskReady));
       if TaskReady and AdminTaskReady then
       begin
         TrayReady := RunScheduledTaskOrWarn();
+        Log('CurStepChanged bool: TrayReady=' + BoolText(TrayReady));
         AdminReady := RunAdminScheduledTaskOrWarn();
+        Log('CurStepChanged bool: AdminReady=' + BoolText(AdminReady));
         TrayProcessReady := TrayReady and WaitForProcessStart(TRAY_EXE, 12000);
+        Log('CurStepChanged bool: TrayProcessReady=' + BoolText(TrayProcessReady));
         AdminProcessReady := AdminReady and WaitForProcessStart(ADMIN_EXE, 12000);
+        Log('CurStepChanged bool: AdminProcessReady=' + BoolText(AdminProcessReady));
       end
       else
       begin
@@ -1262,7 +1277,17 @@ begin
         AdminReady := False;
         TrayProcessReady := False;
         AdminProcessReady := False;
+        Log('CurStepChanged bool: startup checks skipped because TaskReady=' + BoolText(TaskReady) +
+          ' AdminTaskReady=' + BoolText(AdminTaskReady));
       end;
+
+      Log('CurStepChanged bool summary: FirewallReady=' + BoolText(FirewallReady) +
+        ' TaskReady=' + BoolText(TaskReady) +
+        ' AdminTaskReady=' + BoolText(AdminTaskReady) +
+        ' TrayReady=' + BoolText(TrayReady) +
+        ' AdminReady=' + BoolText(AdminReady) +
+        ' TrayProcessReady=' + BoolText(TrayProcessReady) +
+        ' AdminProcessReady=' + BoolText(AdminProcessReady));
 
       if FirewallReady and TaskReady and AdminTaskReady and TrayReady and AdminReady and TrayProcessReady and AdminProcessReady then
       begin
