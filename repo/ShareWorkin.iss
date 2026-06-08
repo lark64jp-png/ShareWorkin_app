@@ -1228,9 +1228,7 @@ var
   TaskReady: Boolean;
   AdminTaskReady: Boolean;
   TrayReady: Boolean;
-  AdminReady: Boolean;
   TrayProcessReady: Boolean;
-  AdminProcessReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1264,19 +1262,13 @@ begin
       begin
         TrayReady := RunScheduledTaskOrWarn();
         Log('CurStepChanged bool: TrayReady=' + BoolText(TrayReady));
-        AdminReady := RunAdminScheduledTaskOrWarn();
-        Log('CurStepChanged bool: AdminReady=' + BoolText(AdminReady));
         TrayProcessReady := TrayReady and WaitForProcessStart(TRAY_EXE, 12000);
         Log('CurStepChanged bool: TrayProcessReady=' + BoolText(TrayProcessReady));
-        AdminProcessReady := AdminReady and WaitForProcessStart(ADMIN_EXE, 12000);
-        Log('CurStepChanged bool: AdminProcessReady=' + BoolText(AdminProcessReady));
       end
       else
       begin
         TrayReady := False;
-        AdminReady := False;
         TrayProcessReady := False;
-        AdminProcessReady := False;
         Log('CurStepChanged bool: startup checks skipped because TaskReady=' + BoolText(TaskReady) +
           ' AdminTaskReady=' + BoolText(AdminTaskReady));
       end;
@@ -1285,11 +1277,9 @@ begin
         ' TaskReady=' + BoolText(TaskReady) +
         ' AdminTaskReady=' + BoolText(AdminTaskReady) +
         ' TrayReady=' + BoolText(TrayReady) +
-        ' AdminReady=' + BoolText(AdminReady) +
-        ' TrayProcessReady=' + BoolText(TrayProcessReady) +
-        ' AdminProcessReady=' + BoolText(AdminProcessReady));
+        ' TrayProcessReady=' + BoolText(TrayProcessReady));
 
-      if FirewallReady and TaskReady and AdminTaskReady and TrayReady and AdminReady and TrayProcessReady and AdminProcessReady then
+      if FirewallReady and TaskReady and AdminTaskReady and TrayReady and TrayProcessReady then
       begin
         MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
           'Tray の起動を確認したので、このあと ShareWorkin を開きます。',
