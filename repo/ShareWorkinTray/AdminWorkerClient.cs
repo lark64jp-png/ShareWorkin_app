@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -9,13 +10,16 @@ namespace ShareWorkinTray;
 
 internal sealed class AdminWorkerClient
 {
+    private const string OpenShopOperation = "open-shop";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
     public AdminCommandResponse OpenShop(string shopRootPath, string shareName, string profileLabel, ShareAccessRight accessRight)
-        => SendWithRecovery(new AdminCommandRequest
+    {
+        AdminCommandRequest request = new()
         {
             Cmd = AdminProtocol.OpenShopCommand,
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -23,7 +27,10 @@ internal sealed class AdminWorkerClient
             ShareName = shareName,
             ProfileLabel = profileLabel,
             AccessRight = accessRight == ShareAccessRight.Read ? 1 : 0
-        }, timeoutMs: 60000);
+        };
+
+        return RunOpenShopElevated(request, timeoutMs: 60000);
+    }
 
     public AdminCommandResponse CloseShop(string shopRootPath, string shareName)
         => SendWithRecovery(new AdminCommandRequest
@@ -89,13 +96,79 @@ internal sealed class AdminWorkerClient
             }
         }
 
-        return new AdminCommandResponse
+        return BuildHelperUnavailable(request, "管理者ヘルパーに接続できませんでした。");
+    }
+
+    private static AdminCommandResponse RunOpenShopElevated(AdminCommandRequest request, int timeoutMs)
+    {
+        string resultPath = Path.Combine(
+            Path.GetTempPath(),
+            $"shareworkin-open-shop-{request.CorrelationId}.json");
+
+        try
         {
-            Ok = false,
-            CorrelationId = request.CorrelationId,
-            ErrorCode = AdminErrorCode.HelperUnavailable,
-            ErrorMessage = "管理者ヘルパーに接続できませんでした。"
-        };
+            TryDeleteResultFile(resultPath);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ResolveAdminWorkerExePath(),
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            startInfo.ArgumentList.Add($"--op={OpenShopOperation}");
+            startInfo.ArgumentList.Add($"--corr={request.CorrelationId}");
+            startInfo.ArgumentList.Add($"--shop-root={request.ShopRootPath}");
+            startInfo.ArgumentList.Add($"--share-name={request.ShareName}");
+            startInfo.ArgumentList.Add($"--profile-label={request.ProfileLabel}");
+            startInfo.ArgumentList.Add($"--access-right={request.AccessRight}");
+            startInfo.ArgumentList.Add($"--result-path={resultPath}");
+
+            SwkLogger.Info($"AdminWorkerClient open-shop start: route=direct-admin-exe corr={request.CorrelationId}");
+            using Process? process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return BuildHelperUnavailable(request, "管理者処理を開始できませんでした。");
+            }
+
+            if (!process.WaitForExit(timeoutMs))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception ex)
+                {
+                    SwkLogger.Warn(
+                        $"AdminWorkerClient open-shop kill failed: corr={request.CorrelationId} message={ex.Message}");
+                }
+
+                return BuildHelperUnavailable(request, "管理者処理が時間内に完了しませんでした。");
+            }
+
+            if (!File.Exists(resultPath))
+            {
+                return BuildHelperUnavailable(request, "管理者処理の結果を受け取れませんでした。");
+            }
+
+            string responseJson = File.ReadAllText(resultPath);
+            AdminCommandResponse? response = JsonSerializer.Deserialize<AdminCommandResponse>(responseJson, JsonOptions);
+            return response ?? BuildHelperUnavailable(request, "管理者処理の結果を読み取れませんでした。");
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            SwkLogger.Warn($"AdminWorkerClient open-shop canceled: corr={request.CorrelationId} message={ex.Message}");
+            return BuildHelperUnavailable(request, "管理者権限の許可がキャンセルされました。");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"AdminWorkerClient open-shop failed: corr={request.CorrelationId} message={ex.Message}");
+            return BuildHelperUnavailable(request, "管理者処理を開始できませんでした。");
+        }
+        finally
+        {
+            TryDeleteResultFile(resultPath);
+        }
     }
 
     private static AdminCommandResponse? TrySend(AdminCommandRequest request, int timeoutMs)
@@ -141,6 +214,43 @@ internal sealed class AdminWorkerClient
         catch (Exception ex)
         {
             SwkLogger.Warn($"AdminWorkerClient start request failed: {ex.Message}");
+        }
+    }
+
+    private static string ResolveAdminWorkerExePath()
+    {
+        string? processPath = Environment.ProcessPath;
+        string exeDir = string.IsNullOrWhiteSpace(processPath)
+            ? AppContext.BaseDirectory
+            : Path.GetDirectoryName(processPath) ?? AppContext.BaseDirectory;
+        string adminExePath = Path.Combine(exeDir, $"{AdminProtocol.HelperProcessName}.exe");
+        if (!File.Exists(adminExePath))
+        {
+            throw new FileNotFoundException("ShareWorkinAdminWorker.exe was not found.", adminExePath);
+        }
+
+        return adminExePath;
+    }
+
+    private static AdminCommandResponse BuildHelperUnavailable(AdminCommandRequest request, string message) => new()
+    {
+        Ok = false,
+        CorrelationId = request.CorrelationId,
+        ErrorCode = AdminErrorCode.HelperUnavailable,
+        ErrorMessage = message
+    };
+
+    private static void TryDeleteResultFile(string resultPath)
+    {
+        try
+        {
+            if (File.Exists(resultPath))
+            {
+                File.Delete(resultPath);
+            }
+        }
+        catch
+        {
         }
     }
 }
