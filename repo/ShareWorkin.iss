@@ -444,6 +444,7 @@ begin
     if MsgBox(APP_NAME + ' が実行中です。終了してセットアップを続けますか？',
       mbConfirmation, MB_OKCANCEL) = IDOK then
     begin
+      RemoveShareWorkinScheduledTasks();
       Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('taskkill', '/IM ' + ADMIN_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -625,6 +626,22 @@ begin
   end;
 end;
 
+procedure RemoveScheduledTaskIfExists(const TaskName: String);
+var
+  ResultCode: Integer;
+begin
+  RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "' + TaskName + '" /F',
+    ResultCode);
+end;
+
+procedure RemoveShareWorkinScheduledTasks();
+begin
+  RemoveScheduledTaskIfExists('ShareWorkin\ShareWorkinTray');
+  RemoveScheduledTaskIfExists('ShareWorkin\ShareWorkinAdminWorker');
+end;
+
 function RunScheduledTaskOrWarn(): Boolean;
 var
   ResultCode: Integer;
@@ -737,6 +754,8 @@ var
   ResultCode: Integer;
 begin
   Result := True;
+
+  RemoveShareWorkinScheduledTasks();
 
   if IsProcessRunning(TRAY_EXE) then
     Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -1255,8 +1274,8 @@ begin
           MsgBox('ShareWorkinTray の起動確認が間に合いませんでした。' + #13#10 +
             'Windows 11 の確認表示や保護機能で遅れている可能性があります。',
             mbError, MB_OK);
-        MsgBox(APP_NAME + ' のファイル配置は完了しましたが、Windows 11 の保護設定または起動設定により、共有開始の準備が不完全です。' + #13#10 +
-          '管理者として再実行し、Windows の警告や確認画面を許可してください。',
+        MsgBox(APP_NAME + ' のファイル配置は完了しましたが、Windows の共有準備・自動起動設定・ファイアウォール設定の一部が未完了です。' + #13#10 +
+          'Tray または管理補助プロセスの起動確認まで完了していない可能性があります。共有を使う前に、Windows の設定確認と ShareWorkin の再起動を行ってください。',
           mbError, MB_OK);
       end;
     end;
