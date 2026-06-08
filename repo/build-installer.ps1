@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $project = Join-Path $root "ShareWorkin\ShareWorkin.csproj"
 $trayProject = Join-Path $root "ShareWorkinTray\ShareWorkinTray.csproj"
+$adminWorkerProject = Join-Path $root "ShareWorkinAdminWorker\ShareWorkinAdminWorker.csproj"
 $publishDir = Join-Path $root "dist\publish\ShareWorkin"
 $artifactsDir = Join-Path $root "builds"
 $innoScript = Join-Path $root "ShareWorkin.iss"
@@ -132,7 +133,7 @@ if (-not (Test-Path -LiteralPath $readme)) {
     throw "Readme file was not found: $readme"
 }
 
-foreach ($procName in @("ShareWorkin", "ShareWorkinTray")) {
+foreach ($procName in @("ShareWorkin", "ShareWorkinTray", "ShareWorkinAdminWorker")) {
     if (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
         Write-Host "終了中: $procName"
         Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
@@ -228,6 +229,16 @@ dotnet publish $trayProject `
     --output $publishDir
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish ShareWorkinTray failed (exit $LASTEXITCODE)" }
 
+dotnet publish $adminWorkerProject `
+    --configuration $Configuration `
+    --runtime $Runtime `
+    --self-contained false `
+    /p:DebugType=None `
+    /p:DebugSymbols=false `
+    /p:InformationalVersion=$informationalVersion `
+    --output $publishDir
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish ShareWorkinAdminWorker failed (exit $LASTEXITCODE)" }
+
 & $iscc $innoScript
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
 
@@ -235,7 +246,14 @@ if (-not (Test-Path -LiteralPath $installer)) {
     throw "Installer was not created: $installer"
 }
 
-$items = @($installer, (Join-Path $publishDir "ShareWorkin.exe"), (Join-Path $publishDir "ShareWorkinTray.exe"), $readme, $runtimeInstaller)
+$items = @(
+    $installer,
+    (Join-Path $publishDir "ShareWorkin.exe"),
+    (Join-Path $publishDir "ShareWorkinTray.exe"),
+    (Join-Path $publishDir "ShareWorkinAdminWorker.exe"),
+    $readme,
+    $runtimeInstaller
+)
 $lines = @(
     "ShareWorkin $appVersion SHA-256",
     "Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",

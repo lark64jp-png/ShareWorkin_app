@@ -28,6 +28,7 @@ public sealed class TrayApp : IDisposable
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
     private readonly object _balloonTipSync = new();
+    private readonly AdminWorkerClient _adminWorkerClient = new();
     internal readonly TrayPipeServer PipeServer;
     private FileSystemWatcher? _shopContentsWatcher;
 
@@ -98,7 +99,11 @@ public sealed class TrayApp : IDisposable
         PipeServer.Stop();
         if (_isShopOpen && !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder))
         {
-            try { SmbController.CloseShopSequence(_activeShareName, _shopFolder); }
+            try
+            {
+                SmbController.StopShopBroadcaster();
+                _ = _adminWorkerClient.CloseShop(_shopFolder, _activeShareName);
+            }
             catch (Exception ex) { SwkLogger.Warn($"TrayApp.Dispose CloseShop error: {ex.Message}"); }
         }
         _notifyIcon.Visible = false;
@@ -179,16 +184,14 @@ public sealed class TrayApp : IDisposable
     public (bool Ok, string? Error, bool NeedsOwnership, OwnershipChangePrompt OwnershipPrompt, IReadOnlyList<string>? BlockedPaths)
         OpenShop(string shopFolder, string shareName, string profileLabel, ShareAccessRight accessRight, bool authorizeOwnership)
     {
-        var request = new ShopOpenRequest(shareName, shopFolder, profileLabel, accessRight);
-        var result = SmbController.OpenShopSequence(request,
-            userAuthorizedOwnershipChange: authorizeOwnership);
+        _ = authorizeOwnership;
+        AdminCommandResponse response = _adminWorkerClient.OpenShop(shopFolder, shareName, profileLabel, accessRight);
+        if (!response.Ok)
+        {
+            return (false, response.ErrorMessage, false, OwnershipChangePrompt.None, response.BlockedPaths);
+        }
 
-        if (!result.Succeeded && result.OwnershipPrompt != OwnershipChangePrompt.None)
-            return (false, null, true, result.OwnershipPrompt, result.BlockedPaths);
-
-        if (!result.Succeeded)
-            return (false, result.FailureMessage, false, OwnershipChangePrompt.None, result.BlockedPaths);
-
+        SmbController.StartShopBroadcaster(shareName);
         _isShopOpen = true;
         _shopFolder = shopFolder;
         _activeShareName = shareName;
@@ -202,8 +205,18 @@ public sealed class TrayApp : IDisposable
     {
         if (!_isShopOpen) return true;
         StopShopContentsWatcher();
-        bool ok = !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder)
-            && SmbController.CloseShopSequence(_activeShareName!, _shopFolder!);
+        SmbController.StopShopBroadcaster();
+        bool ok = !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder);
+        if (ok)
+        {
+            AdminCommandResponse response = _adminWorkerClient.CloseShop(_shopFolder!, _activeShareName!);
+            ok = response.Ok;
+            if (!response.Ok)
+            {
+                SwkLogger.Warn($"TrayApp.CloseShop failed: code={response.ErrorCode} message={response.ErrorMessage}");
+            }
+        }
+
         _isShopOpen = false;
         PatchSettingsOpenState(false, _shopFolder);
         return ok;
@@ -213,10 +226,36 @@ public sealed class TrayApp : IDisposable
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
 
     public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
-        => SmbNtfsManager.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return false;
+        }
+
+        AdminCommandResponse response = _adminWorkerClient.SetSubfolderPermission(_shopFolder, path, isSharedOff, isReadOnly);
+        if (!response.Ok)
+        {
+            SwkLogger.Warn($"TrayApp.SetSubfolderPermission failed: code={response.ErrorCode} message={response.ErrorMessage}");
+        }
+
+        return response.Ok;
+    }
 
     public bool ResetPathToInherited(string path)
-        => SmbNtfsManager.ResetPathToInherited(path);
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return false;
+        }
+
+        AdminCommandResponse response = _adminWorkerClient.ResetPathToInherited(_shopFolder, path);
+        if (!response.Ok)
+        {
+            SwkLogger.Warn($"TrayApp.ResetPathToInherited failed: code={response.ErrorCode} message={response.ErrorMessage}");
+        }
+
+        return response.Ok;
+    }
 
     public bool MarkActionAftercare(
         string shopRootPath,
@@ -224,8 +263,22 @@ public sealed class TrayApp : IDisposable
         string policySourceFolder,
         SharePolicyRepairReason reason)
     {
-        SharePolicyRepair.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason);
-        return true;
+        if (string.IsNullOrWhiteSpace(shopRootPath))
+        {
+            return false;
+        }
+
+        AdminCommandResponse response = _adminWorkerClient.MarkActionAftercare(
+            shopRootPath,
+            affectedPath,
+            policySourceFolder,
+            reason);
+        if (!response.Ok)
+        {
+            SwkLogger.Warn($"TrayApp.MarkActionAftercare failed: code={response.ErrorCode} message={response.ErrorMessage}");
+        }
+
+        return response.Ok;
     }
 
     private void HandleFriendShopClosingReceived(string machineName, string shareName)

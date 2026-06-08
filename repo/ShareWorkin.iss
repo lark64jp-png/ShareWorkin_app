@@ -62,6 +62,7 @@ const
   APP_VERSION = '1.23';
   APP_EXE = 'ShareWorkin.exe';
   TRAY_EXE = 'ShareWorkinTray.exe';
+  ADMIN_EXE = 'ShareWorkinAdminWorker.exe';
   STARTUP_REG_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run';
   INSTALL_DIR = 'C:\MyApps\ShareWorkin';
   SETTINGS_FILE = 'settings.json';
@@ -438,12 +439,13 @@ begin
   Result := True;
   SelectedAction := '';
 
-  if IsProcessRunning(APP_EXE) or IsProcessRunning(TRAY_EXE) then
+  if IsProcessRunning(APP_EXE) or IsProcessRunning(TRAY_EXE) or IsProcessRunning(ADMIN_EXE) then
   begin
     if MsgBox(APP_NAME + ' が実行中です。終了してセットアップを続けますか？',
       mbConfirmation, MB_OKCANCEL) = IDOK then
     begin
       Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec('taskkill', '/IM ' + ADMIN_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       if not WaitForProcessExit(APP_EXE) then
       begin
@@ -451,6 +453,11 @@ begin
         Exit;
       end;
       if not WaitForProcessExit(TRAY_EXE) then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if not WaitForProcessExit(ADMIN_EXE) then
       begin
         Result := False;
         Exit;
@@ -594,6 +601,30 @@ begin
   end;
 end;
 
+function CreateAdminScheduledTaskOrWarn(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ShareWorkin\ShareWorkinAdminWorker" /F',
+    ResultCode);
+
+  Result := RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Create /TN "ShareWorkin\ShareWorkinAdminWorker" /TR "\"' +
+    ExpandConstant('{app}\' + ADMIN_EXE) + '\" --startup-source=scheduled-task" /SC ONLOGON /RL HIGHEST /F',
+    ResultCode) and (ResultCode = 0);
+
+  if not Result then
+  begin
+    MsgBox('ShareWorkinAdminWorker の自動起動設定に失敗しました。' + #13#10 +
+      '共有開始や権限変更が動作しない可能性があります。' + #13#10 +
+      'もう一度インストーラーを管理者として実行してください。',
+      mbError, MB_OK);
+  end;
+end;
+
 function RunScheduledTaskOrWarn(): Boolean;
 var
   ResultCode: Integer;
@@ -607,6 +638,24 @@ begin
   begin
     MsgBox('ShareWorkinTray の起動に失敗しました。' + #13#10 +
       'インストール直後に共有を開けない場合があります。' + #13#10 +
+      'Windows の警告表示が出ていないか確認してください。',
+      mbError, MB_OK);
+  end;
+end;
+
+function RunAdminScheduledTaskOrWarn(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := RunHiddenSystemCommand(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Run /TN "ShareWorkin\ShareWorkinAdminWorker"',
+    ResultCode) and (ResultCode = 0);
+
+  if not Result then
+  begin
+    MsgBox('ShareWorkinAdminWorker の起動に失敗しました。' + #13#10 +
+      '共有開始や権限変更が動作しない場合があります。' + #13#10 +
       'Windows の警告表示が出ていないか確認してください。',
       mbError, MB_OK);
   end;
@@ -691,6 +740,8 @@ begin
 
   if IsProcessRunning(TRAY_EXE) then
     Exec('taskkill', '/IM ' + TRAY_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if IsProcessRunning(ADMIN_EXE) then
+    Exec('taskkill', '/IM ' + ADMIN_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if IsProcessRunning(APP_EXE) then
   begin
     Exec('taskkill', '/IM ' + APP_EXE + ' /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -703,6 +754,14 @@ begin
   if IsProcessRunning(TRAY_EXE) then
   begin
     if not WaitForProcessExit(TRAY_EXE) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+  if IsProcessRunning(ADMIN_EXE) then
+  begin
+    if not WaitForProcessExit(ADMIN_EXE) then
     begin
       Result := False;
       Exit;
@@ -1042,6 +1101,9 @@ begin
   Exec(ExpandConstant('{sys}\schtasks.exe'),
     '/Delete /TN "ShareWorkin\ShareWorkinTray" /F',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ShareWorkin\ShareWorkinAdminWorker" /F',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   Result := True;
   MsgBox('アンインストールが完了しました。', mbInformation, MB_OK);
@@ -1124,6 +1186,9 @@ begin
   HideFile('ShareWorkinTray.dll');
   HideFile('ShareWorkinTray.deps.json');
   HideFile('ShareWorkinTray.runtimeconfig.json');
+  HideFile('ShareWorkinAdminWorker.dll');
+  HideFile('ShareWorkinAdminWorker.deps.json');
+  HideFile('ShareWorkinAdminWorker.runtimeconfig.json');
   HideFile('ShareWorkin.SMB.dll');
 end;
 
@@ -1131,8 +1196,11 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   FirewallReady: Boolean;
   TaskReady: Boolean;
+  AdminTaskReady: Boolean;
   TrayReady: Boolean;
+  AdminReady: Boolean;
   TrayProcessReady: Boolean;
+  AdminProcessReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1158,18 +1226,23 @@ begin
         FirewallReady := False;
 
       TaskReady := CreateScheduledTaskOrWarn();
-      if TaskReady then
+      AdminTaskReady := CreateAdminScheduledTaskOrWarn();
+      if TaskReady and AdminTaskReady then
       begin
         TrayReady := RunScheduledTaskOrWarn();
+        AdminReady := RunAdminScheduledTaskOrWarn();
         TrayProcessReady := TrayReady and WaitForProcessStart(TRAY_EXE, 12000);
+        AdminProcessReady := AdminReady and WaitForProcessStart(ADMIN_EXE, 12000);
       end
       else
       begin
         TrayReady := False;
+        AdminReady := False;
         TrayProcessReady := False;
+        AdminProcessReady := False;
       end;
 
-      if FirewallReady and TaskReady and TrayReady and TrayProcessReady then
+      if FirewallReady and TaskReady and AdminTaskReady and TrayReady and AdminReady and TrayProcessReady and AdminProcessReady then
       begin
         MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
           'Tray の起動を確認したので、このあと ShareWorkin を開きます。',

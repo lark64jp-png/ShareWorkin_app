@@ -207,6 +207,47 @@ public static class SmbController
     public static Task BroadcastPermissionChangedAsync()
         => _broadcaster?.BroadcastPermissionChangedAsync() ?? Task.CompletedTask;
 
+    public static void StartShopBroadcaster(string shareName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(shareName);
+
+        StopShopBroadcaster();
+        try
+        {
+            _broadcaster = new SwkNotificationBroadcaster(shareName);
+            _broadcaster.OnShopClosingReceived = (machine, share) => OnShopClosingReceived?.Invoke(machine, share);
+            _broadcaster.OnInteractionEventReceived = notice => OnInteractionEventReceived?.Invoke(notice);
+            _ = _broadcaster.StartAsync();
+            SwkLogger.Info($"SwkNotificationBroadcaster started for '{shareName}'");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Failed to start SwkNotificationBroadcaster: {ex.Message}");
+        }
+    }
+
+    public static void StopShopBroadcaster()
+    {
+        if (_broadcaster is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = _broadcaster.StopAsync();
+            SwkLogger.Info("SwkNotificationBroadcaster stopped");
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"Error stopping SwkNotificationBroadcaster: {ex.Message}");
+        }
+        finally
+        {
+            _broadcaster = null;
+        }
+    }
+
     /// <summary>
     /// 他店から ShopClosing を受信したときのコールバック（MainWindow が購読する）。
     /// </summary>
