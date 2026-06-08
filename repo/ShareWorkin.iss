@@ -392,6 +392,9 @@ begin
     Result := (ResultCode = 0);
 end;
 
+procedure RemoveScheduledTaskIfExists(const TaskName: String); forward;
+procedure RemoveShareWorkinScheduledTasks(); forward;
+
 function WaitForProcessExit(FileName: String): Boolean;
 var
   ResultCode: Integer;
