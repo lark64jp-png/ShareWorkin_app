@@ -36,6 +36,13 @@ public enum AdminErrorCode
     InternalError,
 }
 
+public sealed class PermissionRestoreEntry
+{
+    public string Path { get; set; } = string.Empty;
+    public bool IsSharedOff { get; set; }
+    public bool IsReadOnly { get; set; }
+}
+
 public sealed class AdminCommandRequest
 {
     public string Cmd { get; set; } = string.Empty;
@@ -49,6 +56,9 @@ public sealed class AdminCommandRequest
     public bool IsReadOnly { get; set; }
     public string? PolicySourceFolder { get; set; }
     public string? Reason { get; set; }
+    public bool ApplyPermissionsOnOpen { get; set; }
+    // null = normalize all top-level entries; non-null = apply listed entries + reset unmapped top-level dirs
+    public List<PermissionRestoreEntry>? PermissionEntries { get; set; }
 }
 
 public sealed class AdminCommandResponse

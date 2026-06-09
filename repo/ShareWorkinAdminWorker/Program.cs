@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using ShareWorkin.SMB;
@@ -6,6 +7,8 @@ namespace ShareWorkinAdminWorker;
 
 internal static class Program
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -106,6 +109,15 @@ internal static class Program
             PolicySourceFolder = parsed.GetValueOrDefault("policy-source-folder"),
             Reason = parsed.GetValueOrDefault("reason")
         };
+
+        if (parsed.TryGetValue("perm-entries-path", out string? permEntriesPath) &&
+            File.Exists(permEntriesPath))
+        {
+            string permJson = File.ReadAllText(permEntriesPath);
+            request.ApplyPermissionsOnOpen = true;
+            request.PermissionEntries = JsonSerializer.Deserialize<List<PermissionRestoreEntry>>(permJson, JsonOptions);
+        }
+
         resultPath = parsedResultPath;
         return true;
     }

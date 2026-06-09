@@ -5664,11 +5664,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
+        string root = Path.GetFullPath(_shopFolder)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        ShopRestoreMode restoreMode = DetermineShopRestoreMode(root);
+        if (restoreMode == ShopRestoreMode.PreserveManagedPermissions && !HasStoredPermissionEntriesForShop(root))
+        {
+            bool imported = ImportOwnerPermissionsFromManifest(root);
+            SwkLogger.Info($"OpenShop: importedManifest={imported}");
+        }
+        List<SMB.PermissionRestoreEntry>? restoreEntries = BuildRestoreEntries(root, restoreMode);
+
         ShopOpenOutcome? outcome;
         Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
         try
         {
-            outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, false);
+            outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, false, restoreEntries);
         }
         finally
         {
@@ -5687,7 +5697,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, true);
+                outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, true, restoreEntries);
             }
             finally
             {
@@ -5745,7 +5755,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _pipeClient.SyncTrayShopOpened(_shopFolder, shareName, (int)_shareAccessRight);
         SaveSettings();
 
-        ApplyShopRestorePolicyOnOpen(_shopFolder);
+        if (restoreMode == ShopRestoreMode.NormalizeSharedFolderOnly)
+        {
+            ClearStoredPermissionsForShop(root, saveAfterClear: false);
+            SavePermissionMap();
+        }
+        PublishPermissionManifest();
 
         UpdateShopState(true);
         if (_currentMode == DisplayMode.Shop)
@@ -5793,6 +5808,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             Apply();
         }
+    }
+
+    private List<SMB.PermissionRestoreEntry>? BuildRestoreEntries(string root, ShopRestoreMode restoreMode)
+    {
+        if (restoreMode == ShopRestoreMode.NormalizeSharedFolderOnly)
+            return null;
+        return _permissionMap
+            .Where(kv => kv.Key.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => new SMB.PermissionRestoreEntry { Path = kv.Key, IsSharedOff = kv.Value.IsSharedOff, IsReadOnly = kv.Value.IsReadOnly })
+            .ToList();
     }
 
     private void ApplyShopRestorePolicyOnOpen(string? shopRoot)

@@ -117,9 +117,65 @@ public static class SmbAdminOperations
             return Fail(request, AdminErrorCode.ShareGrantFailed, "お店の入り口の用意に失敗しました。");
         }
 
+        if (request.ApplyPermissionsOnOpen)
+        {
+            AdminCommandResponse? permResult = ApplyPermissionsOnOpen(request, shopRootPath, request.PermissionEntries);
+            if (permResult != null) return permResult;
+        }
+
         SwkLogger.Info(
             $"AdminWorker.OpenShop ok corr={request.CorrelationId} root={shopRootPath} share={shareName}");
         return Ok(request);
+    }
+
+    private static AdminCommandResponse? ApplyPermissionsOnOpen(
+        AdminCommandRequest request,
+        string shopRootPath,
+        List<PermissionRestoreEntry>? entries)
+    {
+        const string holdFolderName = "保留";
+        var permFailed = new List<string>();
+        var resetFailed = new List<string>();
+
+        if (entries != null)
+        {
+            var entryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (PermissionRestoreEntry entry in entries)
+            {
+                if (!SharePathPolicy.TryNormalizeLocalPath(entry.Path, out string entryPath)) continue;
+                if (!SharePathPolicy.IsUnderRoot(entryPath, shopRootPath))
+                {
+                    SwkLogger.Warn($"ApplyPermissionsOnOpen: entry not under shop root, skipped: {entryPath}");
+                    continue;
+                }
+                if (!Directory.Exists(entryPath)) continue;
+                entryPaths.Add(entryPath);
+                if (!SmbNtfsManager.SetSubfolderPermission(entryPath, entry.IsSharedOff, entry.IsReadOnly))
+                    permFailed.Add(entryPath);
+            }
+            foreach (string dir in Directory.EnumerateDirectories(shopRootPath))
+            {
+                if (entryPaths.Contains(dir)) continue;
+                if (string.Equals(Path.GetFileName(dir), holdFolderName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SmbNtfsManager.ResetPathToInherited(dir))
+                    resetFailed.Add(dir);
+            }
+        }
+        else
+        {
+            foreach (string entry in Directory.EnumerateFileSystemEntries(shopRootPath))
+            {
+                if (string.Equals(Path.GetFileName(entry), holdFolderName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!SmbNtfsManager.ResetPathToInherited(entry))
+                    resetFailed.Add(entry);
+            }
+        }
+
+        if (permFailed.Count > 0)
+            return Fail(request, AdminErrorCode.PermissionApplyFailed, "権限の設定に失敗したフォルダーがあります。", permFailed);
+        if (resetFailed.Count > 0)
+            return Fail(request, AdminErrorCode.ResetInheritanceFailed, "継承設定の復元に失敗したフォルダーがあります。", resetFailed);
+        return null;
     }
 
     private static AdminCommandResponse CloseShop(AdminCommandRequest request)

@@ -25,6 +25,7 @@ public sealed class AdminWorkerProcessClient
         string resultPath = Path.Combine(
             Path.GetTempPath(),
             $"shareworkin-admin-{request.CorrelationId}.json");
+        string? permEntriesPath = null;
 
         try
         {
@@ -49,6 +50,16 @@ public sealed class AdminWorkerProcessClient
             AddArgument(startInfo, "read-only", request.IsReadOnly ? "1" : "0");
             AddArgument(startInfo, "policy-source-folder", request.PolicySourceFolder);
             AddArgument(startInfo, "reason", request.Reason);
+
+            if (request.ApplyPermissionsOnOpen)
+            {
+                permEntriesPath = Path.Combine(
+                    Path.GetTempPath(),
+                    $"shareworkin-admin-perms-{request.CorrelationId}.json");
+                File.WriteAllText(permEntriesPath, JsonSerializer.Serialize(request.PermissionEntries));
+                AddArgument(startInfo, "perm-entries-path", permEntriesPath);
+            }
+
             AddArgument(startInfo, "result-path", resultPath);
 
             SwkLogger.Info($"AdminWorkerProcessClient start: cmd={request.Cmd} corr={request.CorrelationId}");
@@ -95,6 +106,7 @@ public sealed class AdminWorkerProcessClient
         finally
         {
             TryDeleteResultFile(resultPath);
+            if (permEntriesPath != null) TryDeleteResultFile(permEntriesPath);
         }
     }
 

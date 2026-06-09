@@ -94,7 +94,13 @@ public sealed class UiPipeClient : IDisposable
         catch { return null; }
     }
 
-    public ShopOpenOutcome? OpenShop(string shopFolder, string shareName, string profileLabel, int accessRight, bool authorizeOwnership)
+    public ShopOpenOutcome? OpenShop(
+        string shopFolder,
+        string shareName,
+        string profileLabel,
+        int accessRight,
+        bool authorizeOwnership,
+        List<PermissionRestoreEntry>? restoreEntries = null)
     {
         _ = authorizeOwnership;
         AdminCommandResponse response = _adminWorker.Execute(new AdminCommandRequest
@@ -104,7 +110,9 @@ public sealed class UiPipeClient : IDisposable
             ShopRootPath = shopFolder,
             ShareName = shareName,
             ProfileLabel = profileLabel,
-            AccessRight = accessRight
+            AccessRight = accessRight,
+            ApplyPermissionsOnOpen = true,
+            PermissionEntries = restoreEntries
         }, timeoutMs: 60000);
 
         return new ShopOpenOutcome(
