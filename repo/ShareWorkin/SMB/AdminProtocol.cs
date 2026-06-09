@@ -4,8 +4,6 @@ namespace ShareWorkin.SMB;
 
 public static class AdminProtocol
 {
-    public const string PipeName = "ShareWorkin_AdminPipe";
-    public const string HelperTaskName = @"ShareWorkin\ShareWorkinAdminWorker";
     public const string HelperProcessName = "ShareWorkinAdminWorker";
     public const string TrayProcessName = "ShareWorkinTray";
 

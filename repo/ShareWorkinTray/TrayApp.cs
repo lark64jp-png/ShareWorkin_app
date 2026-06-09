@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
@@ -28,9 +27,7 @@ public sealed class TrayApp : IDisposable
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
     private readonly object _balloonTipSync = new();
-    private readonly AdminWorkerClient _adminWorkerClient = new();
     internal readonly TrayPipeServer PipeServer;
-    private FileSystemWatcher? _shopContentsWatcher;
 
     private bool _isShopOpen;
     private string? _shopFolder;
@@ -90,22 +87,13 @@ public sealed class TrayApp : IDisposable
         SmbController.OnInteractionEventReceived = HandleIncomingInteractionReceived;
         _notifyIcon.Visible = true;
         PipeServer.Start();
-        RestoreOpenShopIfNeeded();
     }
 
     public void Dispose()
     {
-        StopShopContentsWatcher();
         PipeServer.Stop();
-        if (_isShopOpen && !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            try
-            {
-                SmbController.StopShopBroadcaster();
-                _ = _adminWorkerClient.CloseShop(_shopFolder, _activeShareName);
-            }
-            catch (Exception ex) { SwkLogger.Warn($"TrayApp.Dispose CloseShop error: {ex.Message}"); }
-        }
+        if (_isShopOpen)
+            SmbController.StopShopBroadcaster();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _trayMenu.Dispose();
@@ -156,39 +144,11 @@ public sealed class TrayApp : IDisposable
         }
     }
 
-    private void RestoreOpenShopIfNeeded()
+    public bool UpdateShopOpenedState(string shopFolder, string shareName, ShareAccessRight accessRight)
     {
-        if (!_wasOpenAtLastShutdown || string.IsNullOrWhiteSpace(_shopFolder)) return;
-
-        if (!Directory.Exists(_shopFolder))
+        if (string.IsNullOrWhiteSpace(shopFolder) || string.IsNullOrWhiteSpace(shareName))
         {
-            PatchSettingsOpenState(false, _shopFolder);
-            ShowBalloonTip("共有を再開できませんでした",
-                "前回の共有フォルダーが見つかりません。\n画面を開いて設定を確認してください。", null);
-            return;
-        }
-
-        string shareName = DeriveShareName(_shopFolder);
-        if (string.IsNullOrWhiteSpace(shareName)) return;
-
-        var (ok, error, _, _, _) = OpenShop(_shopFolder, shareName, shareName, _shareAccessRight, false);
-        if (!ok)
-        {
-            SwkLogger.Warn($"TrayApp.RestoreOpenShopIfNeeded failed: {error}");
-            PatchSettingsOpenState(false, _shopFolder);
-            ShowBalloonTip("共有を再開できませんでした",
-                "前回の状態と異なる可能性があります。\n画面を開いて確認してください。", _shopFolder);
-        }
-    }
-
-    public (bool Ok, string? Error, bool NeedsOwnership, OwnershipChangePrompt OwnershipPrompt, IReadOnlyList<string>? BlockedPaths)
-        OpenShop(string shopFolder, string shareName, string profileLabel, ShareAccessRight accessRight, bool authorizeOwnership)
-    {
-        _ = authorizeOwnership;
-        AdminCommandResponse response = _adminWorkerClient.OpenShop(shopFolder, shareName, profileLabel, accessRight);
-        if (!response.Ok)
-        {
-            return (false, response.ErrorMessage, false, OwnershipChangePrompt.None, response.BlockedPaths);
+            return false;
         }
 
         SmbController.StartShopBroadcaster(shareName);
@@ -197,89 +157,26 @@ public sealed class TrayApp : IDisposable
         _activeShareName = shareName;
         _shareAccessRight = accessRight;
         PatchSettingsOpenState(true, shopFolder);
-        StartShopContentsWatcher(shopFolder);
-        return (true, null, false, OwnershipChangePrompt.None, null);
+        return true;
     }
 
-    public bool CloseShop()
+    public bool UpdateShopClosedState()
     {
-        if (!_isShopOpen) return true;
-        StopShopContentsWatcher();
-        SmbController.StopShopBroadcaster();
-        bool ok = !string.IsNullOrWhiteSpace(_activeShareName) && !string.IsNullOrWhiteSpace(_shopFolder);
-        if (ok)
+        if (!_isShopOpen)
         {
-            AdminCommandResponse response = _adminWorkerClient.CloseShop(_shopFolder!, _activeShareName!);
-            ok = response.Ok;
-            if (!response.Ok)
-            {
-                SwkLogger.Warn($"TrayApp.CloseShop failed: code={response.ErrorCode} message={response.ErrorMessage}");
-            }
+            PatchSettingsOpenState(false, _shopFolder);
+            return true;
         }
 
+        SmbController.StopShopBroadcaster();
         _isShopOpen = false;
+        _activeShareName = null;
         PatchSettingsOpenState(false, _shopFolder);
-        return ok;
+        return true;
     }
 
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
-
-    public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
-    {
-        if (string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            return false;
-        }
-
-        AdminCommandResponse response = _adminWorkerClient.SetSubfolderPermission(_shopFolder, path, isSharedOff, isReadOnly);
-        if (!response.Ok)
-        {
-            SwkLogger.Warn($"TrayApp.SetSubfolderPermission failed: code={response.ErrorCode} message={response.ErrorMessage}");
-        }
-
-        return response.Ok;
-    }
-
-    public bool ResetPathToInherited(string path)
-    {
-        if (string.IsNullOrWhiteSpace(_shopFolder))
-        {
-            return false;
-        }
-
-        AdminCommandResponse response = _adminWorkerClient.ResetPathToInherited(_shopFolder, path);
-        if (!response.Ok)
-        {
-            SwkLogger.Warn($"TrayApp.ResetPathToInherited failed: code={response.ErrorCode} message={response.ErrorMessage}");
-        }
-
-        return response.Ok;
-    }
-
-    public bool MarkActionAftercare(
-        string shopRootPath,
-        string affectedPath,
-        string policySourceFolder,
-        SharePolicyRepairReason reason)
-    {
-        if (string.IsNullOrWhiteSpace(shopRootPath))
-        {
-            return false;
-        }
-
-        AdminCommandResponse response = _adminWorkerClient.MarkActionAftercare(
-            shopRootPath,
-            affectedPath,
-            policySourceFolder,
-            reason);
-        if (!response.Ok)
-        {
-            SwkLogger.Warn($"TrayApp.MarkActionAftercare failed: code={response.ErrorCode} message={response.ErrorMessage}");
-        }
-
-        return response.Ok;
-    }
 
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
     {
@@ -522,10 +419,16 @@ public sealed class TrayApp : IDisposable
 
     public void ExitApp(bool fromUiRequest = false)
     {
-        bool wasOpen = _isShopOpen;
-        CloseShop();
-        if (wasOpen)
-            PatchSettingsOpenState(true, _shopFolder);
+        if (_isShopOpen)
+        {
+            Forms.MessageBox.Show(
+                "共有を開いたまま Tray を終了できません。\nShareWorkin 本体を開いて共有を閉じてから終了してください。",
+                "ShareWorkin",
+                Forms.MessageBoxButtons.OK,
+                Forms.MessageBoxIcon.Information);
+            return;
+        }
+
         if (!fromUiRequest)
             _ = PipeServer.PushMessageAsync("{\"type\":\"TRAY_EXITING\"}");
         System.Windows.Application.Current.Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
@@ -535,7 +438,7 @@ public sealed class TrayApp : IDisposable
     {
         if (EntryPasswordManager.IsConfigured)
         {
-            string? pw = TrayPasswordDialog.Show("終了すると共有も閉じます。\nパスワードを入力してください。");
+            string? pw = TrayPasswordDialog.Show("Tray を終了します。\nパスワードを入力してください。");
             if (pw == null) return;
             if (!EntryPasswordManager.Verify(pw))
             {
@@ -547,7 +450,7 @@ public sealed class TrayApp : IDisposable
         }
         else
         {
-            var r = Forms.MessageBox.Show("ShareWorkin を終了しますか？\n共有は閉じます。",
+            var r = Forms.MessageBox.Show("Tray を終了しますか？",
                 "ShareWorkin", Forms.MessageBoxButtons.OKCancel, Forms.MessageBoxIcon.Question);
             if (r == Forms.DialogResult.OK) ExitApp();
         }
@@ -599,100 +502,6 @@ public sealed class TrayApp : IDisposable
         catch (Exception ex)
         {
             SwkLogger.Warn($"TrayApp.PersistPcOwnerIdentity error: {ex.Message}");
-        }
-    }
-
-    private void StartShopContentsWatcher(string shopFolder)
-    {
-        StopShopContentsWatcher();
-
-        try
-        {
-            _shopContentsWatcher = new FileSystemWatcher(shopFolder)
-            {
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
-                IncludeSubdirectories = true,
-                EnableRaisingEvents = true,
-            };
-            _shopContentsWatcher.Created += ShopContentsWatcher_Created;
-            _shopContentsWatcher.Renamed += ShopContentsWatcher_Renamed;
-            _shopContentsWatcher.Error += ShopContentsWatcher_Error;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        {
-            SwkLogger.Warn($"StartShopContentsWatcher failed: {ex.Message}");
-            StopShopContentsWatcher();
-        }
-    }
-
-    private void StopShopContentsWatcher()
-    {
-        if (_shopContentsWatcher is null)
-        {
-            return;
-        }
-
-        _shopContentsWatcher.EnableRaisingEvents = false;
-        _shopContentsWatcher.Created -= ShopContentsWatcher_Created;
-        _shopContentsWatcher.Renamed -= ShopContentsWatcher_Renamed;
-        _shopContentsWatcher.Error -= ShopContentsWatcher_Error;
-        _shopContentsWatcher.Dispose();
-        _shopContentsWatcher = null;
-    }
-
-    private void ShopContentsWatcher_Created(object sender, FileSystemEventArgs e)
-    {
-        HandleShopContentArrival(e.FullPath, SharePolicyRepairReason.ExternalCreated);
-    }
-
-    private void ShopContentsWatcher_Renamed(object sender, RenamedEventArgs e)
-    {
-        HandleShopContentArrival(e.FullPath, SharePolicyRepairReason.ExternalRenamed);
-    }
-
-    private void ShopContentsWatcher_Error(object sender, ErrorEventArgs e)
-    {
-        SwkLogger.Warn($"ShopContentsWatcher error: {e.GetException()?.Message ?? "unknown"}");
-    }
-
-    private void HandleShopContentArrival(string affectedPath, SharePolicyRepairReason reason)
-    {
-        string? shopRootPath = _shopFolder;
-        if (!_isShopOpen || string.IsNullOrWhiteSpace(shopRootPath) || string.IsNullOrWhiteSpace(affectedPath))
-        {
-            return;
-        }
-
-        if (!IsUnderFolder(affectedPath, shopRootPath) || IsUnderHoldFolder(affectedPath, shopRootPath))
-        {
-            return;
-        }
-
-        string policySourceFolder = Path.GetDirectoryName(affectedPath) ?? shopRootPath;
-        _ = Task.Run(() => SharePolicyRepair.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason));
-    }
-
-    private static bool IsUnderHoldFolder(string path, string shopRootPath)
-    {
-        string holdFolderPath = Path.Combine(shopRootPath, "保留");
-        return IsUnderFolder(path, holdFolderPath);
-    }
-
-    private static bool IsUnderFolder(string path, string rootPath)
-    {
-        try
-        {
-            string root = Path.GetFullPath(rootPath)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string current = Path.GetFullPath(path)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            return string.Equals(root, current, StringComparison.OrdinalIgnoreCase) ||
-                   current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            return false;
         }
     }
 

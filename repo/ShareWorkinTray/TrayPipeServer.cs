@@ -191,34 +191,27 @@ internal sealed class TrayPipeSession : IDisposable
                     }));
                     break;
 
-                case "OPEN_SHOP":
+                case "SYNC_SHOP_OPENED":
                 {
                     string shopFolder = root.TryGetProperty("shopFolder", out var sf) ? sf.GetString() ?? "" : "";
                     string shareName = root.TryGetProperty("shareName", out var sn) ? sn.GetString() ?? "" : "";
-                    string profileLabel = root.TryGetProperty("profileLabel", out var pl) ? pl.GetString() ?? shareName : shareName;
                     int arVal = root.TryGetProperty("accessRight", out var ar) ? ar.GetInt32() : 0;
-                    bool authorize = root.TryGetProperty("authorizeOwnership", out var ao) && ao.GetBoolean();
                     var accessRight = arVal == 1 ? ShareAccessRight.Read : ShareAccessRight.Full;
 
-                    var (ok, error, needsOwnership, prompt, blocked) =
-                        _tray.OpenShop(shopFolder, shareName, profileLabel, accessRight, authorize);
+                    bool ok = _tray.UpdateShopOpenedState(shopFolder, shareName, accessRight);
 
                     await SendAsync(JsonSerializer.Serialize(new
                     {
-                        type = "OPEN_RESULT",
-                        ok,
-                        error,
-                        needsOwnership,
-                        prompt = prompt.ToString(),
-                        blockedPaths = blocked
+                        type = "SYNC_SHOP_OPENED_RESULT",
+                        ok
                     }));
                     break;
                 }
 
-                case "CLOSE_SHOP":
+                case "SYNC_SHOP_CLOSED":
                 {
-                    bool ok = _tray.CloseShop();
-                    await SendAsync($"{{\"type\":\"CLOSE_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
+                    bool ok = _tray.UpdateShopClosedState();
+                    await SendAsync($"{{\"type\":\"SYNC_SHOP_CLOSED_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
                     break;
                 }
 
@@ -286,36 +279,6 @@ internal sealed class TrayPipeSession : IDisposable
                 case "RELOAD_SETTINGS":
                     _tray.LoadSettings();
                     break;
-
-                case "SET_SUBFOLDER_PERMISSION":
-                {
-                    string path = root.TryGetProperty("path", out var p) ? p.GetString() ?? string.Empty : string.Empty;
-                    bool isSharedOff = root.TryGetProperty("isSharedOff", out var off) && off.GetBoolean();
-                    bool isReadOnly = root.TryGetProperty("isReadOnly", out var ro) && ro.GetBoolean();
-                    bool ok = _tray.SetSubfolderPermission(path, isSharedOff, isReadOnly);
-                    await SendAsync($"{{\"type\":\"SET_SUBFOLDER_PERMISSION_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
-                    break;
-                }
-
-                case "RESET_PATH_TO_INHERITED":
-                {
-                    string path = root.TryGetProperty("path", out var p) ? p.GetString() ?? string.Empty : string.Empty;
-                    bool ok = _tray.ResetPathToInherited(path);
-                    await SendAsync($"{{\"type\":\"RESET_PATH_TO_INHERITED_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
-                    break;
-                }
-
-                case "MARK_ACTION_AFTERCARE":
-                {
-                    string shopRootPath = root.TryGetProperty("shopRootPath", out var sr) ? sr.GetString() ?? string.Empty : string.Empty;
-                    string affectedPath = root.TryGetProperty("affectedPath", out var ap) ? ap.GetString() ?? string.Empty : string.Empty;
-                    string policySourceFolder = root.TryGetProperty("policySourceFolder", out var ps) ? ps.GetString() ?? string.Empty : string.Empty;
-                    string reasonText = root.TryGetProperty("reason", out var rs) ? rs.GetString() ?? string.Empty : string.Empty;
-                    bool parsed = Enum.TryParse(reasonText, ignoreCase: true, out SharePolicyRepairReason reason);
-                    bool ok = parsed && _tray.MarkActionAftercare(shopRootPath, affectedPath, policySourceFolder, reason);
-                    await SendAsync($"{{\"type\":\"MARK_ACTION_AFTERCARE_RESULT\",\"ok\":{(ok ? "true" : "false")}}}");
-                    break;
-                }
 
                 case "PING":
                     await SendAsync("{\"type\":\"PONG\"}");

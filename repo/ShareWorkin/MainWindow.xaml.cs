@@ -658,7 +658,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            _isShopOpen = _wasOpenAtLastShutdown;
+            _isShopOpen = false;
         }
         ImportPendingIncomingInteractions();
         ShowMainWindow();
@@ -3104,7 +3104,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
                     try
                     {
-                        bool ok = await Task.Run(() => _pipeClient.SetSubfolderPermission(path, isSharedOff, isReadOnly));
+                        bool ok = await Task.Run(() =>
+                            _pipeClient.SetSubfolderPermission(_shopFolder!, path, isSharedOff, isReadOnly).Ok);
                         if (!ok)
                             SetTransientStatus("権限の設定に失敗しました。");
                         else
@@ -4966,7 +4967,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     _permissionMap[result.DestinationPath] = ([], false, true);
                     _holdDisplayPermissionMap[result.DestinationPath] = displayPermBeforeHold;
                     SavePermissionMap();
-                    _ = Task.Run(() => _pipeClient.SetSubfolderPermission(result.DestinationPath, true, false));
+                    _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, result.DestinationPath, true, false));
                 }
 
                 InvalidateSizeCacheUnder(result.SourceParent);
@@ -5541,11 +5542,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_exitRequested && _pipeClient.IsConnected)
-            _pipeClient.SendExitApp();
         _uiUnlocked = false;
         CancelFolderSizeCalculation();
-        CloseShop(removeSmbShare: false);
+        if (_exitRequested)
+        {
+            if (_isShopOpen)
+            {
+                _pipeClient.BroadcastClosing();
+            }
+
+            CloseShop(removeSmbShare: true);
+            if (_pipeClient.IsConnected)
+                _pipeClient.SendExitApp();
+        }
+        else
+        {
+            CloseShop(removeSmbShare: false);
+        }
         _notificationTimer.Stop();
         _notificationTimer.Tick -= NotificationTimer_Tick;
         _pollingTimer.Stop();
@@ -5582,7 +5595,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Close();
     }
 
-    // RestoreOpenShopIfNeeded は TrayApp に移動。HandleStartup から呼ばない。
+    // 共有の再開は利用者の明示操作に限定する。起動時の自動復旧は行わない。
 
     private bool EnsureUiUnlocked()
     {
@@ -5664,7 +5677,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (outcome == null)
         {
-            UpdateShopState(false, "トレイとの通信に失敗しました。");
+            UpdateShopState(false, "管理者処理に失敗しました。");
             return;
         }
 
@@ -5683,7 +5696,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             if (outcome == null)
             {
-                UpdateShopState(false, "トレイとの通信に失敗しました。");
+                UpdateShopState(false, "管理者処理に失敗しました。");
                 return;
             }
         }
@@ -5714,7 +5727,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                _pipeClient.CloseShop();
+                _pipeClient.CloseShop(_shopFolder, shareName);
             }
             finally
             {
@@ -5729,6 +5742,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _isShopOpen = true;
         _wasOpenAtLastShutdown = true;
+        _pipeClient.SyncTrayShopOpened(_shopFolder, shareName, (int)_shareAccessRight);
         SaveSettings();
 
         ApplyShopRestorePolicyOnOpen(_shopFolder);
@@ -5755,7 +5769,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             foreach (var (path, (_, isReadOnly, isSharedOff)) in snapshot)
             {
                 if (!Directory.Exists(path)) continue;
-                _pipeClient.SetSubfolderPermission(path, isSharedOff, isReadOnly);
+                _pipeClient.SetSubfolderPermission(root, path, isSharedOff, isReadOnly);
             }
             // permissionMap に未登録のトップレベルフォルダは継承リセット
             // （旧セッションで全員R が設定され permissionMap に残らなかった場合の修復）
@@ -5763,7 +5777,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 if (snapshot.ContainsKey(dir)) continue;
                 if (string.Equals(Path.GetFileName(dir), HoldFolderName, StringComparison.OrdinalIgnoreCase)) continue;
-                _pipeClient.ResetPathToInherited(dir);
+                _pipeClient.ResetPathToInherited(root, dir);
             }
             if (Dispatcher.CheckAccess())
                 PublishPermissionManifest();
@@ -5886,7 +5900,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 continue;
             }
 
-            if (!_pipeClient.ResetPathToInherited(entry))
+            if (!_pipeClient.ResetPathToInherited(shopRoot, entry).Ok)
             {
                 SwkLogger.Warn($"NormalizeShopToDefaultFullShare reset failed: {entry}");
             }
@@ -5939,12 +5953,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                _pipeClient.CloseShop();
+                string shareName = DeriveShareName(_shopFolder!);
+                _pipeClient.CloseShop(_shopFolder!, shareName);
             }
             finally
             {
                 Mouse.OverrideCursor = null;
             }
+
+            _pipeClient.SyncTrayShopClosed();
         }
 
         if (_currentMode == DisplayMode.Shop || _currentMode == DisplayMode.Hold)
@@ -7976,7 +7993,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             TryRegisterExternalReceive(affectedPath, "Aftercare.ExternalCreated");
         }
 
-        _pipeClient.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
+        _ = _pipeClient.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
     }
 
     private void ContentsSensor_Error(object sender, ErrorEventArgs e)
@@ -8093,7 +8110,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SavePermissionMap();
             string capturedDest = destinationPath;
             var capturedPerm = effectiveSource.Value;
-            _ = Task.Run(() => _pipeClient.SetSubfolderPermission(capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
+            _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
             return true;
         }
 
@@ -8119,7 +8136,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         string enforcedDestPath = destinationPath;
         var enforcedDestPerm = effectiveDest.Value;
-        _ = Task.Run(() => _pipeClient.SetSubfolderPermission(enforcedDestPath, enforcedDestPerm.IsSharedOff, enforcedDestPerm.IsReadOnly));
+        _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, enforcedDestPath, enforcedDestPerm.IsSharedOff, enforcedDestPerm.IsReadOnly));
         return true;
     }
 

@@ -1,46 +1,27 @@
 using System.IO;
 using System.Text.Json;
-using System.Threading.Tasks;
 using ShareWorkin.SMB;
 
 namespace ShareWorkinAdminWorker;
 
 internal static class Program
 {
-    private const string OpenShopOperation = "open-shop";
-
     [STAThread]
     private static int Main(string[] args)
     {
         SwkLogger.Info(
             $"AdminWorker startup: processPath={Environment.ProcessPath ?? "null"} args={string.Join(" ", args)}");
 
-        if (TryParseOpenShopInvocation(args, out AdminCommandRequest? request, out string? resultPath))
+        if (TryParseInvocation(args, out AdminCommandRequest? request, out string? resultPath))
         {
-            return RunOpenShopOnce(request!, resultPath!);
+            return RunOnce(request!, resultPath!);
         }
 
-        using Mutex mutex = new(initiallyOwned: true, @"Local\ShareWorkinAdminWorker", out bool createdNew);
-        if (!createdNew)
-        {
-            SwkLogger.Info("AdminWorker startup skipped: existing instance detected");
-            return 0;
-        }
-
-        try
-        {
-            var server = new AdminPipeServer();
-            server.RunAsync().GetAwaiter().GetResult();
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            SwkLogger.Error("AdminWorker fatal error", ex);
-            return 1;
-        }
+        SwkLogger.Warn("AdminWorker invocation rejected: required arguments were missing or invalid");
+        return 1;
     }
 
-    private static int RunOpenShopOnce(AdminCommandRequest request, string resultPath)
+    private static int RunOnce(AdminCommandRequest request, string resultPath)
     {
         try
         {
@@ -50,7 +31,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            SwkLogger.Error("AdminWorker open-shop fatal error", ex);
+            SwkLogger.Error("AdminWorker fatal error", ex);
             WriteResponse(resultPath, new AdminCommandResponse
             {
                 Ok = false,
@@ -68,7 +49,7 @@ internal static class Program
         File.WriteAllText(resultPath, JsonSerializer.Serialize(response));
     }
 
-    private static bool TryParseOpenShopInvocation(
+    private static bool TryParseInvocation(
         string[] args,
         out AdminCommandRequest? request,
         out string? resultPath)
@@ -81,12 +62,7 @@ internal static class Program
             return false;
         }
 
-        string? op = null;
-        string? correlationId = null;
-        string? shopRootPath = null;
-        string? shareName = null;
-        string? profileLabel = null;
-        int accessRight = 0;
+        var parsed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string arg in args)
         {
@@ -98,51 +74,39 @@ internal static class Program
             string[] parts = arg[2..].Split('=', 2);
             string key = parts[0];
             string value = parts.Length == 2 ? parts[1] : string.Empty;
-
-            switch (key)
-            {
-                case "op":
-                    op = value;
-                    break;
-                case "corr":
-                    correlationId = value;
-                    break;
-                case "shop-root":
-                    shopRootPath = value;
-                    break;
-                case "share-name":
-                    shareName = value;
-                    break;
-                case "profile-label":
-                    profileLabel = value;
-                    break;
-                case "access-right":
-                    _ = int.TryParse(value, out accessRight);
-                    break;
-                case "result-path":
-                    resultPath = value;
-                    break;
-            }
+            parsed[key] = value;
         }
 
-        if (!string.Equals(op, OpenShopOperation, StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(correlationId) ||
-            string.IsNullOrWhiteSpace(shopRootPath) ||
-            string.IsNullOrWhiteSpace(shareName) ||
-            string.IsNullOrWhiteSpace(resultPath))
+        if (!parsed.TryGetValue("result-path", out string? parsedResultPath) ||
+            string.IsNullOrWhiteSpace(parsedResultPath))
         {
             return false;
         }
 
+        parsed.TryGetValue("cmd", out string? cmd);
+        parsed.TryGetValue("corr", out string? correlationId);
+        if (string.IsNullOrWhiteSpace(cmd) || string.IsNullOrWhiteSpace(correlationId))
+        {
+            return false;
+        }
+
+        _ = int.TryParse(parsed.GetValueOrDefault("access-right"), out int accessRight);
+
         request = new AdminCommandRequest
         {
-            Cmd = AdminProtocol.OpenShopCommand,
+            Cmd = cmd,
             CorrelationId = correlationId,
-            ShopRootPath = shopRootPath,
-            ShareName = shareName,
-            ProfileLabel = string.IsNullOrWhiteSpace(profileLabel) ? shareName : profileLabel,
-            AccessRight = accessRight
+            ShopRootPath = parsed.GetValueOrDefault("shop-root"),
+            ShareName = parsed.GetValueOrDefault("share-name"),
+            ProfileLabel = parsed.GetValueOrDefault("profile-label"),
+            AccessRight = accessRight,
+            TargetPath = parsed.GetValueOrDefault("target-path"),
+            IsSharedOff = string.Equals(parsed.GetValueOrDefault("shared-off"), "1", StringComparison.Ordinal),
+            IsReadOnly = string.Equals(parsed.GetValueOrDefault("read-only"), "1", StringComparison.Ordinal),
+            PolicySourceFolder = parsed.GetValueOrDefault("policy-source-folder"),
+            Reason = parsed.GetValueOrDefault("reason")
         };
+        resultPath = parsedResultPath;
         return true;
     }
 }

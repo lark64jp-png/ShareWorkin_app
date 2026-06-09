@@ -613,30 +613,6 @@ begin
   end;
 end;
 
-function CreateAdminScheduledTaskOrWarn(): Boolean;
-var
-  ResultCode: Integer;
-begin
-  RunHiddenSystemCommand(
-    ExpandConstant('{sys}\schtasks.exe'),
-    '/Delete /TN "ShareWorkin\ShareWorkinAdminWorker" /F',
-    ResultCode);
-
-  Result := RunHiddenSystemCommand(
-    ExpandConstant('{sys}\schtasks.exe'),
-    '/Create /TN "ShareWorkin\ShareWorkinAdminWorker" /TR "\"' +
-    ExpandConstant('{app}\' + ADMIN_EXE) + '\" --startup-source=scheduled-task" /SC ONLOGON /RL HIGHEST /F',
-    ResultCode) and (ResultCode = 0);
-
-  if not Result then
-  begin
-    MsgBox('ShareWorkinAdminWorker の自動起動設定に失敗しました。' + #13#10 +
-      '共有開始や権限変更が動作しない可能性があります。' + #13#10 +
-      'もう一度インストーラーを管理者として実行してください。',
-      mbError, MB_OK);
-  end;
-end;
-
 procedure RemoveScheduledTaskIfExists(const TaskName: String);
 var
   ResultCode: Integer;
@@ -666,24 +642,6 @@ begin
   begin
     MsgBox('ShareWorkinTray の起動に失敗しました。' + #13#10 +
       'インストール直後に共有を開けない場合があります。' + #13#10 +
-      'Windows の警告表示が出ていないか確認してください。',
-      mbError, MB_OK);
-  end;
-end;
-
-function RunAdminScheduledTaskOrWarn(): Boolean;
-var
-  ResultCode: Integer;
-begin
-  Result := RunHiddenSystemCommand(
-    ExpandConstant('{sys}\schtasks.exe'),
-    '/Run /TN "ShareWorkin\ShareWorkinAdminWorker"',
-    ResultCode) and (ResultCode = 0);
-
-  if not Result then
-  begin
-    MsgBox('ShareWorkinAdminWorker の起動に失敗しました。' + #13#10 +
-      '共有開始や権限変更が動作しない場合があります。' + #13#10 +
       'Windows の警告表示が出ていないか確認してください。',
       mbError, MB_OK);
   end;
@@ -1226,7 +1184,6 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   FirewallReady: Boolean;
   TaskReady: Boolean;
-  AdminTaskReady: Boolean;
   TrayReady: Boolean;
   TrayProcessReady: Boolean;
 begin
@@ -1256,9 +1213,7 @@ begin
 
       TaskReady := CreateScheduledTaskOrWarn();
       Log('CurStepChanged bool: TaskReady=' + BoolText(TaskReady));
-      AdminTaskReady := CreateAdminScheduledTaskOrWarn();
-      Log('CurStepChanged bool: AdminTaskReady=' + BoolText(AdminTaskReady));
-      if TaskReady and AdminTaskReady then
+      if TaskReady then
       begin
         TrayReady := RunScheduledTaskOrWarn();
         Log('CurStepChanged bool: TrayReady=' + BoolText(TrayReady));
@@ -1269,17 +1224,15 @@ begin
       begin
         TrayReady := False;
         TrayProcessReady := False;
-        Log('CurStepChanged bool: startup checks skipped because TaskReady=' + BoolText(TaskReady) +
-          ' AdminTaskReady=' + BoolText(AdminTaskReady));
+        Log('CurStepChanged bool: startup checks skipped because TaskReady=' + BoolText(TaskReady));
       end;
 
       Log('CurStepChanged bool summary: FirewallReady=' + BoolText(FirewallReady) +
         ' TaskReady=' + BoolText(TaskReady) +
-        ' AdminTaskReady=' + BoolText(AdminTaskReady) +
         ' TrayReady=' + BoolText(TrayReady) +
         ' TrayProcessReady=' + BoolText(TrayProcessReady));
 
-      if FirewallReady and TaskReady and AdminTaskReady and TrayReady and TrayProcessReady then
+      if FirewallReady and TaskReady and TrayReady and TrayProcessReady then
       begin
         MsgBox(APP_NAME + ' のインストールが完了しました。' + #13#10 +
           'Tray の起動を確認したので、このあと ShareWorkin を開きます。',

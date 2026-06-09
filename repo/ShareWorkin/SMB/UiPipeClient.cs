@@ -31,6 +31,7 @@ public sealed class UiPipeClient : IDisposable
 {
     private const string PipeName = "ShareWorkin_TrayPipe";
 
+    private readonly AdminWorkerProcessClient _adminWorker = new();
     private NamedPipeClientStream? _pipe;
     private StreamReader? _reader;
     private StreamWriter? _writer;
@@ -95,48 +96,93 @@ public sealed class UiPipeClient : IDisposable
 
     public ShopOpenOutcome? OpenShop(string shopFolder, string shareName, string profileLabel, int accessRight, bool authorizeOwnership)
     {
-        var cmdObj = new
+        _ = authorizeOwnership;
+        AdminCommandResponse response = _adminWorker.Execute(new AdminCommandRequest
         {
-            cmd = "OPEN_SHOP",
-            shopFolder,
-            shareName,
-            profileLabel,
-            accessRight,
-            authorizeOwnership
-        };
-        var json = SendCommand(JsonSerializer.Serialize(cmdObj), timeoutMs: 60000);
-        if (json == null) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            bool ok = root.TryGetProperty("ok", out var okP) && okP.GetBoolean();
-            string? error = root.TryGetProperty("error", out var e) && e.ValueKind != JsonValueKind.Null
-                ? e.GetString() : null;
-            bool needsOwnership = root.TryGetProperty("needsOwnership", out var no) && no.GetBoolean();
-            string? prompt = root.TryGetProperty("prompt", out var p) ? p.GetString() : null;
-            List<string>? blocked = null;
-            if (root.TryGetProperty("blockedPaths", out var bp) && bp.ValueKind == JsonValueKind.Array)
-            {
-                blocked = [];
-                foreach (var item in bp.EnumerateArray())
-                    if (item.GetString() is string s) blocked.Add(s);
-            }
-            return new ShopOpenOutcome(ok, error, needsOwnership, prompt, blocked);
-        }
-        catch { return null; }
+            Cmd = AdminProtocol.OpenShopCommand,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ShopRootPath = shopFolder,
+            ShareName = shareName,
+            ProfileLabel = profileLabel,
+            AccessRight = accessRight
+        }, timeoutMs: 60000);
+
+        return new ShopOpenOutcome(
+            response.Ok,
+            response.ErrorMessage,
+            false,
+            null,
+            response.BlockedPaths);
     }
 
-    public bool CloseShop()
+    public AdminCommandResponse CloseShop(string shopFolder, string shareName)
     {
-        var json = SendCommand("{\"cmd\":\"CLOSE_SHOP\"}");
-        if (json == null) return false;
-        try
+        return _adminWorker.Execute(new AdminCommandRequest
         {
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean();
-        }
-        catch { return false; }
+            Cmd = AdminProtocol.CloseShopCommand,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ShopRootPath = shopFolder,
+            ShareName = shareName
+        }, timeoutMs: 30000);
+    }
+
+    public AdminCommandResponse SetSubfolderPermission(string shopRootPath, string path, bool isSharedOff, bool isReadOnly)
+    {
+        return _adminWorker.Execute(new AdminCommandRequest
+        {
+            Cmd = AdminProtocol.SetSubfolderPermissionCommand,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ShopRootPath = shopRootPath,
+            TargetPath = path,
+            IsSharedOff = isSharedOff,
+            IsReadOnly = isReadOnly
+        }, timeoutMs: 30000);
+    }
+
+    public AdminCommandResponse ResetPathToInherited(string shopRootPath, string path)
+    {
+        return _adminWorker.Execute(new AdminCommandRequest
+        {
+            Cmd = AdminProtocol.ResetPathToInheritedCommand,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ShopRootPath = shopRootPath,
+            TargetPath = path
+        }, timeoutMs: 30000);
+    }
+
+    public AdminCommandResponse MarkActionAftercare(
+        string shopRootPath,
+        string affectedPath,
+        string policySourceFolder,
+        SharePolicyRepairReason reason)
+    {
+        return _adminWorker.Execute(new AdminCommandRequest
+        {
+            Cmd = AdminProtocol.MarkActionAftercareCommand,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            ShopRootPath = shopRootPath,
+            TargetPath = affectedPath,
+            PolicySourceFolder = policySourceFolder,
+            Reason = reason.ToString()
+        }, timeoutMs: 30000);
+    }
+
+    public bool SyncTrayShopOpened(string shopFolder, string shareName, int accessRight)
+    {
+        string? json = SendCommand(JsonSerializer.Serialize(new
+        {
+            cmd = "SYNC_SHOP_OPENED",
+            shopFolder,
+            shareName,
+            accessRight
+        }), timeoutMs: 5000);
+        return ReadOk(json);
+    }
+
+    public bool SyncTrayShopClosed()
+    {
+        string? json = SendCommand("{\"cmd\":\"SYNC_SHOP_CLOSED\"}", timeoutMs: 5000);
+        return ReadOk(json);
     }
 
     public void BroadcastClosing() => FireAndForget("{\"cmd\":\"BROADCAST_CLOSING\"}");
@@ -151,45 +197,6 @@ public sealed class UiPipeClient : IDisposable
     public NotificationCommandResult SendTestNotification(string? folder)
     {
         return SendNotificationCommand(JsonSerializer.Serialize(new { cmd = "TEST_NOTIFICATION", folder }));
-    }
-
-    public bool SetSubfolderPermission(string path, bool isSharedOff, bool isReadOnly)
-    {
-        var json = SendCommand(JsonSerializer.Serialize(new
-        {
-            cmd = "SET_SUBFOLDER_PERMISSION",
-            path,
-            isSharedOff,
-            isReadOnly
-        }), timeoutMs: 30000);
-        return ReadOk(json);
-    }
-
-    public bool ResetPathToInherited(string path)
-    {
-        var json = SendCommand(JsonSerializer.Serialize(new
-        {
-            cmd = "RESET_PATH_TO_INHERITED",
-            path
-        }), timeoutMs: 30000);
-        return ReadOk(json);
-    }
-
-    public bool MarkActionAftercare(
-        string shopRootPath,
-        string affectedPath,
-        string policySourceFolder,
-        SharePolicyRepairReason reason)
-    {
-        var json = SendCommand(JsonSerializer.Serialize(new
-        {
-            cmd = "MARK_ACTION_AFTERCARE",
-            shopRootPath,
-            affectedPath,
-            policySourceFolder,
-            reason = reason.ToString()
-        }), timeoutMs: 30000);
-        return ReadOk(json);
     }
 
     public void SendExitApp() => FireAndForget("{\"cmd\":\"EXIT_APP\"}");
