@@ -94,6 +94,9 @@ public sealed class UiPipeClient : IDisposable
         catch { return null; }
     }
 
+    // インフラ準備・共有作成・ACL復元を含むため他コマンドより長い timeout を確保する。
+    private const int OpenShopTimeoutMs = 120_000;
+
     public ShopOpenOutcome? OpenShop(
         string shopFolder,
         string shareName,
@@ -113,7 +116,7 @@ public sealed class UiPipeClient : IDisposable
             AccessRight = accessRight,
             ApplyPermissionsOnOpen = true,
             PermissionEntries = restoreEntries
-        }, timeoutMs: 60000);
+        }, timeoutMs: OpenShopTimeoutMs);
 
         return new ShopOpenOutcome(
             response.Ok,
