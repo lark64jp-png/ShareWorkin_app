@@ -31,9 +31,12 @@ public static class SharePathPolicy
             return false;
         }
 
-        if (name.IndexOfAny(ForbiddenShareNameChars) >= 0)
+        int badIdx = name.IndexOfAny(ForbiddenShareNameChars);
+        if (badIdx >= 0)
         {
-            error = "お店の名前にこの記号は使えません: \\ / : * ? \" < > | + = ; , [ ]";
+            char badChar = name[badIdx];
+            error = $"フォルダー名には共有名に使えない記号「{badChar}」が含まれています。" +
+                    $"フォルダー名から「{badChar}」を外してから共有開始してください。";
             return false;
         }
 
@@ -45,6 +48,13 @@ public static class SharePathPolicy
 
         error = string.Empty;
         return true;
+    }
+
+    public static char? FindFirstInvalidShareNameChar(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        int idx = name.IndexOfAny(ForbiddenShareNameChars);
+        return idx >= 0 ? name[idx] : null;
     }
 
     public static bool TryNormalizeLocalPath(string? path, out string normalizedPath)

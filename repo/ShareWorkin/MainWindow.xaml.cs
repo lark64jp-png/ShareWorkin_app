@@ -1093,32 +1093,6 @@ public partial class MainWindow : Window
         return root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimEnd(':');
     }
 
-    private static readonly char[] ForbiddenShareNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
-
-    private static bool ValidateShareName(string name, out string error)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            error = "お店の名前を決められませんでした。フォルダー名を確認してください。";
-            return false;
-        }
-
-        if (name.IndexOfAny(ForbiddenShareNameChars) >= 0)
-        {
-            error = "お店の名前にこの記号は使えません: \\ / : * ? \" < > |";
-            return false;
-        }
-
-        if (name.Length > 80)
-        {
-            error = "お店の名前が長すぎます(80文字まで)。";
-            return false;
-        }
-
-        error = string.Empty;
-        return true;
-    }
-
     private static bool IsRunningAsAdmin()
     {
         try
@@ -5692,20 +5666,30 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(_shopFolder))
         {
-            UpdateShopState(false, "共有する場所を選んでください。");
+            const string emptyMsg = "共有する場所を選んでください。";
+            UpdateShopState(false, emptyMsg);
+            SetAdminWorkerStatus(emptyMsg);
+            SwkLogger.Info("OpenShop blocked before admin: reason=ShopFolderEmpty");
             return;
         }
 
         if (!Directory.Exists(_shopFolder))
         {
-            UpdateShopState(false, "その場所が見つかりません。");
+            const string notFoundMsg = "その場所が見つかりません。";
+            UpdateShopState(false, notFoundMsg);
+            SetAdminWorkerStatus(notFoundMsg);
+            SwkLogger.Info($"OpenShop blocked before admin: reason=ShopFolderNotFound path={_shopFolder}");
             return;
         }
 
         string shareName = DeriveShareName(_shopFolder);
-        if (!ValidateShareName(shareName, out string nameError))
+        if (!SMB.SharePathPolicy.ValidateShareName(shareName, out string nameError))
         {
             UpdateShopState(false, nameError);
+            SetAdminWorkerStatus(nameError);
+            char? badChar = SMB.SharePathPolicy.FindFirstInvalidShareNameChar(shareName);
+            string charPart = badChar.HasValue ? $" char={badChar}" : string.Empty;
+            SwkLogger.Info($"OpenShop blocked before admin: reason=InvalidShareName{charPart} shareName={shareName}");
             return;
         }
 
