@@ -5561,6 +5561,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         _windowClosingHandled = true;
         _uiUnlocked = false;
+        SwkLogger.Info($"DoWindowClosingAsync: start exitRequested={_exitRequested} isShopOpen={_isShopOpen}");
         CancelFolderSizeCalculation();
         if (_exitRequested)
         {
@@ -5570,12 +5571,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             await CloseShop(removeSmbShare: true);
+            SwkLogger.Info("DoWindowClosingAsync: CloseShop(removeSmbShare:true) done");
             if (_pipeClient.IsConnected)
                 _pipeClient.SendExitApp();
         }
         else
         {
             await CloseShop(removeSmbShare: false);
+            SwkLogger.Info("DoWindowClosingAsync: CloseShop(removeSmbShare:false) done");
         }
         _notificationTimer.Stop();
         _notificationTimer.Tick -= NotificationTimer_Tick;
@@ -5584,8 +5587,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         StopFriendShopPolling();
         _transientStatusTimer.Stop();
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
+        SwkLogger.Info("DoWindowClosingAsync: timers stopped");
         _pipeClient.Dispose();
+        SwkLogger.Info("DoWindowClosingAsync: pipeClient disposed");
+        SwkLogger.Info("DoWindowClosingAsync: calling Close()");
         Close();
+        SwkLogger.Info("DoWindowClosingAsync: Close() returned");
     }
 
     private void ShowMainWindow()
