@@ -1192,6 +1192,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    // ShareWorkin が自分自身で生成するシステム管理ファイル。
+    // 外部フロー（受信登録・通知・Aftercare）の対象から除外する必要がある。
+    private static bool IsInternalManagementFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        string name = Path.GetFileName(path);
+        return string.Equals(name, SMB.ShopPermissionManifest.FileName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private bool EnsureHoldFolderForShopChange(bool notifyWhenRecreated)
     {
         if (!_isShopOpen ||
@@ -6256,6 +6265,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         Dispatcher.Invoke(() =>
         {
             SwkLogger.Debug($"ArrivalSensor_Created: {FormatWatcherEvent(e)}");
+            if (IsInternalManagementFile(e.FullPath))
+            {
+                SwkLogger.Debug($"ArrivalSensor_Created skipped: internal management file path={e.FullPath}");
+                return;
+            }
             SwkLogger.Info($"Trace.ExternalFlow.Receive.Sensor: sensor=Arrival change={e.ChangeType} path={e.FullPath}");
             if (e.ChangeType == WatcherChangeTypes.Created && !Directory.Exists(e.FullPath))
             {
@@ -8096,7 +8110,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             string.IsNullOrWhiteSpace(affectedPath) ||
             string.IsNullOrWhiteSpace(policySourceFolder) ||
             !IsUnderFolder(affectedPath, _shopFolder) ||
-            IsHoldFolderPath(affectedPath))
+            IsHoldFolderPath(affectedPath) ||
+            IsInternalManagementFile(affectedPath))
         {
             return;
         }
