@@ -10420,6 +10420,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UpdateShopState(bool isOpen, string? statusMessage = null)
     {
+        if (_windowClosingHandled) return;
         ShopDoorButton.Content = isOpen ? "共有を閉じる" : "共有開始";
         ClosedShopPanel.Visibility = isOpen ? Visibility.Collapsed : Visibility.Visible;
         OpenShopPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
