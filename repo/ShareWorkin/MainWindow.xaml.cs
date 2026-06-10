@@ -366,6 +366,11 @@ public partial class MainWindow : Window
             HandleWmDropFiles(wParam);
             handled = true;
         }
+        else if (App.ActivateWindowMessage != 0 && msg == unchecked((int)App.ActivateWindowMessage))
+        {
+            ShowMainWindow();
+            handled = true;
+        }
         return IntPtr.Zero;
     }
 

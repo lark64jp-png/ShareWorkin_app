@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using ShareWorkin.SMB;
@@ -13,6 +14,14 @@ namespace ShareWorkin;
 public partial class App : System.Windows.Application
 {
     internal const string AppUserModelId = SwkNotificationIdentity.AppUserModelId;
+
+    private const string SingleInstanceMutexName = "Local\\ShareWorkin_SingleInstance_1";
+    private const string ActivateWindowMessageName = "ShareWorkin_ActivateMainWindow_1";
+    internal static uint ActivateWindowMessage { get; private set; }
+
+    private static Mutex? _instanceMutex;
+    private static bool _mutexAcquired;
+
     private const int TokenAssignPrimary = 0x0001;
     private const int TokenDuplicate = 0x0002;
     private const int TokenQuery = 0x0008;
@@ -20,6 +29,13 @@ public partial class App : System.Windows.Application
     private const int TokenAdjustSessionId = 0x0100;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const int LogonWithProfile = 0x00000001;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = false)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
+    [DllImport("user32.dll", SetLastError = false)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("shell32.dll", SetLastError = true)]
     private static extern void SetCurrentProcessExplicitAppUserModelID(
@@ -121,6 +137,22 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        ActivateWindowMessage = RegisterWindowMessage(ActivateWindowMessageName);
+        _instanceMutex = new Mutex(false, SingleInstanceMutexName);
+        bool acquired;
+        try { acquired = _instanceMutex.WaitOne(0, false); }
+        catch (AbandonedMutexException) { acquired = true; }
+
+        if (!acquired)
+        {
+            PostMessage(new IntPtr(-1) /* HWND_BROADCAST */, ActivateWindowMessage, IntPtr.Zero, IntPtr.Zero);
+            _instanceMutex.Dispose();
+            _instanceMutex = null;
+            Shutdown();
+            return;
+        }
+        _mutexAcquired = true;
+
         DispatcherUnhandledException += (_, args) =>
         {
             SwkLogger.Error("Unhandled dispatcher exception", args.Exception);
@@ -150,6 +182,16 @@ public partial class App : System.Windows.Application
 
         SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
         base.OnStartup(e);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        if (_mutexAcquired)
+        {
+            try { _instanceMutex?.ReleaseMutex(); } catch (Exception) { }
+        }
+        _instanceMutex?.Dispose();
+        base.OnExit(e);
     }
 
     private static bool ShouldRelaunchUnelevated(string[] args)

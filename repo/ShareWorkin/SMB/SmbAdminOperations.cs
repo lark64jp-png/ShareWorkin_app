@@ -63,15 +63,17 @@ public static class SmbAdminOperations
         }
 
         AclRepairPreflight aclRepair = SmbNtfsManager.PreflightAclRepair(shopRootPath);
-        if (aclRepair.NeedsOwnershipChange && !SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
+        if (aclRepair.NeedsOwnershipChange)
         {
-            string message = aclRepair.BlockedPaths.Count > 0
-                ? "このフォルダーの一部のファイルはアクセス設定を整えられないため、お店として開けません。"
-                : "お店のアクセス設定を整えられませんでした。";
-            return Fail(request, AdminErrorCode.OwnershipRepairFailed, message, aclRepair.BlockedPaths);
+            if (!SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
+            {
+                string message = aclRepair.BlockedPaths.Count > 0
+                    ? "このフォルダーの一部のファイルはアクセス設定を整えられないため、お店として開けません。"
+                    : "お店のアクセス設定を整えられませんでした。";
+                return Fail(request, AdminErrorCode.OwnershipRepairFailed, message, aclRepair.BlockedPaths);
+            }
         }
-
-        if (!SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
+        else if (!SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
         {
             return Fail(request, AdminErrorCode.OwnershipRepairFailed, "お店のアクセス設定を整えられませんでした。");
         }
