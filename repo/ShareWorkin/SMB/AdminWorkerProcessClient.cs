@@ -96,7 +96,7 @@ public sealed class AdminWorkerProcessClient
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             SwkLogger.Warn($"AdminWorkerProcessClient canceled: corr={request.CorrelationId} message={ex.Message}");
-            return BuildHelperUnavailable(request, "管理者権限の許可がキャンセルされました。");
+            return BuildHelperUnavailable(request, "共有開始はキャンセルされました。もう一度「共有開始」を押してください。");
         }
         catch (Exception ex)
         {
