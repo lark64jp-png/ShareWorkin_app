@@ -143,23 +143,47 @@
         <!-- TODO_UI: Move the visual language away from a Windows share manager
              and toward a small shop surface. This pass is intentionally light. -->
         <Border Grid.Row="0" Background="#315C50" Padding="28,22">
-            <StackPanel>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
-                    <TextBlock Text="ShareWorkin"
-                               Foreground="White"
-                               FontSize="28"
-                               FontWeight="SemiBold" />
-                    <TextBlock x:Name="AppVersionTextBlock"
-                               Foreground="#B0D4C0"
-                               FontSize="13"
-                               Margin="10,0,0,6"
-                               VerticalAlignment="Bottom" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                        <TextBlock Text="ShareWorkin"
+                                   Foreground="White"
+                                   FontSize="28"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="AppVersionTextBlock"
+                                   Foreground="#B0D4C0"
+                                   FontSize="13"
+                                   Margin="10,0,0,6"
+                                   VerticalAlignment="Bottom" />
+                    </StackPanel>
+                    <TextBlock Text="共有相手と自分のPC内部のフォルダーを共有します"
+                               Foreground="#E7EFE8"
+                               Margin="0,6,0,0"
+                               FontSize="14" />
                 </StackPanel>
-                <TextBlock Text="共有相手と自分のPC内部のフォルダーを共有します"
-                           Foreground="#E7EFE8"
-                           Margin="0,6,0,0"
-                           FontSize="14" />
-            </StackPanel>
+                <Border x:Name="AdminWorkerStatusPanel"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        MinWidth="220"
+                        MaxWidth="360"
+                        Margin="24,0,0,0"
+                        Padding="14,10"
+                        Background="#1E4A3E"
+                        CornerRadius="6"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="AdminWorkerStatusTextBlock"
+                               Foreground="#FFB090"
+                               FontSize="13"
+                               FontWeight="Medium"
+                               TextWrapping="Wrap"
+                               LineHeight="20"
+                               LineStackingStrategy="BlockLineHeight" />
+                </Border>
+            </Grid>
         </Border>
 
         <Grid Grid.Row="1" Margin="28" Background="#FFFEFA">

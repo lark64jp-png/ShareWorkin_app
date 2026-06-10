@@ -192,6 +192,8 @@ public partial class MainWindow : Window
     private bool _uiUnlocked;
     private bool _startupHandled;
     private bool _wasOpenAtLastShutdown;
+    private bool _windowClosingHandled;
+    private bool _isAdminWorkerRunning;
     private ShareAccessRight _shareAccessRight = ShareAccessRight.Full;
     private DisplayMode _currentMode = DisplayMode.Shop;
     private Friend? _activeFriendShop;
@@ -2130,16 +2132,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void SwitchShopFolder(string newFolder)
+    private async void SwitchShopFolder(string newFolder)
     {
         if (!Directory.Exists(newFolder))
         {
-            CloseShop();
+            await CloseShop();
             UpdateShopState(false, "その場所が見つかりません。");
             return;
         }
 
-        CloseShop();
+        await CloseShop();
         _folderSizeCache.Clear();
         _subfolderCountCache.Clear();
         _backStack.Clear();
@@ -2149,7 +2151,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         MyShopTextBox.Text = _shopFolder;
         SaveSettings();
 
-        OpenShop();
+        await OpenShop();
     }
 
     private void ShopDoorButton_Click(object sender, RoutedEventArgs e)
@@ -2160,15 +2162,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ExecuteOpenShop();
     }
 
-    private void ExecuteCloseShop()
+    private async void ExecuteCloseShop()
     {
         _pipeClient.BroadcastClosing();
-        CloseShop();
+        await CloseShop();
     }
 
-    private void ExecuteOpenShop()
+    private async void ExecuteOpenShop()
     {
-        OpenShop();
+        await OpenShop();
     }
 
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
@@ -3037,6 +3039,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
+            if (_isShopOpen && _currentMode != DisplayMode.FriendShop && !item.IsHoldFolder
+                && _isAdminWorkerRunning)
+            {
+                SetAdminWorkerStatus("管理者権限の処理中です。しばらくお待ちください。");
+                return;
+            }
+
             item.IsSharedOff = newSharedOff;
             item.IsReadOnly = newReadOnly;
             item.AllowedUsers.Clear();
@@ -3100,19 +3109,32 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     bool isSharedOff = isHeldItem || item.IsSharedOff;
                     bool isReadOnly = isHeldItem ? false : item.IsReadOnly;
 
+                    string shopFolder = _shopFolder!;
+                    _isAdminWorkerRunning = true;
                     if (button is not null) button.IsEnabled = false;
                     Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                    SetAdminWorkerStatus("管理者権限で共有設定を確認しています...");
+                    await Task.Delay(500);
                     try
                     {
                         bool ok = await Task.Run(() =>
-                            _pipeClient.SetSubfolderPermission(_shopFolder!, path, isSharedOff, isReadOnly).Ok);
+                            _pipeClient.SetSubfolderPermission(shopFolder, path, isSharedOff, isReadOnly).Ok);
                         if (!ok)
+                        {
+                            SetAdminWorkerStatus("");
                             SetTransientStatus("権限の設定に失敗しました。");
+                        }
                         else
+                        {
+                            SetAdminWorkerStatus("共有設定が完了しました。");
+                            await Task.Delay(500);
+                            SetAdminWorkerStatus("");
                             _pipeClient.BroadcastPermission();
+                        }
                     }
                     finally
                     {
+                        _isAdminWorkerRunning = false;
                         Mouse.OverrideCursor = null;
                         if (button is not null) button.IsEnabled = true;
                     }
@@ -5542,6 +5564,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (_windowClosingHandled) return;
+        e.Cancel = true;
+        _ = DoWindowClosingAsync();
+    }
+
+    private async Task DoWindowClosingAsync()
+    {
+        _windowClosingHandled = true;
         _uiUnlocked = false;
         CancelFolderSizeCalculation();
         if (_exitRequested)
@@ -5551,13 +5581,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 _pipeClient.BroadcastClosing();
             }
 
-            CloseShop(removeSmbShare: true);
+            await CloseShop(removeSmbShare: true);
             if (_pipeClient.IsConnected)
                 _pipeClient.SendExitApp();
         }
         else
         {
-            CloseShop(removeSmbShare: false);
+            await CloseShop(removeSmbShare: false);
         }
         _notificationTimer.Stop();
         _notificationTimer.Tick -= NotificationTimer_Tick;
@@ -5567,6 +5597,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _transientStatusTimer.Stop();
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
         _pipeClient.Dispose();
+        Close();
     }
 
     private void ShowMainWindow()
@@ -5643,7 +5674,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void OpenShop()
+    private async Task OpenShop()
     {
         if (string.IsNullOrWhiteSpace(_shopFolder))
         {
@@ -5674,30 +5705,25 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         List<SMB.PermissionRestoreEntry>? restoreEntries = BuildRestoreEntries(root, restoreMode);
 
-        ShopOpenOutcome? outcome;
-        Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-        try
+        if (_isAdminWorkerRunning)
         {
-            outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, false, restoreEntries);
-        }
-        finally
-        {
-            Mouse.OverrideCursor = null;
-        }
-
-        if (outcome == null)
-        {
-            UpdateShopState(false, "管理者処理に失敗しました。");
+            SetAdminWorkerStatus("管理者権限の処理中です。しばらくお待ちください。");
             return;
         }
-
-        // 共有開始時に公開対象を利用者オーナー基準へ揃える。
-        if (outcome.NeedsOwnership)
+        string shopFolder = _shopFolder!;
+        _isAdminWorkerRunning = true;
+        ShopDoorButton.IsEnabled = false;
+        BrowseButton.IsEnabled = false;
+        try
         {
+            ShopOpenOutcome? outcome;
+            SetAdminWorkerStatus("管理者権限の確認画面が表示されています。\n許可すると共有設定を続行します。");
+            await Task.Delay(100);
+            SetAdminWorkerStatus("管理者権限で共有設定を確認しています...");
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
-                outcome = _pipeClient.OpenShop(_shopFolder, shareName, shareName, (int)_shareAccessRight, true, restoreEntries);
+                outcome = await Task.Run(() => _pipeClient.OpenShop(shopFolder, shareName, shareName, (int)_shareAccessRight, false, restoreEntries));
             }
             finally
             {
@@ -5706,66 +5732,99 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             if (outcome == null)
             {
+                SetAdminWorkerStatus("");
                 UpdateShopState(false, "管理者処理に失敗しました。");
                 return;
             }
-        }
 
-        if (!outcome.Ok)
-        {
-            string message = string.IsNullOrWhiteSpace(outcome.Error)
-                ? "お店を開けませんでした。"
-                : outcome.Error!;
-            if (outcome.BlockedPaths is { Count: > 0 } blocked)
+            // 共有開始時に公開対象を利用者オーナー基準へ揃える。
+            if (outcome.NeedsOwnership)
             {
-                int show = Math.Min(blocked.Count, 5);
-                string list = string.Join("\n", blocked.Take(show).Select(p => "・" + p));
-                if (blocked.Count > show)
+                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                try
                 {
-                    list += $"\nほか {blocked.Count - show} 件";
+                    outcome = await Task.Run(() => _pipeClient.OpenShop(shopFolder, shareName, shareName, (int)_shareAccessRight, true, restoreEntries));
                 }
-                message += "\n\n対象:\n" + list;
-            }
-            UpdateShopState(false, message);
-            return;
-        }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                }
 
-        // 共有開始で所有権/ACL の回復が済んだあとに保留を作る。
-        // 先に保留を触ると、別 OS 由来の所有者ずれで開店前に失敗してしまう。
-        if (!TryEnsureHoldFolder())
-        {
-            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-            try
+                if (outcome == null)
+                {
+                    SetAdminWorkerStatus("");
+                    UpdateShopState(false, "管理者処理に失敗しました。");
+                    return;
+                }
+            }
+
+            if (!outcome.Ok)
             {
-                _pipeClient.CloseShop(_shopFolder, shareName);
+                string message = string.IsNullOrWhiteSpace(outcome.Error)
+                    ? "お店を開けませんでした。"
+                    : outcome.Error!;
+                if (outcome.BlockedPaths is { Count: > 0 } blocked)
+                {
+                    int show = Math.Min(blocked.Count, 5);
+                    string list = string.Join("\n", blocked.Take(show).Select(p => "・" + p));
+                    if (blocked.Count > show)
+                    {
+                        list += $"\nほか {blocked.Count - show} 件";
+                    }
+                    message += "\n\n対象:\n" + list;
+                }
+                SetAdminWorkerStatus("");
+                UpdateShopState(false, message);
+                return;
             }
-            finally
+
+            // 共有開始で所有権/ACL の回復が済んだあとに保留を作る。
+            // 先に保留を触ると、別 OS 由来の所有者ずれで開店前に失敗してしまう。
+            if (!TryEnsureHoldFolder())
             {
-                Mouse.OverrideCursor = null;
+                Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                try
+                {
+                    _pipeClient.CloseShop(shopFolder, shareName);
+                }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                }
+
+                SetAdminWorkerStatus("");
+                UpdateShopState(false, "保留を準備できません。");
+                return;
             }
 
-            UpdateShopState(false, "保留を準備できません。");
-            return;
+            ReinitializeShopChangeMonitoring();
+
+            _isShopOpen = true;
+            _wasOpenAtLastShutdown = true;
+            _pipeClient.SyncTrayShopOpened(shopFolder, shareName, (int)_shareAccessRight);
+            SaveSettings();
+
+            if (restoreMode == ShopRestoreMode.NormalizeSharedFolderOnly)
+            {
+                ClearStoredPermissionsForShop(root, saveAfterClear: false);
+                SavePermissionMap();
+            }
+            PublishPermissionManifest();
+
+            SetAdminWorkerStatus("共有設定が完了しました。");
+            await Task.Delay(500);
+            SetAdminWorkerStatus("");
+            UpdateShopState(true);
+            if (_currentMode == DisplayMode.Shop)
+            {
+                NavigateTo(shopFolder, addHistory: false, clearForward: true);
+            }
         }
-
-        ReinitializeShopChangeMonitoring();
-
-        _isShopOpen = true;
-        _wasOpenAtLastShutdown = true;
-        _pipeClient.SyncTrayShopOpened(_shopFolder, shareName, (int)_shareAccessRight);
-        SaveSettings();
-
-        if (restoreMode == ShopRestoreMode.NormalizeSharedFolderOnly)
+        finally
         {
-            ClearStoredPermissionsForShop(root, saveAfterClear: false);
-            SavePermissionMap();
-        }
-        PublishPermissionManifest();
-
-        UpdateShopState(true);
-        if (_currentMode == DisplayMode.Shop)
-        {
-            NavigateTo(_shopFolder, addHistory: false, clearForward: true);
+            _isAdminWorkerRunning = false;
+            ShopDoorButton.IsEnabled = true;
+            BrowseButton.IsEnabled = true;
         }
     }
 
@@ -5962,7 +6021,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private void CloseShop(bool removeSmbShare = true)
+    private async Task CloseShop(bool removeSmbShare = true)
     {
         DisposeWatcher();
         _pollingTimer.Stop();
@@ -5975,18 +6034,44 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (wasOpen && removeSmbShare)
         {
-            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-            try
+            if (_isAdminWorkerRunning)
             {
-                string shareName = DeriveShareName(_shopFolder!);
-                _pipeClient.CloseShop(_shopFolder!, shareName);
+                SetAdminWorkerStatus("管理者権限の処理中です。しばらくお待ちください。");
             }
-            finally
+            else
             {
-                Mouse.OverrideCursor = null;
-            }
+                string shopFolder = _shopFolder!;
+                _isAdminWorkerRunning = true;
+                ShopDoorButton.IsEnabled = false;
+                BrowseButton.IsEnabled = false;
+                try
+                {
+                    SetAdminWorkerStatus("管理者権限の確認画面が表示されています。\n許可すると共有設定を続行します。");
+                    await Task.Delay(100);
+                    SetAdminWorkerStatus("管理者権限で共有設定を確認しています...");
+                    Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                    try
+                    {
+                        string shareName = DeriveShareName(shopFolder);
+                        await Task.Run(() => _pipeClient.CloseShop(shopFolder, shareName));
+                    }
+                    finally
+                    {
+                        Mouse.OverrideCursor = null;
+                    }
 
-            _pipeClient.SyncTrayShopClosed();
+                    SetAdminWorkerStatus("共有設定が完了しました。");
+                    await Task.Delay(500);
+                    SetAdminWorkerStatus("");
+                    _pipeClient.SyncTrayShopClosed();
+                }
+                finally
+                {
+                    _isAdminWorkerRunning = false;
+                    ShopDoorButton.IsEnabled = true;
+                    BrowseButton.IsEnabled = true;
+                }
+            }
         }
 
         if (_currentMode == DisplayMode.Shop || _currentMode == DisplayMode.Hold)
@@ -9333,6 +9418,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         OpenStatusTextBlock.Text = message;
         _transientStatusTimer.Stop();
         _transientStatusTimer.Start();
+    }
+
+    private void SetAdminWorkerStatus(string message)
+    {
+        AdminWorkerStatusTextBlock.Text = message;
+        AdminWorkerStatusPanel.Visibility = string.IsNullOrEmpty(message)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void ShowBlockedExternalDropMessage(string message)
