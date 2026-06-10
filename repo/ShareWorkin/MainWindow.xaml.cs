@@ -6079,7 +6079,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _activeFriendShopRootPath = null;
             _backStack.Clear();
             _forwardStack.Clear();
-            ShopItems.Clear();
+            if (!_windowClosingHandled) ShopItems.Clear();
             UpdateBreadcrumb();
             UpdateNavigationState();
         }
@@ -8130,6 +8130,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UpdateNavigationState()
     {
+        if (_windowClosingHandled) return;
         BackButton.IsEnabled = _backStack.Count > 0;
         ForwardButton.IsEnabled = _forwardStack.Count > 0;
     }
@@ -8310,6 +8311,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void UpdateBreadcrumb()
     {
+        if (_windowClosingHandled) return;
         _breadcrumbFullText = BuildRelativeLocationText();
         UpdateBreadcrumbDisplay();
     }
