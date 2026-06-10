@@ -5,7 +5,9 @@ namespace ShareWorkin.SMB;
 
 public static class SharePathPolicy
 {
-    private static readonly char[] ForbiddenShareNameChars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+    // Windows NetShareAdd の禁則文字。ファイル名禁則 + SMB 共有名追加禁則 (+ = ; , [ ])。
+    private static readonly char[] ForbiddenShareNameChars =
+        ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '+', '=', ';', ',', '[', ']'];
 
     public static string DeriveShareName(string shopFolder)
     {
@@ -31,7 +33,7 @@ public static class SharePathPolicy
 
         if (name.IndexOfAny(ForbiddenShareNameChars) >= 0)
         {
-            error = "お店の名前にこの記号は使えません: \\ / : * ? \" < > |";
+            error = "お店の名前にこの記号は使えません: \\ / : * ? \" < > | + = ; , [ ]";
             return false;
         }
 
