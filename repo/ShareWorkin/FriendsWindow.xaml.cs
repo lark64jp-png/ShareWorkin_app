@@ -419,20 +419,20 @@ public partial class FriendsWindow : Window
         IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
         string myHost = NormalizeHost(Environment.MachineName);
 
-        HashSet<string> liveFriendIds = allFriends
-            .Where(IsFriendLive)
+        HashSet<string> establishedFriendIds = allFriends
+            .Where(IsFriendEstablishedForCandidateList)
             .Select(f => f.Id)
             .ToHashSet(StringComparer.Ordinal);
 
         // 確立済み = friends.json に登録済み かつ live な ShopInfo が見つかる
         HashSet<string> establishedHosts = allFriends
-            .Where(f => liveFriendIds.Contains(f.Id))
+            .Where(f => establishedFriendIds.Contains(f.Id))
             .Select(f => NormalizeHost(f.HostMachineName))
             .Where(h => !string.IsNullOrEmpty(h))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         HashSet<string> offlineFriendHosts = allFriends
-            .Where(f => !liveFriendIds.Contains(f.Id))
+            .Where(f => !establishedFriendIds.Contains(f.Id))
             .Select(f => NormalizeHost(f.HostMachineName))
             .Where(h => !string.IsNullOrEmpty(h))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -470,7 +470,7 @@ public partial class FriendsWindow : Window
         // LAN スキャンに現れない登録済み・未確立友達も追加
         foreach (Friend f in allFriends)
         {
-            if (liveFriendIds.Contains(f.Id)) continue;
+            if (establishedFriendIds.Contains(f.Id)) continue;
             string host = NormalizeHost(f.HostMachineName);
             if (string.IsNullOrEmpty(host)) continue;
             if (string.Equals(host, myHost, StringComparison.OrdinalIgnoreCase)) continue;
@@ -544,7 +544,7 @@ public partial class FriendsWindow : Window
             IReadOnlyList<Friend> allFriends = FriendsRepository.LoadAll();
             Friend? matchedFriend = allFriends.FirstOrDefault(f =>
                 MatchesCandidateFriend(f, selected.ShopInfo, host) &&
-                !IsFriendLive(f));
+                !IsFriendEstablishedForCandidateList(f));
 
             if (matchedFriend != null)
             {
@@ -553,7 +553,7 @@ public partial class FriendsWindow : Window
                 _activeShopInfo = selected.ShopInfo;
                 _activeNewCandidate = selected.ShopInfo == null ? selected.Source : null;
             }
-            else if (_activeFriend != null && !IsActiveFriendLive() && selected.ShopInfo != null)
+            else if (_activeFriend != null && !IsActiveFriendEstablishedForCandidateList() && selected.ShopInfo != null)
             {
                 // 未接続の登録済み友達が表示中 → 接続先変更を提案
                 string dlgHost = NormalizeHost(selected.Source.HostName);
@@ -1108,8 +1108,14 @@ public partial class FriendsWindow : Window
     private bool IsActiveFriendLive() =>
         _activeFriend is not null && IsFriendLive(_activeFriend);
 
+    private bool IsActiveFriendEstablishedForCandidateList() =>
+        _activeFriend is not null && IsFriendEstablishedForCandidateList(_activeFriend);
+
     private bool IsFriendLive(Friend friend) =>
         FindLiveShopForFriend(friend, _shopInfos) is not null;
+
+    private bool IsFriendEstablishedForCandidateList(Friend friend) =>
+        !friend.HasCertificateMismatch && IsFriendLive(friend);
 
     private bool CanRefreshExistingFriend()
     {
