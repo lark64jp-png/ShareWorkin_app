@@ -477,6 +477,28 @@ public partial class FriendsWindow : Window
             if (addedHosts.Contains(host)) continue;
             _candidateRows.Add(new CandidateRow(f));
         }
+
+        int liveCandidateRows = _candidateRows.Count(r => r.Source != null && r.ShopInfo != null);
+        int offlineCandidateRows = _candidateRows.Count(r => r.Source != null && r.ShopInfo == null);
+        int existingFriendRows = _candidateRows.Count(r => r.ExistingFriend != null);
+        int selectableRows = _candidateRows.Count(r => r.IsSelectable);
+        string activeFriendLabel = _activeFriend is null
+            ? "null"
+            : string.IsNullOrWhiteSpace(_activeFriend.DisplayName) ? _activeFriend.HostMachineName : _activeFriend.DisplayName;
+        string rowBreakdown = _candidateRows.Count == 0
+            ? "none"
+            : string.Join(" | ", _candidateRows.Select(r =>
+                $"{(r.ExistingFriend != null ? "ExistingFriend" : r.ShopInfo != null ? "LiveCandidate" : "OfflineCandidate")}:" +
+                $"{r.HostNameLabel}/{r.ShareNameLabel}/selectable={r.IsSelectable}"));
+        SwkLogger.Info(
+            $"Investigation.FriendsWindow.RefreshCandidateRows: activeFriend={activeFriendLabel} " +
+            $"hasActiveFriend={(_activeFriend != null)} hasActiveNewCandidate={(_activeNewCandidate != null)} " +
+            $"hasActiveShopInfo={(_activeShopInfo != null)} candidates={_candidates.Count} shopInfos={_shopInfos.Count} " +
+            $"candidateRows={_candidateRows.Count} establishedHosts={establishedHosts.Count} " +
+            $"liveFriendIds={establishedFriendIds.Count} offlineFriendHosts={offlineFriendHosts.Count} " +
+            $"liveCandidateRows={liveCandidateRows} offlineCandidateRows={offlineCandidateRows} " +
+            $"existingFriendRows={existingFriendRows} selectableRows={selectableRows}");
+        SwkLogger.Info($"Investigation.FriendsWindow.RefreshCandidateRows.Rows: {rowBreakdown}");
     }
 
     private void SelectCurrentCandidateRow()
