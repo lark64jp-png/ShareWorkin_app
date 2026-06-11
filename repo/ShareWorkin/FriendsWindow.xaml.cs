@@ -601,7 +601,7 @@ public partial class FriendsWindow : Window
     {
         if (_activeFriend != null)
         {
-            return (_activeShopInfo != null || _activeNewCandidate != null)
+            return (_activeShopInfo != null || HasIncompleteExistingFriendSwitchSelection())
                 ? CommitAction.Switch
                 : CommitAction.Update;
         }
@@ -627,6 +627,11 @@ public partial class FriendsWindow : Window
             if (IsDuplicateDisplayName(name, allFriends, _activeFriend.Id))
             {
                 error = "同じお友達名は使えません。別の名前を入れてください。";
+                return false;
+            }
+            if (HasIncompleteExistingFriendSwitchSelection())
+            {
+                error = "接続先を切り替えるには、ShareWorkin 起動中の候補を下の接続未確定リストから選んでください。";
                 return false;
             }
             bool nameChanged = !string.Equals(name, _initialName, StringComparison.Ordinal);
@@ -749,6 +754,12 @@ public partial class FriendsWindow : Window
 
         if (_activeFriend != null)
         {
+            if (HasIncompleteExistingFriendSwitchSelection())
+            {
+                StatusTextBlock.Text = "接続先を切り替えるには、ShareWorkin 起動中の候補を下の接続未確定リストから選んでください。";
+                return;
+            }
+
             if (_activeShopInfo != null)
             {
                 OkButton.IsEnabled = false;
@@ -1026,22 +1037,10 @@ public partial class FriendsWindow : Window
     {
         if (_activeFriend is null) return;
 
-        string nowIso = DateTime.UtcNow.ToString("o");
         Friend target = _activeFriend;
         target.DisplayName = name;
         target.Memo = memo;
         target.IconKey = _pendingIconKey;
-
-        if (_activeNewCandidate != null)
-        {
-            string newHost = NormalizeHost(_activeNewCandidate.HostName);
-            if (string.IsNullOrEmpty(newHost)) newHost = _activeNewCandidate.Address.ToString();
-            target.HostMachineName = newHost;
-            target.LastKnownAddress = _activeNewCandidate.Address.ToString();
-            target.LastFoundAt = nowIso;
-            target.LastCheckedAt = nowIso;
-            FriendShareAccessTracker.ClearVerified(target);
-        }
 
         List<Friend> allUpd = FriendsRepository.LoadAll().ToList();
         int idx = allUpd.FindIndex(f => string.Equals(f.Id, target.Id, StringComparison.Ordinal));
@@ -1052,12 +1051,10 @@ public partial class FriendsWindow : Window
             return;
         }
         SwkLogger.Debug(
-            $"FriendsWindow.UpdateExistingFriend: id={target.Id} newHost={_activeNewCandidate?.Address}");
+            $"FriendsWindow.UpdateExistingFriend: id={target.Id}");
         AppendFriendHistory(
             target,
-            (_activeNewCandidate != null
-                ? $"{GetFriendLabel(target)} の接続先と情報を更新しました。"
-                : $"{GetFriendLabel(target)} の情報を更新しました。"),
+            $"{GetFriendLabel(target)} の情報を更新しました。",
             "UpdateFriend",
             HistoryDirection.Outgoing,
             HistoryOutcome.Success,
@@ -1116,6 +1113,9 @@ public partial class FriendsWindow : Window
 
     private bool IsFriendEstablishedForCandidateList(Friend friend) =>
         !friend.HasCertificateMismatch && IsFriendLive(friend);
+
+    private bool HasIncompleteExistingFriendSwitchSelection() =>
+        _activeFriend is not null && _activeShopInfo is null && _activeNewCandidate is not null;
 
     private bool CanRefreshExistingFriend()
     {
