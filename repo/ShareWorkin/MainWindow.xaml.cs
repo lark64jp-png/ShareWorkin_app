@@ -5590,13 +5590,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Info("DoWindowClosingAsync: timers stopped");
         _pipeClient.Dispose();
         SwkLogger.Info("DoWindowClosingAsync: pipeClient disposed");
-        SwkLogger.Info("DoWindowClosingAsync: calling Close()");
-        Close();
-        SwkLogger.Info("DoWindowClosingAsync: Close() returned");
+        await Dispatcher.InvokeAsync(Close);
     }
 
     private void ShowMainWindow()
     {
+        if (_windowClosingHandled) return;
         Show();
         if (WindowState == WindowState.Minimized)
         {
