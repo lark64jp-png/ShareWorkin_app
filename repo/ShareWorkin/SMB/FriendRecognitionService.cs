@@ -171,7 +171,8 @@ public static class FriendRecognitionService
     public static async Task<RefreshExistingFriendResult> RefreshExistingFriendAsync(
         Friend friend,
         SwkNotificationListener.ShopInfo liveShop,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowCertUpdateByUserResume = false)
     {
         if (!IsCompatibleLiveShopForFriend(friend, liveShop))
         {
@@ -196,7 +197,7 @@ public static class FriendRecognitionService
             string.Equals(result.ErrorMessage, OwnerCertificateMismatchMessage, StringComparison.Ordinal))
         {
             friend.LastAccessIssue = Friend.AccessIssueCertMismatch;
-            if (!FriendShareAccessTracker.IsVerifiedFor(friend, liveShop))
+            if (!allowCertUpdateByUserResume && !FriendShareAccessTracker.IsVerifiedFor(friend, liveShop))
             {
                 return new RefreshExistingFriendResult
                 {

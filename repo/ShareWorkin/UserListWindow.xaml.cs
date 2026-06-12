@@ -228,15 +228,15 @@ public partial class UserListWindow : Window
         foreach (Friend f in friends)
         {
             SwkNotificationListener.ShopInfo? liveShop = FindLiveShopForFriend(f, shopInfos);
-            SwkNotificationListener.ShopInfo? relinkShop = liveShop is null && !f.HasCertificateMismatch
+            SwkNotificationListener.ShopInfo? relinkShop = liveShop is null
                 ? FindRelinkCandidateForFriend(f, shopInfos)
                 : null;
 
-            if (liveShop is not null && !f.HasCertificateMismatch)
+            if (liveShop is not null)
             {
                 // 接続確認済み or 確認待ち → trackerリセット（復旧ログ）
                 ResetTracker(f.Id);
-                rows.Add(IsConnectedFriend(f, liveShop)
+                rows.Add(!f.HasCertificateMismatch && IsConnectedFriend(f, liveShop)
                     ? UserListRow.ForConnectedFriend(f, liveShop)
                     : UserListRow.ForResumeRequiredFriend(f, liveShop));
             }
@@ -248,15 +248,6 @@ public partial class UserListWindow : Window
             }
             else
             {
-                // cert-mismatch かつ liveShop が見えている → 即 ManualRequired（AutoRecovering/Unstable 不要）
-                if (f.HasCertificateMismatch && liveShop is not null)
-                {
-                    ResetTracker(f.Id);
-                    SwkLogger.Info($"[UserList] CertMismatch: FriendId={f.Id} → ManualRequired immediately");
-                    rows.Add(UserListRow.ForManualRequired(f, null, liveShop));
-                    continue;
-                }
-
                 // liveShop なし → 猶予状態を経由して最終判定
                 FriendConnectionTracker tracker = GetOrCreateTracker(f.Id);
                 bool hasHistory = !string.IsNullOrWhiteSpace(f.LastFoundAt);
@@ -545,8 +536,16 @@ public partial class UserListWindow : Window
     private async void ReloadButton_Click(object sender, RoutedEventArgs e)
     {
         SwkLogger.Debug("UserListWindow.ReloadButton_Click");
+        _autoRefreshTimer.Stop();
         _autoRefreshTimer.Interval = AutoRefreshInterval;
-        await RunScanAndBuildAsync();
+        try
+        {
+            await RunScanAndBuildAsync();
+        }
+        finally
+        {
+            _autoRefreshTimer.Start();
+        }
     }
 
     private static FriendConnectionTracker GetOrCreateTracker(string friendId)
@@ -586,6 +585,7 @@ public partial class UserListWindow : Window
             _autoRefreshTimer.Stop();
             try
             {
+                while (_isRefreshing) await Task.Delay(50);
                 IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
                 IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfosForManual = SwkNetworkCache.ShopInfos;
                 FriendsWindow pickup = new(this, row.Friend, row.Candidate, candidates, shopInfosForManual);
@@ -594,6 +594,7 @@ public partial class UserListWindow : Window
                 if (result == true)
                 {
                     _hasFriendUpdates = true;
+                    while (_isRefreshing) await Task.Delay(50);
                     await RunScanAndBuildAsync();
                 }
             }
@@ -604,31 +605,34 @@ public partial class UserListWindow : Window
             return;
         }
 
-        IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
-        SwkNotificationListener.ShopInfo? liveShop = row.ShopInfo ?? FindLiveShopForFriend(row.Friend, shopInfos);
-        if (liveShop is null)
-        {
-            StatusTextBlock.Text = "再開できる接続先が見つかりません。先に再スキャンしてください。";
-            return;
-        }
-
-        List<Friend> friends = FriendsRepository.LoadAll().ToList();
-        Friend? target = friends.FirstOrDefault(f => string.Equals(f.Id, row.Friend.Id, StringComparison.Ordinal));
-        if (target is null)
-        {
-            StatusTextBlock.Text = "対象ユーザーを読み直してください。";
-            return;
-        }
-
-        SwkLogger.Info(
-            $"Investigation.ResumeButton_Click: friend={target.DisplayName} host={liveShop.MachineName} share={liveShop.ShareName}");
-
-        ReloadButton.IsEnabled = false;
-        LoadingBar.Visibility = Visibility.Visible;
-        StatusTextBlock.Text = "接続情報を再取得しています…";
+        _autoRefreshTimer.Stop();
         try
         {
-            bool refreshed = await TryRefreshFriendFromBkAsync(target, liveShop);
+            while (_isRefreshing) await Task.Delay(50);
+            IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
+            SwkNotificationListener.ShopInfo? liveShop = row.ShopInfo ?? FindLiveShopForFriend(row.Friend, shopInfos);
+            if (liveShop is null)
+            {
+                StatusTextBlock.Text = "再開できる接続先が見つかりません。先に再スキャンしてください。";
+                return;
+            }
+
+            List<Friend> friends = FriendsRepository.LoadAll().ToList();
+            Friend? target = friends.FirstOrDefault(f => string.Equals(f.Id, row.Friend.Id, StringComparison.Ordinal));
+            if (target is null)
+            {
+                StatusTextBlock.Text = "対象ユーザーを読み直してください。";
+                return;
+            }
+
+            SwkLogger.Info(
+                $"Investigation.ResumeButton_Click: friend={target.DisplayName} host={liveShop.MachineName} share={liveShop.ShareName}");
+
+            ReloadButton.IsEnabled = false;
+            LoadingBar.Visibility = Visibility.Visible;
+            StatusTextBlock.Text = "接続情報を再取得しています…";
+
+            bool refreshed = await TryRefreshFriendFromBkAsync(target, liveShop, allowCertUpdateByUserResume: true);
             if (!refreshed)
             {
                 HistoryRepository.Append(new HistoryEntry
@@ -691,6 +695,7 @@ public partial class UserListWindow : Window
         {
             LoadingBar.Visibility = Visibility.Collapsed;
             ReloadButton.IsEnabled = true;
+            _autoRefreshTimer.Start();
         }
     }
 
@@ -720,6 +725,7 @@ public partial class UserListWindow : Window
         _autoRefreshTimer.Stop();
         try
         {
+            while (_isRefreshing) await Task.Delay(50);
             IReadOnlyList<LanCandidate> candidates = SwkNetworkCache.Candidates;
             IReadOnlyList<SwkNotificationListener.ShopInfo> shopInfos = SwkNetworkCache.ShopInfos;
 
@@ -811,13 +817,15 @@ public partial class UserListWindow : Window
 
     private static async Task<bool> TryRefreshFriendFromBkAsync(
         Friend friend,
-        SwkNotificationListener.ShopInfo liveShop)
+        SwkNotificationListener.ShopInfo liveShop,
+        bool allowCertUpdateByUserResume = false)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
         RefreshExistingFriendResult result = await FriendRecognitionService.RefreshExistingFriendAsync(
             friend,
             liveShop,
-            cts.Token);
+            cts.Token,
+            allowCertUpdateByUserResume);
 
         if (!result.Success)
         {
