@@ -1335,7 +1335,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string folderText = string.IsNullOrWhiteSpace(folder) ? "-" : folder;
         string eventText = string.IsNullOrWhiteSpace(eventId) ? "-" : eventId;
         string countText = count?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        int textLen = text?.Length ?? 0;
+        int textLen = text.Length;
 
         SwkLogger.Info(
             $"NotificationTrace.Send route={route} corr={corr} title={title} folder={folderText} textLen={textLen} eventId={eventText} count={countText}");

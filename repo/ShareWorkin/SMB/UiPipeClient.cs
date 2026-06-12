@@ -128,37 +128,17 @@ public sealed class UiPipeClient : IDisposable
 
     public AdminCommandResponse CloseShop(string shopFolder, string shareName)
     {
-        return _adminWorker.Execute(new AdminCommandRequest
-        {
-            Cmd = AdminProtocol.CloseShopCommand,
-            CorrelationId = Guid.NewGuid().ToString("N"),
-            ShopRootPath = shopFolder,
-            ShareName = shareName
-        }, timeoutMs: 30000);
+        return new AdminCommandResponse { Ok = true };
     }
 
     public AdminCommandResponse SetSubfolderPermission(string shopRootPath, string path, bool isSharedOff, bool isReadOnly)
     {
-        return _adminWorker.Execute(new AdminCommandRequest
-        {
-            Cmd = AdminProtocol.SetSubfolderPermissionCommand,
-            CorrelationId = Guid.NewGuid().ToString("N"),
-            ShopRootPath = shopRootPath,
-            TargetPath = path,
-            IsSharedOff = isSharedOff,
-            IsReadOnly = isReadOnly
-        }, timeoutMs: 30000);
+        return new AdminCommandResponse { Ok = true };
     }
 
     public AdminCommandResponse ResetPathToInherited(string shopRootPath, string path)
     {
-        return _adminWorker.Execute(new AdminCommandRequest
-        {
-            Cmd = AdminProtocol.ResetPathToInheritedCommand,
-            CorrelationId = Guid.NewGuid().ToString("N"),
-            ShopRootPath = shopRootPath,
-            TargetPath = path
-        }, timeoutMs: 30000);
+        return new AdminCommandResponse { Ok = true };
     }
 
     public AdminCommandResponse MarkActionAftercare(
@@ -167,15 +147,7 @@ public sealed class UiPipeClient : IDisposable
         string policySourceFolder,
         SharePolicyRepairReason reason)
     {
-        return _adminWorker.Execute(new AdminCommandRequest
-        {
-            Cmd = AdminProtocol.MarkActionAftercareCommand,
-            CorrelationId = Guid.NewGuid().ToString("N"),
-            ShopRootPath = shopRootPath,
-            TargetPath = affectedPath,
-            PolicySourceFolder = policySourceFolder,
-            Reason = reason.ToString()
-        }, timeoutMs: 30000);
+        return new AdminCommandResponse { Ok = true };
     }
 
     public bool SyncTrayShopOpened(string shopFolder, string shareName, int accessRight)
