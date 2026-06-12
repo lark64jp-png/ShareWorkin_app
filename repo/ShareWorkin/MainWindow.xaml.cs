@@ -8122,6 +8122,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Info(
                 $"Trace.ExternalFlow.Receive.Aftercare: action=TryRegisterExternalReceive source=Aftercare.ExternalCreated path={affectedPath} folder={policySourceFolder}");
             TryRegisterExternalReceive(affectedPath, "Aftercare.ExternalCreated");
+            return;
         }
 
         _ = _pipeClient.MarkActionAftercare(_shopFolder, affectedPath, policySourceFolder, reason);
