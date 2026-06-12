@@ -421,14 +421,7 @@ public sealed class TrayApp : IDisposable
     {
         if (_isShopOpen)
         {
-            if (fromUiRequest)
-            {
-                // 正常フローではUIが先に閉店するためここには来ない。安全のため終了しない。
-                SwkLogger.Warn("TrayApp.ExitApp: fromUiRequest=true but shop is open, exit blocked");
-                return;
-            }
-            if (!TryCloseShopForExit())
-                return;
+            SwkLogger.Info($"TrayApp.ExitApp: shop remains shared during exit (fromUiRequest={fromUiRequest})");
         }
 
         if (!fromUiRequest)
@@ -436,47 +429,9 @@ public sealed class TrayApp : IDisposable
         System.Windows.Application.Current.Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
     }
 
-    // [例外規定] Tray終了時の共有停止に限り CLOSE_SHOP_ADMIN を呼ぶ。
-    // 適用条件: ユーザーが Tray メニューから終了を選択・共有中・確認ダイアログで明示的に承認。
-    // 共有開始・通常操作での AdminWorker 呼び出しは引き続き禁止。
-    // 失敗・UAC キャンセル・必要情報不足の場合は終了しない。
     private bool TryCloseShopForExit()
     {
-        string? shareName = _activeShareName;
-        string? shopFolder = _shopFolder;
-        if (string.IsNullOrWhiteSpace(shareName) || string.IsNullOrWhiteSpace(shopFolder))
-        {
-            ShowCloseShopIncompleteMessage();
-            return false;
-        }
-
-        var confirm = Forms.MessageBox.Show(
-            $"共有「{shareName}」を停止してから終了します。\n管理者権限の確認が求められます。\nよろしいですか？",
-            "ShareWorkin",
-            Forms.MessageBoxButtons.OKCancel,
-            Forms.MessageBoxIcon.Question);
-        if (confirm != Forms.DialogResult.OK)
-            return false;
-
-        var client = new AdminWorkerProcessClient();
-        AdminCommandResponse response = client.Execute(new AdminCommandRequest
-        {
-            Cmd = AdminProtocol.CloseShopCommand,
-            CorrelationId = Guid.NewGuid().ToString("N"),
-            ShareName = shareName,
-            ShopRootPath = shopFolder,
-        });
-
-        if (!response.Ok)
-        {
-            ShowCloseShopIncompleteMessage();
-            return false;
-        }
-
-        SmbController.StopShopBroadcaster();
-        _isShopOpen = false;
-        _activeShareName = null;
-        PatchSettingsOpenState(false, _shopFolder);
+        SwkLogger.Info("TrayApp.TryCloseShopForExit: skip close because tray exit must preserve sharing");
         return true;
     }
 

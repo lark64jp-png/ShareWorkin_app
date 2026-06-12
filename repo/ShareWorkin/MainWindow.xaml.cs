@@ -249,7 +249,7 @@ public partial class MainWindow : Window
         _pipeClient.TrayExiting += () =>
             _ = Dispatcher.InvokeAsync(() =>
             {
-                _exitRequested = true;
+                SwkLogger.Info("MainWindow: TRAY_EXITING received; closing UI without stopping SMB share");
                 Close();
             }, DispatcherPriority.Background);
         _pipeClient.ShowRequested += () =>
@@ -5570,8 +5570,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 _pipeClient.BroadcastClosing();
             }
 
-            await CloseShop(removeSmbShare: true);
-            SwkLogger.Info("DoWindowClosingAsync: CloseShop(removeSmbShare:true) done");
+            await CloseShop(removeSmbShare: false);
+            SwkLogger.Info("DoWindowClosingAsync: CloseShop(removeSmbShare:false) done for exit request");
             if (_pipeClient.IsConnected)
                 _pipeClient.SendExitApp();
         }
