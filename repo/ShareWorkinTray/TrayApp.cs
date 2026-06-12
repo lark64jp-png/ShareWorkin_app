@@ -85,6 +85,7 @@ public sealed class TrayApp : IDisposable
         LoadSettings();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         SmbController.OnInteractionEventReceived = HandleIncomingInteractionReceived;
+        RestoreShopOpenStateFromSettings();
         _notifyIcon.Visible = true;
         PipeServer.Start();
     }
@@ -92,8 +93,8 @@ public sealed class TrayApp : IDisposable
     public void Dispose()
     {
         PipeServer.Stop();
-        if (_isShopOpen)
-            SmbController.StopShopBroadcaster();
+        // Tray終了は共有停止ではない。明示的な共有停止操作以外では、
+        // 共有中状態をOFFへ落とす処理をここで行わない。
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _trayMenu.Dispose();
@@ -173,6 +174,26 @@ public sealed class TrayApp : IDisposable
         _activeShareName = null;
         PatchSettingsOpenState(false, _shopFolder);
         return true;
+    }
+
+    private void RestoreShopOpenStateFromSettings()
+    {
+        if (!_wasOpenAtLastShutdown || string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return;
+        }
+
+        string shareName = DeriveShareName(_shopFolder);
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            SwkLogger.Warn("TrayApp.RestoreShopOpenStateFromSettings skipped: shareName empty");
+            return;
+        }
+
+        SmbController.StartShopBroadcaster(shareName);
+        _isShopOpen = true;
+        _activeShareName = shareName;
+        SwkLogger.Info($"TrayApp.RestoreShopOpenStateFromSettings: shop state restored shareName={shareName}");
     }
 
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
@@ -421,11 +442,11 @@ public sealed class TrayApp : IDisposable
     {
         if (_isShopOpen)
         {
-            SwkLogger.Info($"TrayApp.ExitApp: shop remains shared during exit (fromUiRequest={fromUiRequest})");
+            SwkLogger.Info($"TrayApp.ExitApp: tray exits without closing UI or stopping SMB share (fromUiRequest={fromUiRequest})");
         }
 
-        if (!fromUiRequest)
-            _ = PipeServer.PushMessageAsync("{\"type\":\"TRAY_EXITING\"}");
+        // Tray終了は共有停止ではないため、UIへTRAY_EXITINGを送らない。
+        // UIを閉じるとCloseShop経路へ入り、共有中表示・監視状態がOFFへ落ちるため。
         System.Windows.Application.Current.Dispatcher.BeginInvoke(() => System.Windows.Application.Current.Shutdown());
     }
 
