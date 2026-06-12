@@ -6031,7 +6031,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _pollingTimer.Stop();
         CancelDeferredRefresh();
         bool wasOpen = _isShopOpen;
-        _isShopOpen = false;
+        bool preserveShareState = !removeSmbShare && wasOpen;
+        if (!preserveShareState)
+        {
+            _isShopOpen = false;
+        }
         _isPollingMode = false;
         CancelFolderSizeCalculation();
         CancelSubfolderCountLoad();
@@ -6090,10 +6094,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             UpdateNavigationState();
         }
 
-        _wasOpenAtLastShutdown = !removeSmbShare && wasOpen;
+        _wasOpenAtLastShutdown = preserveShareState;
         SaveSettings();
 
-        UpdateShopState(false);
+        if (!preserveShareState)
+        {
+            UpdateShopState(false);
+        }
+        else
+        {
+            UpdateShopState(true);
+        }
     }
 
     private void DisposeWatcher()
