@@ -9070,6 +9070,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return true;
         }
 
+        // FriendShop選択中だがアイテム未表示（ナビゲーション前・接続失敗など）
+        if (string.IsNullOrWhiteSpace(_currentFolder) || ShopItems.Count == 0)
+        {
+            return true;
+        }
+
         return ShouldHighlightRefreshButtonForFriend(_activeFriendShop);
     }
 
@@ -9099,9 +9105,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         if (friend.HasCertificateMismatch ||
-            FriendRecognitionService.FindVisibleShopForFriend(friend, SwkNetworkCache.ShopInfos) is not null ||
-            HasLanCandidateForFriend(friend) ||
-            HasRecentFriendObservation(friend))
+            FriendRecognitionService.FindVisibleShopForFriend(friend, SwkNetworkCache.ShopInfos) is not null)
         {
             return true;
         }
