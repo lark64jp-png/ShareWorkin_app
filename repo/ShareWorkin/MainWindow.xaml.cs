@@ -3249,6 +3249,26 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private bool TryMigrateExternalRenamedPermissionEntries(string sourcePath, string destinationPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(destinationPath))
+        {
+            return false;
+        }
+
+        bool hasEntriesToMove = _permissionMap.Keys.Any(key =>
+            TryMovePermissionPath(key, sourcePath, destinationPath) is not null);
+        if (!hasEntriesToMove)
+        {
+            return false;
+        }
+
+        MovePermissionEntriesInMap(_permissionMap, sourcePath, destinationPath);
+        SavePermissionMap();
+        SwkLogger.Info($"ExternalRenamed permission entries migrated: {sourcePath} -> {destinationPath}");
+        return true;
+    }
+
     private static string? TryMovePermissionPath(string path, string sourcePath, string destinationPath)
     {
         if (string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase))
@@ -6325,10 +6345,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     destinationFolder: folder,
                     source: "Watcher");
                 SwkLogger.Info($"ArrivalSensor_Renamed history-appended: old={e.OldFullPath} new={e.FullPath}");
-                NoteFutureSharePolicyRepair(
-                    e.FullPath,
-                    folder,
-                    SharePolicyRepairReason.ExternalRenamed);
+                bool migrated = TryMigrateExternalRenamedPermissionEntries(e.OldFullPath, e.FullPath);
+                if (!migrated)
+                {
+                    NoteFutureSharePolicyRepair(
+                        e.FullPath,
+                        folder,
+                        SharePolicyRepairReason.ExternalRenamed);
+                }
             }
             else
             {
@@ -8082,10 +8106,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!ShouldSuppressExternalChangeNotification())
             {
                 SwkLogger.Debug($"ContentsSensor_Renamed aftercare mark: old={e.OldFullPath} new={e.FullPath}");
-                NoteFutureSharePolicyRepair(
-                    e.FullPath,
-                    Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
-                    SharePolicyRepairReason.ExternalRenamed);
+                bool migrated = TryMigrateExternalRenamedPermissionEntries(e.OldFullPath, e.FullPath);
+                if (!migrated)
+                {
+                    NoteFutureSharePolicyRepair(
+                        e.FullPath,
+                        Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
+                        SharePolicyRepairReason.ExternalRenamed);
+                }
             }
             else
             {
