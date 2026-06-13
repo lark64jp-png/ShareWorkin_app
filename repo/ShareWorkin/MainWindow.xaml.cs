@@ -3269,6 +3269,92 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return true;
     }
 
+    private async Task<bool> PreserveFriendShopPermissionOnArrivalAsync(string sourcePath, string destinationPath)
+    {
+        if (_currentMode != DisplayMode.FriendShop)
+        {
+            return false;
+        }
+
+        string? shopRoot = _activeFriendShopRootPath;
+        if (string.IsNullOrWhiteSpace(shopRoot) ||
+            string.IsNullOrWhiteSpace(sourcePath) ||
+            string.IsNullOrWhiteSpace(destinationPath))
+        {
+            return false;
+        }
+
+        string oldRelativePath = ToRelativeShopPath(shopRoot, sourcePath);
+        string newRelativePath = ToRelativeShopPath(shopRoot, destinationPath);
+        if (string.IsNullOrWhiteSpace(oldRelativePath) || string.IsNullOrWhiteSpace(newRelativePath))
+        {
+            return false;
+        }
+
+        return await Task.Run(() =>
+        {
+            ShopPermissionManifest manifest = ShopPermissionManifest.Load(shopRoot);
+            bool moved = false;
+            List<ShopPermissionManifestEntry> updatedEntries = [];
+
+            foreach (ShopPermissionManifestEntry entry in manifest.Entries)
+            {
+                string movedRelativePath = MoveManifestRelativePath(entry.RelativePath, oldRelativePath, newRelativePath);
+                if (!string.Equals(movedRelativePath, entry.RelativePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    moved = true;
+                }
+
+                updatedEntries.Add(new ShopPermissionManifestEntry
+                {
+                    RelativePath = movedRelativePath,
+                    Users = [.. entry.Users],
+                    AllowedMachineNames = [.. entry.AllowedMachineNames],
+                    IsReadOnly = entry.IsReadOnly,
+                    IsSharedOff = entry.IsSharedOff,
+                });
+            }
+
+            if (!moved)
+            {
+                return false;
+            }
+
+            bool saved = ShopPermissionManifest.Save(shopRoot, updatedEntries);
+            if (saved)
+            {
+                SwkLogger.Info($"FriendShop permission manifest migrated: {oldRelativePath} -> {newRelativePath}");
+            }
+
+            return saved;
+        });
+    }
+
+    private static string MoveManifestRelativePath(string path, string sourcePath, string destinationPath)
+    {
+        string normalizedPath = NormalizeManifestRelativePath(path);
+        string normalizedSource = NormalizeManifestRelativePath(sourcePath);
+        string normalizedDestination = NormalizeManifestRelativePath(destinationPath);
+
+        if (string.Equals(normalizedPath, normalizedSource, StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedDestination;
+        }
+
+        if (!normalizedPath.StartsWith(normalizedSource + "\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalizedPath;
+        }
+
+        string suffix = normalizedPath[normalizedSource.Length..].TrimStart('\\');
+        return string.IsNullOrEmpty(suffix)
+            ? normalizedDestination
+            : $"{normalizedDestination}\\{suffix}";
+    }
+
+    private static string NormalizeManifestRelativePath(string path)
+        => (path ?? string.Empty).Replace('/', '\\').Trim('\\');
+
     private static string? TryMovePermissionPath(string path, string sourcePath, string destinationPath)
     {
         if (string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase))
@@ -4452,14 +4538,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            bool preserved = PreservePermissionOnArrival(
-                result.SourcePath,
-                result.SourceParent,
-                result.DestinationPath,
-                result.DestinationFolder,
-                removeSourceEntry: true,
-                historySource: "MainWindow.move");
-            if (!preserved)
+            bool preserved = _currentMode == DisplayMode.FriendShop
+                ? await PreserveFriendShopPermissionOnArrivalAsync(result.SourcePath, result.DestinationPath)
+                : PreservePermissionOnArrival(
+                    result.SourcePath,
+                    result.SourceParent,
+                    result.DestinationPath,
+                    result.DestinationFolder,
+                    removeSourceEntry: true,
+                    historySource: "MainWindow.move");
+            if (!preserved && _currentMode != DisplayMode.FriendShop)
             {
                 NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
             }
@@ -5359,14 +5447,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                bool preserved = PreservePermissionOnArrival(
-                    result.SourcePath,
-                    result.SourceParent,
-                    result.DestinationPath,
-                    result.DestinationFolder,
-                    removeSourceEntry: true,
-                    historySource: "MainWindow.move");
-                if (!preserved)
+                bool preserved = _currentMode == DisplayMode.FriendShop
+                    ? await PreserveFriendShopPermissionOnArrivalAsync(result.SourcePath, result.DestinationPath)
+                    : PreservePermissionOnArrival(
+                        result.SourcePath,
+                        result.SourceParent,
+                        result.DestinationPath,
+                        result.DestinationFolder,
+                        removeSourceEntry: true,
+                        historySource: "MainWindow.move");
+                if (!preserved && _currentMode != DisplayMode.FriendShop)
                 {
                     NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
                 }
