@@ -7607,16 +7607,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             RefreshShopItems();
-            // 非表示中の OFF フォルダも復帰検知のために検査リストへ追加する
-            string folder = _currentFolder!;
-            List<ShopItem> hiddenOff = _friendShopReadOnlyState
-                .Where(kv => kv.Value.IsSharedOff)
-                .Select(kv => kv.Key)
-                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
-                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
-                .ToList();
-            List<ShopItem> allItems = [.. ShopItems, .. hiddenOff];
-            await ApplyFriendShopReadOnlyAsync(folder, allItems);
         }
         finally
         {
@@ -8803,7 +8793,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             targetName: liveShop.ShareName,
             pathText: accessiblePath,
             source: "MainWindow");
-        await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
     }
 
     private static Task<string?> TryFindAccessibleFriendPathAsync(
