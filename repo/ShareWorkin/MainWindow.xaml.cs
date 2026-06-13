@@ -4830,7 +4830,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
 
-        MoveDestinationDialog dialog = new(_shopFolder, sourcePaths)
+        string? dialogRoot = _currentMode == DisplayMode.FriendShop
+            ? (_activeFriendShopRootPath ?? _currentFolder ?? _shopFolder)
+            : _shopFolder;
+        MoveDestinationDialog dialog = new(dialogRoot, sourcePaths)
         {
             Owner = this
         };
