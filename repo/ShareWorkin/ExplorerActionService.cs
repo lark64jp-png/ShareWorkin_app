@@ -463,6 +463,32 @@ public static class ExplorerActionService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // SMB では Directory.Move() が例外をスローしても実体が移動先に到達している場合がある
+            bool movedDespiteException = sourceIsDirectory
+                ? Directory.Exists(destinationPath) && !Directory.Exists(request.SourcePath)
+                : File.Exists(destinationPath) && !File.Exists(request.SourcePath);
+
+            if (movedDespiteException)
+            {
+                return new ExplorerActionResult
+                {
+                    State = ExplorerActionState.Success,
+                    EventType = "Move",
+                    UserMessage = $"{sourceName} を移しました。",
+                    LogMessage = $"Explorer[{request.ModeLabel}]: Move success (exception recovered): {sourceName}({sourceStatus}) -> {request.DestinationFolder}: {ex.Message}",
+                    HistoryMessage = $"{sourceName} を移しました。",
+                    HistoryOutcome = HistoryOutcome.Success,
+                    Source = "ExplorerActionService.MoveItem",
+                    TargetName = sourceName,
+                    PathText = request.DestinationFolder,
+                    Note = $"移動元: {sourceParent}",
+                    SourcePath = request.SourcePath,
+                    SourceParent = sourceParent,
+                    DestinationPath = destinationPath,
+                    DestinationFolder = request.DestinationFolder,
+                };
+            }
+
             return new ExplorerActionResult
             {
                 State = ExplorerActionState.Failure,
