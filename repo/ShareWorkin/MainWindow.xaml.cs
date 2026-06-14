@@ -7850,8 +7850,22 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 anyChanged = true;
         }
 
-        // 更新後の _friendShopReadOnlyState を基に表示を一度だけ再構築
-        RefreshShopItems();
+        // 権限またはファイルシステム構成に変化がある場合のみ表示を再構築
+        var currentPaths = new HashSet<string>(
+            ShopItems.Where(i => !i.IsHoldFolder).Select(i => i.FullPath),
+            StringComparer.OrdinalIgnoreCase);
+        var expectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, _) in filesystemItems)
+        {
+            _friendShopReadOnlyState.TryGetValue(path, out var st);
+            if (!st.IsSharedOff)
+                expectedPaths.Add(path);
+        }
+        bool filesystemChanged = !currentPaths.SetEquals(expectedPaths);
+        SwkLogger.Debug($"RefreshFriendShopItems: anyChanged={anyChanged} filesystemChanged={filesystemChanged}");
+
+        if (anyChanged || filesystemChanged)
+            RefreshShopItems();
 
         if (!silent && anyChanged)
             NotifyShopMaintenance("共有状況が変わりました。", "共有状況が変わりました。");
