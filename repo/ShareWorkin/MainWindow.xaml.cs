@@ -7707,7 +7707,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            SwkLogger.Debug("RunFriendShopPoll: calling RefreshFriendShopItemsAsync");
+            SwkLogger.Debug($"RunFriendShopPoll: calling RefreshFriendShopItemsAsync currentFolder={_currentFolder} prevScanFolder={_previousFriendShopScanFolder} missCount={_friendShopLiveMissCount} pollInterval={_friendShopPollTimer?.Interval.TotalSeconds}s");
             await RefreshFriendShopItemsAsync();
         }
         finally
@@ -7882,7 +7882,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string? folder = _currentFolder;
         if (string.IsNullOrWhiteSpace(folder)) return;
 
-        SwkLogger.Debug($"RefreshFriendShopItems: called folder={folder} silent={silent}");
+        bool isNewFolder = !string.Equals(_previousFriendShopScanFolder, folder, StringComparison.OrdinalIgnoreCase);
+        SwkLogger.Debug($"RefreshFriendShopItems: called folder={folder} silent={silent} isNewFolder={isNewFolder} prevScanFolder={_previousFriendShopScanFolder} pollInterval={_friendShopPollTimer?.Interval.TotalSeconds}s");
 
         // SharedOff フィルターを掛けずにファイルシステム上の全アイテムを列挙
         List<(string Path, bool IsDirectory)> filesystemItems;
@@ -7899,7 +7900,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            SwkLogger.Warn($"RefreshFriendShopItems: enumerate failed folder={folder} silent={silent} {ex.GetType().Name}(0x{ex.HResult:X8}): {ex.Message}");
+            SwkLogger.Warn($"RefreshFriendShopItems: enumerate failed folder={folder} silent={silent} isNewFolder={isNewFolder} prevScanFolder={_previousFriendShopScanFolder} {ex.GetType().Name}(0x{ex.HResult:X8}): {ex.Message}");
             SetTransientStatus("接続できません");
             return;
         }
