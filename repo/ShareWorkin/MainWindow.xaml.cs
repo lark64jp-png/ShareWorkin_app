@@ -3249,112 +3249,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
-    private bool TryMigrateExternalRenamedPermissionEntries(string sourcePath, string destinationPath)
-    {
-        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(destinationPath))
-        {
-            return false;
-        }
-
-        bool hasEntriesToMove = _permissionMap.Keys.Any(key =>
-            TryMovePermissionPath(key, sourcePath, destinationPath) is not null);
-        if (!hasEntriesToMove)
-        {
-            return false;
-        }
-
-        MovePermissionEntriesInMap(_permissionMap, sourcePath, destinationPath);
-        SavePermissionMap();
-        SwkLogger.Info($"ExternalRenamed permission entries migrated: {sourcePath} -> {destinationPath}");
-        return true;
-    }
-
-    private async Task<bool> PreserveFriendShopPermissionOnArrivalAsync(string sourcePath, string destinationPath)
-    {
-        if (_currentMode != DisplayMode.FriendShop)
-        {
-            return false;
-        }
-
-        string? shopRoot = _activeFriendShopRootPath;
-        if (string.IsNullOrWhiteSpace(shopRoot) ||
-            string.IsNullOrWhiteSpace(sourcePath) ||
-            string.IsNullOrWhiteSpace(destinationPath))
-        {
-            return false;
-        }
-
-        string oldRelativePath = ToRelativeShopPath(shopRoot, sourcePath);
-        string newRelativePath = ToRelativeShopPath(shopRoot, destinationPath);
-        if (string.IsNullOrWhiteSpace(oldRelativePath) || string.IsNullOrWhiteSpace(newRelativePath))
-        {
-            return false;
-        }
-
-        return await Task.Run(() =>
-        {
-            ShopPermissionManifest manifest = ShopPermissionManifest.Load(shopRoot);
-            bool moved = false;
-            List<ShopPermissionManifestEntry> updatedEntries = [];
-
-            foreach (ShopPermissionManifestEntry entry in manifest.Entries)
-            {
-                string movedRelativePath = MoveManifestRelativePath(entry.RelativePath, oldRelativePath, newRelativePath);
-                if (!string.Equals(movedRelativePath, entry.RelativePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    moved = true;
-                }
-
-                updatedEntries.Add(new ShopPermissionManifestEntry
-                {
-                    RelativePath = movedRelativePath,
-                    Users = [.. entry.Users],
-                    AllowedMachineNames = [.. entry.AllowedMachineNames],
-                    IsReadOnly = entry.IsReadOnly,
-                    IsSharedOff = entry.IsSharedOff,
-                });
-            }
-
-            if (!moved)
-            {
-                return false;
-            }
-
-            bool saved = ShopPermissionManifest.Save(shopRoot, updatedEntries);
-            if (saved)
-            {
-                SwkLogger.Info($"FriendShop permission manifest migrated: {oldRelativePath} -> {newRelativePath}");
-            }
-
-            return saved;
-        });
-    }
-
-    private static string MoveManifestRelativePath(string path, string sourcePath, string destinationPath)
-    {
-        string normalizedPath = NormalizeManifestRelativePath(path);
-        string normalizedSource = NormalizeManifestRelativePath(sourcePath);
-        string normalizedDestination = NormalizeManifestRelativePath(destinationPath);
-
-        if (string.Equals(normalizedPath, normalizedSource, StringComparison.OrdinalIgnoreCase))
-        {
-            return normalizedDestination;
-        }
-
-        if (!normalizedPath.StartsWith(normalizedSource + "\\", StringComparison.OrdinalIgnoreCase))
-        {
-            return normalizedPath;
-        }
-
-        string suffix = normalizedPath[normalizedSource.Length..].TrimStart('\\');
-        return string.IsNullOrEmpty(suffix)
-            ? normalizedDestination
-            : $"{normalizedDestination}\\{suffix}";
-    }
-
-    private static string NormalizeManifestRelativePath(string path)
-        => (path ?? string.Empty).Replace('/', '\\').Trim('\\');
-
     private static string? TryMovePermissionPath(string path, string sourcePath, string destinationPath)
     {
         if (string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase))
@@ -4538,16 +4432,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            bool preserved = _currentMode == DisplayMode.FriendShop
-                ? await PreserveFriendShopPermissionOnArrivalAsync(result.SourcePath, result.DestinationPath)
-                : PreservePermissionOnArrival(
-                    result.SourcePath,
-                    result.SourceParent,
-                    result.DestinationPath,
-                    result.DestinationFolder,
-                    removeSourceEntry: true,
-                    historySource: "MainWindow.move");
-            if (!preserved && _currentMode != DisplayMode.FriendShop)
+            bool preserved = PreservePermissionOnArrival(
+                result.SourcePath,
+                result.SourceParent,
+                result.DestinationPath,
+                result.DestinationFolder,
+                removeSourceEntry: true,
+                historySource: "MainWindow.move");
+            if (!preserved)
             {
                 NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
             }
@@ -4938,10 +4830,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
 
-        string? dialogRoot = _currentMode == DisplayMode.FriendShop
-            ? (_activeFriendShopRootPath ?? _currentFolder ?? _shopFolder)
-            : _shopFolder;
-        MoveDestinationDialog dialog = new(dialogRoot, sourcePaths)
+        MoveDestinationDialog dialog = new(_shopFolder, sourcePaths)
         {
             Owner = this
         };
@@ -5447,16 +5336,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     continue;
                 }
 
-                bool preserved = _currentMode == DisplayMode.FriendShop
-                    ? await PreserveFriendShopPermissionOnArrivalAsync(result.SourcePath, result.DestinationPath)
-                    : PreservePermissionOnArrival(
-                        result.SourcePath,
-                        result.SourceParent,
-                        result.DestinationPath,
-                        result.DestinationFolder,
-                        removeSourceEntry: true,
-                        historySource: "MainWindow.move");
-                if (!preserved && _currentMode != DisplayMode.FriendShop)
+                bool preserved = PreservePermissionOnArrival(
+                    result.SourcePath,
+                    result.SourceParent,
+                    result.DestinationPath,
+                    result.DestinationFolder,
+                    removeSourceEntry: true,
+                    historySource: "MainWindow.move");
+                if (!preserved)
                 {
                     NoteFutureSharePolicyRepair(result.DestinationPath, result.DestinationFolder, SharePolicyRepairReason.Moved);
                 }
@@ -6435,14 +6322,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     destinationFolder: folder,
                     source: "Watcher");
                 SwkLogger.Info($"ArrivalSensor_Renamed history-appended: old={e.OldFullPath} new={e.FullPath}");
-                bool migrated = TryMigrateExternalRenamedPermissionEntries(e.OldFullPath, e.FullPath);
-                if (!migrated)
-                {
-                    NoteFutureSharePolicyRepair(
-                        e.FullPath,
-                        folder,
-                        SharePolicyRepairReason.ExternalRenamed);
-                }
+                NoteFutureSharePolicyRepair(
+                    e.FullPath,
+                    folder,
+                    SharePolicyRepairReason.ExternalRenamed);
             }
             else
             {
@@ -7724,6 +7607,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
 
             RefreshShopItems();
+            // 非表示中の OFF フォルダも復帰検知のために検査リストへ追加する
+            string folder = _currentFolder!;
+            List<ShopItem> hiddenOff = _friendShopReadOnlyState
+                .Where(kv => kv.Value.IsSharedOff)
+                .Select(kv => kv.Key)
+                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
+                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
+                .ToList();
+            List<ShopItem> allItems = [.. ShopItems, .. hiddenOff];
+            await ApplyFriendShopReadOnlyAsync(folder, allItems);
         }
         finally
         {
@@ -8196,14 +8089,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!ShouldSuppressExternalChangeNotification())
             {
                 SwkLogger.Debug($"ContentsSensor_Renamed aftercare mark: old={e.OldFullPath} new={e.FullPath}");
-                bool migrated = TryMigrateExternalRenamedPermissionEntries(e.OldFullPath, e.FullPath);
-                if (!migrated)
-                {
-                    NoteFutureSharePolicyRepair(
-                        e.FullPath,
-                        Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
-                        SharePolicyRepairReason.ExternalRenamed);
-                }
+                NoteFutureSharePolicyRepair(
+                    e.FullPath,
+                    Path.GetDirectoryName(e.FullPath) ?? _currentFolder ?? string.Empty,
+                    SharePolicyRepairReason.ExternalRenamed);
             }
             else
             {
@@ -8914,6 +8803,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             targetName: liveShop.ShareName,
             pathText: accessiblePath,
             source: "MainWindow");
+        await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
     }
 
     private static Task<string?> TryFindAccessibleFriendPathAsync(
@@ -9191,12 +9081,6 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return true;
         }
 
-        // FriendShop選択中だがアイテム未表示（ナビゲーション前・接続失敗など）
-        if (string.IsNullOrWhiteSpace(_currentFolder) || ShopItems.Count == 0)
-        {
-            return true;
-        }
-
         return ShouldHighlightRefreshButtonForFriend(_activeFriendShop);
     }
 
@@ -9226,7 +9110,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         if (friend.HasCertificateMismatch ||
-            FriendRecognitionService.FindVisibleShopForFriend(friend, SwkNetworkCache.ShopInfos) is not null)
+            FriendRecognitionService.FindVisibleShopForFriend(friend, SwkNetworkCache.ShopInfos) is not null ||
+            HasLanCandidateForFriend(friend) ||
+            HasRecentFriendObservation(friend))
         {
             return true;
         }
