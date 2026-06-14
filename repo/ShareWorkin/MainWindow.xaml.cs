@@ -7368,8 +7368,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         List<string> previousVisiblePaths = CaptureVisibleShopItemPaths();
         HashSet<string> selectedPaths = CaptureSelectedShopItemPaths();
 
+        SwkLogger.Debug($"RefreshShopItems: enter mode={_currentMode} folder={_currentFolder}");
+
         if (string.IsNullOrWhiteSpace(_currentFolder) || !Directory.Exists(_currentFolder))
         {
+            SwkLogger.Warn($"RefreshShopItems[接続できません]: folder={_currentFolder} blank={string.IsNullOrWhiteSpace(_currentFolder)} exists={(!string.IsNullOrWhiteSpace(_currentFolder) && Directory.Exists(_currentFolder))}");
             ShopItems.Clear();
             if (_currentMode == DisplayMode.FriendShop && !string.IsNullOrWhiteSpace(_currentFolder))
                 SetTransientStatus("接続できません");
@@ -8865,6 +8868,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         liveShop ??= await ResolveLiveFriendShopWithRetryAsync(friend);
         if (liveShop is null)
         {
+            SwkLogger.Warn($"NavigateToFriendShopAsync[接続できません-A]: liveShop=null friend={friend.Id} currentFolder={_currentFolder}");
             SetTransientStatus("接続できません");
             return;
         }
@@ -8881,6 +8885,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         List<string> uncCandidates = BuildFriendUncCandidates(friend, liveShop);
         if (uncCandidates.Count == 0)
         {
+            SwkLogger.Warn($"NavigateToFriendShopAsync[接続できません-B]: uncCandidates empty friend={friend.Id} liveShop={liveShop.MachineName}/{liveShop.ShareName}");
             SetTransientStatus("接続できません");
             return;
         }
@@ -8931,6 +8936,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 targetName: label,
                 pathText: string.Join(", ", uncCandidates),
                 source: "MainWindow");
+            SwkLogger.Warn($"NavigateToFriendShopAsync[接続できません-C]: not accessible candidates={string.Join(", ", uncCandidates)}");
             SetTransientStatus("接続できません");
             return;
         }
