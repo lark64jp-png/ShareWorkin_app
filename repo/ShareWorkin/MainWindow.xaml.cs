@@ -7606,17 +7606,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            RefreshShopItems();
-            // 非表示中の OFF フォルダも復帰検知のために検査リストへ追加する
-            string folder = _currentFolder!;
-            List<ShopItem> hiddenOff = _friendShopReadOnlyState
-                .Where(kv => kv.Value.IsSharedOff)
-                .Select(kv => kv.Key)
-                .Where(path => path.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
-                .Select(path => ShopItem.FromPath(path, isDirectory: true, isHoldFolder: false))
-                .ToList();
-            List<ShopItem> allItems = [.. ShopItems, .. hiddenOff];
-            await ApplyFriendShopReadOnlyAsync(folder, allItems);
+            await RefreshFriendShopItemsAsync();
         }
         finally
         {
@@ -7782,58 +7772,89 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         return !handle.IsInvalid;
     }
 
-    private async Task ApplyFriendShopReadOnlyAsync(string folder, List<ShopItem> items, bool silent = false)
+    private async Task RefreshFriendShopItemsAsync(bool silent = false)
     {
-        bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
-        bool folderReadable = folderWritable || await Task.Run(() => IsDirectoryReadable(folder));
-        SwkLogger.Debug($"ApplyFriendShopReadOnly: folder={folder} writable={folderWritable} readable={folderReadable} silent={silent} items={items.Count}");
-        bool anyChanged = false;
-        foreach (ShopItem item in items)
+        if (_currentMode != DisplayMode.FriendShop) return;
+        string? folder = _currentFolder;
+        if (string.IsNullOrWhiteSpace(folder)) return;
+
+        // SharedOff フィルターを掛けずにファイルシステム上の全アイテムを列挙
+        List<(string Path, bool IsDirectory)> filesystemItems;
+        try
         {
-            bool isWritable;
-            bool isReadable;
-            if (item.IsDirectory)
+            filesystemItems = Directory.EnumerateDirectories(folder)
+                .Where(p => !string.Equals(Path.GetFileName(p), HoldFolderName, StringComparison.OrdinalIgnoreCase))
+                .Select(p => (Path: p, IsDirectory: true))
+                .Concat(
+                    Directory.EnumerateFiles(folder)
+                        .Where(p => !string.Equals(Path.GetFileName(p), ShopPermissionManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                        .Select(p => (Path: p, IsDirectory: false)))
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SetTransientStatus("接続できません");
+            return;
+        }
+
+        var filesystemPaths = new HashSet<string>(
+            filesystemItems.Select(i => i.Path), StringComparer.OrdinalIgnoreCase);
+
+        // ファイルシステム上に存在しない既知の SharedOff フォルダも状態確認対象に加える
+        List<(string Path, bool IsDirectory)> ghostHidden = _friendShopReadOnlyState
+            .Where(kv => kv.Value.IsSharedOff &&
+                         kv.Key.StartsWith(folder, StringComparison.OrdinalIgnoreCase) &&
+                         !filesystemPaths.Contains(kv.Key))
+            .Select(kv => (Path: kv.Key, IsDirectory: true))
+            .ToList();
+
+        List<(string Path, bool IsDirectory)> allCandidates = [..filesystemItems, ..ghostHidden];
+
+        bool folderWritable = await Task.Run(() => IsDirectoryWritable(folder));
+        if (_currentMode != DisplayMode.FriendShop ||
+            !string.Equals(_currentFolder, folder, StringComparison.OrdinalIgnoreCase)) return;
+        bool folderReadable = folderWritable || await Task.Run(() => IsDirectoryReadable(folder));
+        if (_currentMode != DisplayMode.FriendShop ||
+            !string.Equals(_currentFolder, folder, StringComparison.OrdinalIgnoreCase)) return;
+
+        SwkLogger.Debug($"RefreshFriendShopItems: folder={folder} writable={folderWritable} readable={folderReadable} silent={silent} candidates={allCandidates.Count}");
+
+        // 全アイテムの権限を先にプローブして _friendShopReadOnlyState を一括更新
+        bool anyChanged = false;
+        foreach (var (path, isDirectory) in allCandidates)
+        {
+            bool isWritable, isReadable;
+            if (isDirectory)
             {
-                isWritable = await Task.Run(() => IsDirectoryWritable(item.FullPath));
-                isReadable = isWritable || await Task.Run(() => IsDirectoryReadable(item.FullPath));
+                isWritable = await Task.Run(() => IsDirectoryWritable(path));
+                if (_currentMode != DisplayMode.FriendShop ||
+                    !string.Equals(_currentFolder, folder, StringComparison.OrdinalIgnoreCase)) return;
+                isReadable = isWritable || await Task.Run(() => IsDirectoryReadable(path));
+                if (_currentMode != DisplayMode.FriendShop ||
+                    !string.Equals(_currentFolder, folder, StringComparison.OrdinalIgnoreCase)) return;
             }
             else
             {
                 isWritable = folderWritable;
                 isReadable = folderReadable;
             }
+
             bool isReadOnly = !isWritable && isReadable;
             bool isSharedOff = !isWritable && !isReadable;
 
-            _friendShopReadOnlyState.TryGetValue(item.FullPath, out var prevState);
+            _friendShopReadOnlyState.TryGetValue(path, out var prevState);
             bool stateChanged = prevState.IsReadOnly != isReadOnly || prevState.IsSharedOff != isSharedOff;
-
-            SwkLogger.Debug($"  {item.Name}: isReadOnly={isReadOnly} isSharedOff={isSharedOff} prev=({prevState.IsReadOnly},{prevState.IsSharedOff}) changed={stateChanged}");
-
-            _friendShopReadOnlyState[item.FullPath] = (isReadOnly, isSharedOff);
-            bool itemChanged = item.IsReadOnly != isReadOnly || item.IsSharedOff != isSharedOff;
-            item.IsReadOnly = isReadOnly;
-            item.IsSharedOff = isSharedOff;
-            if (isSharedOff)
-            {
-                // OFF → FriendShop では非表示
-                await Dispatcher.InvokeAsync(() => ShopItems.Remove(item));
-            }
-            else if (prevState.IsSharedOff)
-            {
-                // OFF から復帰 → リストを再構築して表示
-                await Dispatcher.InvokeAsync(RefreshShopItems);
-            }
-            else if (itemChanged)
-            {
-                await Dispatcher.InvokeAsync(item.RefreshShareStatus);
-            }
-            if (!silent && stateChanged)
+            SwkLogger.Debug($"  {Path.GetFileName(path)}: isReadOnly={isReadOnly} isSharedOff={isSharedOff} prev=({prevState.IsReadOnly},{prevState.IsSharedOff}) changed={stateChanged}");
+            _friendShopReadOnlyState[path] = (isReadOnly, isSharedOff);
+            if (stateChanged)
                 anyChanged = true;
         }
-        if (anyChanged)
-            await Dispatcher.InvokeAsync(() =>
-                NotifyShopMaintenance("共有状況が変わりました。", "共有状況が変わりました。"));
+
+        // 更新後の _friendShopReadOnlyState を基に表示を一度だけ再構築
+        RefreshShopItems();
+
+        if (!silent && anyChanged)
+            NotifyShopMaintenance("共有状況が変わりました。", "共有状況が変わりました。");
     }
 
     private IEnumerable<ShopItem> SortShopItems(IEnumerable<ShopItem> items)
@@ -8803,7 +8824,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             targetName: liveShop.ShareName,
             pathText: accessiblePath,
             source: "MainWindow");
-        await ApplyFriendShopReadOnlyAsync(accessiblePath, ShopItems.ToList(), silent: true);
+        await RefreshFriendShopItemsAsync(silent: true);
     }
 
     private static Task<string?> TryFindAccessibleFriendPathAsync(
