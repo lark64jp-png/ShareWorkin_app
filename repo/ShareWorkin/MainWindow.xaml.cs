@@ -7707,6 +7707,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
+            SwkLogger.Debug("RunFriendShopPoll: calling RefreshFriendShopItemsAsync");
             await RefreshFriendShopItemsAsync();
         }
         finally
@@ -7880,6 +7881,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_currentMode != DisplayMode.FriendShop) return;
         string? folder = _currentFolder;
         if (string.IsNullOrWhiteSpace(folder)) return;
+
+        SwkLogger.Debug($"RefreshFriendShopItems: called folder={folder} silent={silent}");
 
         // SharedOff フィルターを掛けずにファイルシステム上の全アイテムを列挙
         List<(string Path, bool IsDirectory)> filesystemItems;
