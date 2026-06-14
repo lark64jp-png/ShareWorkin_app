@@ -7859,6 +7859,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool filesystemChanged = !currentPaths.SetEquals(expectedPaths);
         SwkLogger.Debug($"RefreshFriendShopItems: anyChanged={anyChanged} filesystemChanged={filesystemChanged}");
 
+        if (filesystemChanged)
+        {
+            foreach (var p in currentPaths.Except(expectedPaths))
+                SwkLogger.Debug($"RefreshFriendShopItems: filesystem+ {p}");
+            foreach (var p in expectedPaths.Except(currentPaths))
+                SwkLogger.Debug($"RefreshFriendShopItems: filesystem- {p}");
+        }
+
         if (anyChanged || filesystemChanged)
         {
             SwkLogger.Debug("RefreshFriendShopItems: 再表示実行");
