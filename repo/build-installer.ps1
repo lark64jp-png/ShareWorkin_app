@@ -133,13 +133,6 @@ if (-not (Test-Path -LiteralPath $readme)) {
     throw "Readme file was not found: $readme"
 }
 
-foreach ($procName in @("ShareWorkin", "ShareWorkinTray", "ShareWorkinAdminWorker")) {
-    if (Get-Process -Name $procName -ErrorAction SilentlyContinue) {
-        Write-Host "終了中: $procName"
-        Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
-    }
-}
-Start-Sleep -Milliseconds 800
 
 if (Test-Path -LiteralPath $publishDir) {
     Remove-Item -LiteralPath $publishDir -Recurse -Force
