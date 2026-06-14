@@ -7660,6 +7660,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private bool _friendShopPollRunning;
+    private bool _navigateFriendShopInProgress;
     private int _friendShopLiveMissCount;
     private CancellationTokenSource? _friendShopNotifCts;
     private string? _missingFriendShopStatus;
@@ -7704,6 +7705,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 !string.Equals(activeFriend.ShareName, liveShop.ShareName, StringComparison.OrdinalIgnoreCase);
             if (needsReconnect)
             {
+                if (_navigateFriendShopInProgress)
+                {
+                    SwkLogger.Debug("RunFriendShopPoll: NavigateToFriendShopAsync in progress, skip reconnect");
+                    return;
+                }
                 UpdateFriendExternalState(activeFriend, liveShop);
                 PopulateExplorerDropdown();
                 await NavigateToFriendShopAsync(activeFriend, liveShop);
@@ -8831,6 +8837,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     }
 
     private async Task NavigateToFriendShopAsync(Friend friend, SwkNotificationListener.ShopInfo? knownLiveShop = null)
+    {
+        _navigateFriendShopInProgress = true;
+        try
+        {
+        await NavigateToFriendShopCoreAsync(friend, knownLiveShop);
+        }
+        finally
+        {
+            _navigateFriendShopInProgress = false;
+        }
+    }
+
+    private async Task NavigateToFriendShopCoreAsync(Friend friend, SwkNotificationListener.ShopInfo? knownLiveShop = null)
     {
         string label = string.IsNullOrWhiteSpace(friend.DisplayName) ? friend.HostMachineName : friend.DisplayName;
         SwkLogger.Debug($"NavigateToFriendShopAsync: {label} ({friend.ConnectUncPath})");
