@@ -7812,7 +7812,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (_currentMode != DisplayMode.FriendShop ||
             !string.Equals(_currentFolder, folder, StringComparison.OrdinalIgnoreCase)) return;
 
-        SwkLogger.Debug($"RefreshFriendShopItems: folder={folder} writable={folderWritable} readable={folderReadable} silent={silent} candidates={allCandidates.Count}");
+        SwkLogger.Debug($"RefreshFriendShopItems: friend={_activeFriendShop?.DisplayName} folder={folder} writable={folderWritable} readable={folderReadable} silent={silent} candidates={allCandidates.Count}");
 
         // 全アイテムの権限を先にプローブして _friendShopReadOnlyState を一括更新
         bool anyChanged = false;
