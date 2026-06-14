@@ -7330,9 +7330,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private void ResetFriendShopPollInterval()
+    {
+        if (_friendShopPollTimer != null)
+            _friendShopPollTimer.Interval = PollingInterval;
+    }
+
     private void RefreshShopItems()
     {
         CancelFolderSizeCalculation();
+        if (_currentMode == DisplayMode.FriendShop)
+            ResetFriendShopPollInterval();
         bool skipShopRefreshAttentionClearOnce = _skipNextShopRefreshAttentionClear;
         _skipNextShopRefreshAttentionClear = false;
         List<string> previousVisiblePaths = CaptureVisibleShopItemPaths();
@@ -7868,7 +7876,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         else
         {
-            SwkLogger.Debug("RefreshFriendShopItems: スルー");
+            if (_friendShopPollTimer != null && _friendShopPollTimer.Interval < TimeSpan.FromSeconds(32))
+                _friendShopPollTimer.Interval += TimeSpan.FromSeconds(4);
+            SwkLogger.Debug($"RefreshFriendShopItems: スルー interval={_friendShopPollTimer?.Interval.TotalSeconds}s");
         }
 
         if (!silent && anyChanged)
