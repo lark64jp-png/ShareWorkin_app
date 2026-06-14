@@ -7860,7 +7860,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SwkLogger.Debug($"RefreshFriendShopItems: anyChanged={anyChanged} filesystemChanged={filesystemChanged}");
 
         if (anyChanged || filesystemChanged)
+        {
+            SwkLogger.Debug("RefreshFriendShopItems: 再表示実行");
             RefreshShopItems();
+        }
+        else
+        {
+            SwkLogger.Debug("RefreshFriendShopItems: スルー");
+        }
 
         if (!silent && anyChanged)
             NotifyShopMaintenance("共有状況が変わりました。", "共有状況が変わりました。");
