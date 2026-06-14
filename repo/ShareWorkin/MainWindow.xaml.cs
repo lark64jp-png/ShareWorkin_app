@@ -138,6 +138,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, DateTime> _recentIncomingInteractionAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (bool IsReadOnly, bool IsSharedOff)> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _previousFriendShopFilesystemPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
@@ -7683,6 +7684,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         DisposeContentsWatcher();
         ShopItems.Clear();
         _friendShopReadOnlyState.Clear();
+        _previousFriendShopFilesystemPaths = new(StringComparer.OrdinalIgnoreCase);
         _activeFriendShopRootPath = null;
         _currentFolder = null;
         _backStack.Clear();
@@ -7845,25 +7847,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 anyChanged = true;
         }
 
-        // 権限またはファイルシステム構成に変化がある場合のみ表示を再構築
-        var currentPaths = new HashSet<string>(
-            ShopItems.Where(i => !i.IsHoldFolder).Select(i => i.FullPath),
-            StringComparer.OrdinalIgnoreCase);
-        var expectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, _) in filesystemItems)
-        {
-            _friendShopReadOnlyState.TryGetValue(path, out var st);
-            if (!st.IsSharedOff)
-                expectedPaths.Add(path);
-        }
-        bool filesystemChanged = !currentPaths.SetEquals(expectedPaths);
+        // 親フォルダーの全項目を前回スキャン結果と比較（対象外項目を含む親フォルダーレベルの比較）
+        var previousPaths = _previousFriendShopFilesystemPaths;
+        _previousFriendShopFilesystemPaths = filesystemPaths;
+        bool filesystemChanged = !filesystemPaths.SetEquals(previousPaths);
         SwkLogger.Debug($"RefreshFriendShopItems: anyChanged={anyChanged} filesystemChanged={filesystemChanged}");
 
         if (filesystemChanged)
         {
-            foreach (var p in currentPaths.Except(expectedPaths))
+            foreach (var p in filesystemPaths.Except(previousPaths))
                 SwkLogger.Debug($"RefreshFriendShopItems: filesystem+ {p}");
-            foreach (var p in expectedPaths.Except(currentPaths))
+            foreach (var p in previousPaths.Except(filesystemPaths))
                 SwkLogger.Debug($"RefreshFriendShopItems: filesystem- {p}");
         }
 
