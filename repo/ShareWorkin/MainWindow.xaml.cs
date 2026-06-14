@@ -2875,10 +2875,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         bool newSharedOff = PermissionSharedOffRadio.IsChecked == true;
         bool newReadOnly = PermissionReadOnlyRadio.IsChecked == true;
-        List<string> requestedUsers = _permissionAllowed
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        List<string> requestedUsers = NormalizePermissionUsers(
+            _permissionAllowed
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            newSharedOff);
 
         return newSharedOff != _permissionPopupInitialSharedOff
                || newReadOnly != _permissionPopupInitialReadOnly
@@ -3004,10 +3006,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             bool newSharedOff = PermissionSharedOffRadio.IsChecked == true;
             bool newReadOnly = PermissionReadOnlyRadio.IsChecked == true;
-            List<string> requestedUsers = _permissionAllowed
+            List<string> requestedUsersRaw = _permissionAllowed
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            bool selectedAllUsers = ShouldCollapseToEveryone(requestedUsersRaw, newSharedOff);
+            List<string> requestedUsers = NormalizePermissionUsers(requestedUsersRaw, newSharedOff);
             bool changed = newSharedOff != item.IsSharedOff
                            || newReadOnly != item.IsReadOnly
                            || !item.AllowedUsers.SequenceEqual(requestedUsers, StringComparer.OrdinalIgnoreCase);
@@ -3016,6 +3020,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 PermissionPopup.IsOpen = false;
                 return;
+            }
+
+            if (selectedAllUsers)
+            {
+                System.Windows.MessageBox.Show(
+                    "全員の名前が指定されたので「全員」での指定になります",
+                    "ShareWorkin",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
             }
 
             string sourceParent = Path.GetDirectoryName(item.FullPath) ?? string.Empty;
@@ -4831,7 +4844,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
 
-        MoveDestinationDialog dialog = new(_shopFolder, sourcePaths)
+        string? moveRootPath = GetCurrentRootPath();
+        ShopPermissionManifest? friendPermissionManifest = LoadFriendPermissionManifest();
+
+        MoveDestinationDialog dialog = new(
+            moveRootPath,
+            sourcePaths,
+            _currentMode == DisplayMode.FriendShop
+                ? path => CanSelectFriendMoveDestination(path, friendPermissionManifest)
+                : null)
         {
             Owner = this
         };
@@ -7527,6 +7548,46 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private bool CanSelectFriendMoveDestination(string folderPath, ShopPermissionManifest? manifest)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+        {
+            return false;
+        }
+
+        if (string.Equals(Path.GetFileName(folderPath), HoldFolderName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (manifest is null)
+        {
+            return true;
+        }
+
+        string? root = GetCurrentRootPath();
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return true;
+        }
+
+        string relativePath = ToRelativeShopPath(root, folderPath);
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return true;
+        }
+
+        ShopPermissionManifestEntry? entry = manifest.FindEffectiveEntry(relativePath);
+        if (entry is null)
+        {
+            return true;
+        }
+
+        return !entry.IsSharedOff &&
+               !entry.IsReadOnly &&
+               IsCurrentMachineAllowed(entry);
+    }
+
     private static bool IsCurrentMachineAllowed(ShopPermissionManifestEntry entry)
     {
         if (entry.AllowedMachineNames.Count == 0 && entry.Users.Count == 0)
@@ -7539,6 +7600,41 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                    string.Equals(name, machineName, StringComparison.OrdinalIgnoreCase)) ||
                entry.Users.Any(name =>
                    string.Equals(name, machineName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static List<string> GetRegisteredUserDisplayNames()
+    {
+        return FriendsRepository.LoadAll()
+            .Select(f => string.IsNullOrWhiteSpace(f.DisplayName) ? f.HostMachineName : f.DisplayName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool ShouldCollapseToEveryone(IReadOnlyCollection<string> requestedUsers, bool isSharedOff)
+    {
+        if (isSharedOff || requestedUsers.Count == 0)
+        {
+            return false;
+        }
+
+        List<string> allUsers = GetRegisteredUserDisplayNames();
+        if (allUsers.Count == 0 || requestedUsers.Count != allUsers.Count)
+        {
+            return false;
+        }
+
+        return requestedUsers.All(name => allUsers.Contains(name, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static List<string> NormalizePermissionUsers(List<string> requestedUsers, bool isSharedOff)
+    {
+        if (isSharedOff)
+        {
+            return [];
+        }
+
+        return ShouldCollapseToEveryone(requestedUsers, isSharedOff) ? [] : requestedUsers;
     }
 
     private void StartFriendShopPolling()

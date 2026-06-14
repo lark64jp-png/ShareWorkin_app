@@ -8,16 +8,21 @@ namespace ShareWorkin;
 public partial class MoveDestinationDialog : Window
 {
     private readonly string? _shopFolder;
+    private readonly Func<string, bool>? _canSelectFolder;
     private readonly HashSet<string> _sourceParents;
     private readonly HashSet<string> _sourceFullPaths;
 
     public string? SelectedFolderPath { get; private set; }
 
-    public MoveDestinationDialog(string? shopFolder, IReadOnlyList<string> sourcePaths)
+    public MoveDestinationDialog(
+        string? shopFolder,
+        IReadOnlyList<string> sourcePaths,
+        Func<string, bool>? canSelectFolder = null)
     {
         InitializeComponent();
 
         _shopFolder = shopFolder;
+        _canSelectFolder = canSelectFolder;
         _sourceParents = sourcePaths
             .Select(path => Path.GetDirectoryName(path) ?? string.Empty)
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -33,19 +38,27 @@ public partial class MoveDestinationDialog : Window
 
     private void BuildTree()
     {
-        if (!string.IsNullOrWhiteSpace(_shopFolder) && Directory.Exists(_shopFolder))
+        if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
         {
-            string shopLabel = Path.GetFileName(
-                _shopFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            if (string.IsNullOrEmpty(shopLabel))
-            {
-                shopLabel = "お店";
-            }
-            TreeViewItem shopRoot = CreateNode(_shopFolder, shopLabel);
-            shopRoot.IsExpanded = true;
-            DestinationTreeView.Items.Add(shopRoot);
+            return;
         }
 
+        if (IsCurrentLocation(_shopFolder))
+        {
+            AppendVisibleChildNodes(DestinationTreeView.Items, _shopFolder);
+            return;
+        }
+
+        string shopLabel = Path.GetFileName(
+            _shopFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(shopLabel))
+        {
+            shopLabel = "共有";
+        }
+
+        TreeViewItem shopRoot = CreateNode(_shopFolder, shopLabel);
+        shopRoot.IsExpanded = true;
+        DestinationTreeView.Items.Add(shopRoot);
     }
 
     private TreeViewItem CreateNode(string folderPath, string label)
@@ -92,20 +105,7 @@ public partial class MoveDestinationDialog : Window
         }
 
         item.Items.Clear();
-
-        try
-        {
-            foreach (string sub in Directory.EnumerateDirectories(path).OrderBy(p => p))
-            {
-                if (IsSourceFolder(sub))
-                {
-                    continue;
-                }
-                item.Items.Add(CreateNode(sub, Path.GetFileName(sub)));
-            }
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        AppendVisibleChildNodes(item.Items, path);
     }
 
     private bool HasAccessibleSubdirectory(string folderPath)
@@ -118,17 +118,72 @@ public partial class MoveDestinationDialog : Window
                 {
                     continue;
                 }
+
+                if (!CanShowFolder(sub))
+                {
+                    continue;
+                }
+
+                if (IsCurrentLocation(sub))
+                {
+                    if (HasAccessibleSubdirectory(sub))
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+
                 return true;
             }
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+
         return false;
+    }
+
+    private void AppendVisibleChildNodes(ItemCollection items, string folderPath)
+    {
+        try
+        {
+            foreach (string sub in Directory.EnumerateDirectories(folderPath).OrderBy(p => p))
+            {
+                if (IsSourceFolder(sub))
+                {
+                    continue;
+                }
+
+                if (!CanShowFolder(sub))
+                {
+                    continue;
+                }
+
+                if (IsCurrentLocation(sub))
+                {
+                    AppendVisibleChildNodes(items, sub);
+                    continue;
+                }
+
+                items.Add(CreateNode(sub, Path.GetFileName(sub)));
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private bool IsSourceFolder(string path)
     {
         return _sourceFullPaths.Contains(NormalizePath(path));
+    }
+
+    private bool IsCurrentLocation(string path)
+    {
+        return _sourceParents.Contains(NormalizePath(path));
+    }
+
+    private bool CanShowFolder(string path)
+    {
+        return _canSelectFolder?.Invoke(path) ?? true;
     }
 
     private void DestinationTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -152,6 +207,7 @@ public partial class MoveDestinationDialog : Window
         {
             return;
         }
+
         DialogResult = true;
         Close();
     }
