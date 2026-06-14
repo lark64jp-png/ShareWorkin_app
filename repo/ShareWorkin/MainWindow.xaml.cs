@@ -139,6 +139,7 @@ public partial class MainWindow : Window
     private readonly HashSet<string> _knownFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (bool IsReadOnly, bool IsSharedOff)> _friendShopReadOnlyState = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string> _previousFriendShopFilesystemPaths = new(StringComparer.OrdinalIgnoreCase);
+    private string? _previousFriendShopScanFolder;
     private readonly Stack<string> _backStack = new();
     private readonly Stack<string> _forwardStack = new();
     private readonly Dictionary<string, long> _folderSizeCache = new(StringComparer.OrdinalIgnoreCase);
@@ -7789,6 +7790,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ShopItems.Clear();
         _friendShopReadOnlyState.Clear();
         _previousFriendShopFilesystemPaths = new(StringComparer.OrdinalIgnoreCase);
+        _previousFriendShopScanFolder = null;
         _activeFriendShopRootPath = null;
         _currentFolder = null;
         _backStack.Clear();
@@ -7943,16 +7945,18 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             bool isReadOnly = !isWritable && isReadable;
             bool isSharedOff = !isWritable && !isReadable;
 
-            _friendShopReadOnlyState.TryGetValue(path, out var prevState);
-            bool stateChanged = prevState.IsReadOnly != isReadOnly || prevState.IsSharedOff != isSharedOff;
+            bool hadPrevState = _friendShopReadOnlyState.TryGetValue(path, out var prevState);
+            bool stateChanged = hadPrevState && (prevState.IsReadOnly != isReadOnly || prevState.IsSharedOff != isSharedOff);
             SwkLogger.Debug($"  {Path.GetFileName(path)}: isReadOnly={isReadOnly} isSharedOff={isSharedOff} prev=({prevState.IsReadOnly},{prevState.IsSharedOff}) changed={stateChanged}");
             _friendShopReadOnlyState[path] = (isReadOnly, isSharedOff);
             if (stateChanged)
                 anyChanged = true;
         }
 
-        // 親フォルダーの全項目を前回スキャン結果と比較（対象外項目を含む親フォルダーレベルの比較）
-        var previousPaths = _previousFriendShopFilesystemPaths;
+        // 親フォルダーの全項目を前回スキャン結果と比較（同一フォルダー内限定）
+        bool sameFolder = string.Equals(_previousFriendShopScanFolder, folder, StringComparison.OrdinalIgnoreCase);
+        var previousPaths = sameFolder ? _previousFriendShopFilesystemPaths : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _previousFriendShopScanFolder = folder;
         _previousFriendShopFilesystemPaths = filesystemPaths;
         bool filesystemChanged = !filesystemPaths.SetEquals(previousPaths);
         SwkLogger.Debug($"RefreshFriendShopItems: anyChanged={anyChanged} filesystemChanged={filesystemChanged}");
@@ -8836,6 +8840,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _currentFolder = null;
         ShopItems.Clear();
         _friendShopReadOnlyState.Clear();
+        _previousFriendShopFilesystemPaths = new(StringComparer.OrdinalIgnoreCase);
+        _previousFriendShopScanFolder = null;
         _backStack.Clear();
         _forwardStack.Clear();
         UpdateBreadcrumb();
