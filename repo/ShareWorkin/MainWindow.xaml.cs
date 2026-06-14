@@ -6222,6 +6222,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder))
         {
+            SwkLogger.Debug("PollingTimer_Tick: skipped (shopFolder empty or missing)");
             return;
         }
 
@@ -6232,12 +6233,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            SwkLogger.Debug($"PollingTimer_Tick: snapshot failed: {ex.Message}");
             return;
         }
 
         var current = new HashSet<string>(snapshot, StringComparer.OrdinalIgnoreCase);
         var newcomers = current.Except(_knownFiles).ToList();
         var removed = _knownFiles.Except(current).ToList();
+        SwkLogger.Debug($"PollingTimer_Tick: newcomers={newcomers.Count} removed={removed.Count} mode={_currentMode}");
 
         foreach (string path in newcomers)
         {
@@ -6255,8 +6258,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _knownFiles.Add(path);
         }
 
-        if (EnsureHoldFolderForShopChange(notifyWhenRecreated: true) && _currentMode == DisplayMode.Shop)
+        bool holdChanged = EnsureHoldFolderForShopChange(notifyWhenRecreated: true);
+        if (holdChanged && _currentMode == DisplayMode.Shop)
         {
+            SwkLogger.Debug("PollingTimer_Tick: hold folder recreated, refreshing shop items");
             RefreshShopItemsIfCurrentFolder(_shopFolder);
         }
     }
