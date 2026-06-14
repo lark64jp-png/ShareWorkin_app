@@ -7896,6 +7896,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            SwkLogger.Warn($"RefreshFriendShopItems: enumerate failed folder={folder} silent={silent} {ex.GetType().Name}(0x{ex.HResult:X8}): {ex.Message}");
             SetTransientStatus("接続できません");
             return;
         }
