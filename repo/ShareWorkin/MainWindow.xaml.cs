@@ -582,6 +582,14 @@ public partial class MainWindow : Window
                     return;
                 }
 
+                bool isMoveOperation = !IsHoldFolderPath(destinationFolder) && (keyStates & DragDropKeyStates.ControlKey) == 0;
+                if (isMoveOperation)
+                {
+                    IEnumerable<ShopItem> sourceItems = ShopItems.Where(i => sourcePaths.Any(p =>
+                        string.Equals(p, i.FullPath, StringComparison.OrdinalIgnoreCase)));
+                    if (TryBlockReadOnlyAction(sourceItems)) return;
+                }
+
                 if (sourcePaths.Length == 1)
                 {
                     string sourcePath = sourcePaths[0];
