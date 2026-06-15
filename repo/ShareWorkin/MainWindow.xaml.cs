@@ -4740,6 +4740,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         bool inOwnShop = _currentMode == DisplayMode.Shop;
         bool canAddFolder = !string.IsNullOrWhiteSpace(_currentFolder);
 
+        PasteFromWindowsMenuItem.Visibility = selected is null ? Visibility.Visible : Visibility.Collapsed;
+
         if (selected is null)
         {
             MoveShopItemMenuItem.Visibility = Visibility.Collapsed;
