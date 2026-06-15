@@ -292,6 +292,26 @@ public static class ExplorerActionService
                 pathText: request.DestinationFolder);
         }
 
+        // TODO: ValidateMoveTarget 等と同一ディレクトリチェックを共通化（将来課題）
+        string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
+        if (string.Equals(
+                Path.GetFullPath(sourceParent),
+                Path.GetFullPath(request.DestinationFolder),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return new ExplorerActionResult
+            {
+                State = ExplorerActionState.NoChange,
+                EventType = "Place",
+                Source = "ExplorerActionService.ValidatePlaceTarget",
+                SourcePath = request.SourcePath,
+                SourceParent = sourceParent,
+                DestinationFolder = request.DestinationFolder,
+                TargetName = Path.GetFileName(request.SourcePath),
+                PathText = sourceParent,
+            };
+        }
+
         string sourceName = Path.GetFileName(request.SourcePath);
         string destinationPath = Path.Combine(request.DestinationFolder, sourceName);
         if (File.Exists(destinationPath) || Directory.Exists(destinationPath))
