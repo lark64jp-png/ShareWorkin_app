@@ -4737,6 +4737,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ShopItem? selected = ShopItemsListView.SelectedItem as ShopItem;
         int selectedCount = ShopItemsListView.SelectedItems.Count;
         bool inHoldMode = _currentMode == DisplayMode.Hold;
+        bool inOwnShop = _currentMode == DisplayMode.Shop;
         bool canAddFolder = !string.IsNullOrWhiteSpace(_currentFolder);
 
         if (selected is null)
@@ -4752,7 +4753,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             MoveShopItemMenuItem.Visibility = Visibility.Collapsed;
             MoveToFolderMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
-            HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
+            HoldShopItemMenuItem.Visibility = inOwnShop && !inHoldMode ? Visibility.Visible : Visibility.Collapsed;
             DeleteShopItemMenuItem.Visibility = Visibility.Visible;
             AddFolderSeparator.Visibility = Visibility.Collapsed;
             AddFolderMenuItem.Visibility = Visibility.Collapsed;
@@ -4761,7 +4762,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             MoveShopItemMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
             MoveToFolderMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
-            HoldShopItemMenuItem.Visibility = inHoldMode || selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
+            HoldShopItemMenuItem.Visibility = inOwnShop && !inHoldMode && !selected.IsHoldFolder ? Visibility.Visible : Visibility.Collapsed;
             DeleteShopItemMenuItem.Visibility = selected.IsHoldFolder ? Visibility.Collapsed : Visibility.Visible;
             AddFolderSeparator.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
             AddFolderMenuItem.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
@@ -4770,7 +4771,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             MoveShopItemMenuItem.Visibility = Visibility.Visible;
             MoveToFolderMenuItem.Visibility = Visibility.Visible;
-            HoldShopItemMenuItem.Visibility = inHoldMode ? Visibility.Collapsed : Visibility.Visible;
+            HoldShopItemMenuItem.Visibility = inOwnShop && !inHoldMode ? Visibility.Visible : Visibility.Collapsed;
             DeleteShopItemMenuItem.Visibility = Visibility.Visible;
             AddFolderSeparator.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
             AddFolderMenuItem.Visibility = canAddFolder ? Visibility.Visible : Visibility.Collapsed;
@@ -4793,6 +4794,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             return;
         }
+
+        if (TryBlockReadOnlyAction([item])) return;
 
         string? sourceParent = Path.GetDirectoryName(item.FullPath);
         if (string.IsNullOrWhiteSpace(sourceParent))
@@ -4861,6 +4864,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
     }
 
+    private bool TryBlockReadOnlyAction(IEnumerable<ShopItem> items)
+    {
+        if (_currentMode != DisplayMode.FriendShop || !items.Any(i => i.IsReadOnly)) return false;
+        const string msg = "全員R・利用者Rではその操作はできません。";
+        SwkLogger.Info($"Explorer[{_currentMode}]: Action blocked - read-only items selected");
+        SetTransientStatus(msg);
+        System.Windows.MessageBox.Show(this, msg, "ShareWorkin",
+            System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+        return true;
+    }
+
     private async void MoveToFolderMenuItem_Click(object sender, RoutedEventArgs e) =>
         await MoveSelectedItemsToFolderAsync(sender);
 
@@ -4876,15 +4890,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
-        if (_currentMode == DisplayMode.FriendShop && items.Any(i => i.IsReadOnly))
-        {
-            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - read-only items selected");
-            const string blockedMessage = "全員Rの項目は移せません。";
-            SetTransientStatus(blockedMessage);
-            System.Windows.MessageBox.Show(this, blockedMessage, "ShareWorkin",
-                System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-            return;
-        }
+        if (TryBlockReadOnlyAction(items)) return;
 
         List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
 
@@ -5076,6 +5082,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
+        if (TryBlockReadOnlyAction(items)) return;
+
         string? interactionMessage = null;
         if (_currentMode == DisplayMode.FriendShop)
         {
@@ -5251,6 +5259,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         SelectionCountText.Text = $"{count}個選択中";
 
         bool inHoldMode = _currentMode == DisplayMode.Hold;
+        bool inOwnShop = _currentMode == DisplayMode.Shop;
         bool singleSelect = count == 1;
         bool hasHoldFolder = ShopItemsListView.SelectedItems.Cast<ShopItem>().Any(i => i.IsHoldFolder);
 
@@ -5263,7 +5272,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ? Visibility.Visible : Visibility.Collapsed;
 
         ActionBarHoldButton.Visibility =
-            !hasHoldFolder && !inHoldMode
+            inOwnShop && !hasHoldFolder && !inHoldMode
             ? Visibility.Visible : Visibility.Collapsed;
 
         ActionBarPlaceButton.Visibility =
