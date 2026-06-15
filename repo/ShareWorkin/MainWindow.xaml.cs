@@ -154,6 +154,8 @@ public partial class MainWindow : Window
     // 保留中は実権限を OFF に固定しつつ、移動前に見えていた共有設定を表示・復帰判定用に保持する。
     private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff)> _holdDisplayPermissionMap
         = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (List<string> Users, bool IsReadOnly, bool IsSharedOff, DateTime DeletedAt)> _externalMovePermissionBuffer
+        = new(StringComparer.OrdinalIgnoreCase);
     // 現在フォルダーを基点に祖先を遡って得た有効な許可設定（継承用）。
     private (List<string> Users, bool IsReadOnly, bool IsSharedOff)? _effectiveParentPerm;
     private FileSystemWatcher? _arrivalSensor;
@@ -6370,9 +6372,42 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     SharePolicyRepairReason.ExternalCreated);
                 if (e.ChangeType == WatcherChangeTypes.Deleted)
                 {
-                    if (_permissionMap.Remove(e.FullPath))
+                    if (_permissionMap.TryGetValue(e.FullPath, out var deletedPerm)
+                        && (deletedPerm.Users.Count > 0 || deletedPerm.IsReadOnly || deletedPerm.IsSharedOff))
                     {
-                        SwkLogger.Info($"ArrivalSensor_Created[Deleted]: permissionMap entry removed: path={e.FullPath}");
+                        _permissionMap.Remove(e.FullPath);
+                        string bufferedName = Path.GetFileName(e.FullPath);
+                        _externalMovePermissionBuffer[bufferedName] = (deletedPerm.Users, deletedPerm.IsReadOnly, deletedPerm.IsSharedOff, DateTime.Now);
+                        SwkLogger.Info($"ArrivalSensor_Created[Deleted]: permissionMap entry buffered: item={bufferedName} path={e.FullPath}");
+                        SavePermissionMap();
+                    }
+                }
+                else if (e.ChangeType == WatcherChangeTypes.Created && Directory.Exists(e.FullPath))
+                {
+                    string bufferedName = Path.GetFileName(e.FullPath);
+                    if (_externalMovePermissionBuffer.TryGetValue(bufferedName, out var buffered)
+                        && DateTime.Now - buffered.DeletedAt < TimeSpan.FromSeconds(5))
+                    {
+                        _externalMovePermissionBuffer.Remove(bufferedName);
+                        string destFolder = Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty;
+                        var sourcePerm = (buffered.Users, buffered.IsReadOnly, buffered.IsSharedOff);
+                        var destPerm = FindEffectiveAncestorPermission(destFolder);
+                        if (IsWithinRange(sourcePerm, destPerm))
+                        {
+                            _permissionMap[e.FullPath] = sourcePerm;
+                            SwkLogger.Info($"ArrivalSensor_Created[ExternalMove]: permission preserved: item={bufferedName} path={e.FullPath}");
+                            string capturedPath = e.FullPath;
+                            var capturedPerm = sourcePerm;
+                            _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, capturedPath, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
+                        }
+                        else if (destPerm.HasValue)
+                        {
+                            _permissionMap[e.FullPath] = destPerm.Value;
+                            SwkLogger.Info($"ArrivalSensor_Created[ExternalMove]: destination policy applied: item={bufferedName} path={e.FullPath} dest={destFolder}");
+                            string capturedPath = e.FullPath;
+                            var capturedDest = destPerm.Value;
+                            _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, capturedPath, capturedDest.IsSharedOff, capturedDest.IsReadOnly));
+                        }
                         SavePermissionMap();
                     }
                 }
