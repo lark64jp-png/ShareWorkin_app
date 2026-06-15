@@ -6368,6 +6368,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     e.FullPath,
                     Path.GetDirectoryName(e.FullPath) ?? _shopFolder ?? string.Empty,
                     SharePolicyRepairReason.ExternalCreated);
+                if (e.ChangeType == WatcherChangeTypes.Deleted)
+                {
+                    if (_permissionMap.Remove(e.FullPath))
+                    {
+                        SwkLogger.Info($"ArrivalSensor_Created[Deleted]: permissionMap entry removed: path={e.FullPath}");
+                        SavePermissionMap();
+                    }
+                }
             }
             else
             {
