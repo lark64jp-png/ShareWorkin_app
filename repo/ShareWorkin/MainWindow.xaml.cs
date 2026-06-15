@@ -4288,7 +4288,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (!TryConfirmInteractionAction("置く", paths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        string destFullForPlace = Path.GetFullPath(destinationFolder);
+        IReadOnlyList<string> placeablePaths = paths
+            .Where(p => !string.Equals(
+                Path.GetFullPath(Path.GetDirectoryName(p) ?? string.Empty),
+                destFullForPlace,
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (placeablePaths.Count == 0)
+        {
+            return;
+        }
+
+        if (!TryConfirmInteractionAction("置く", placeablePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
         {
             return;
         }
@@ -4296,7 +4308,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         string modeLabel = _currentMode.ToString();
         bool alertShown = false;
         SwkLogger.Info(
-            $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={paths.Count} names={DescribeExternalPaths(paths)} dest={destinationFolder}");
+            $"Trace.ExternalFlow.Sender.Start: mode={modeLabel} count={placeablePaths.Count} names={DescribeExternalPaths(placeablePaths)} dest={destinationFolder}");
 
         if (_currentMode == DisplayMode.FriendShop && !writable)
         {
@@ -4307,7 +4319,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         if (!TryValidateBatchOperation(
-                paths,
+                placeablePaths,
                 "配置",
                 sourcePath => ExplorerActionService.ValidatePlaceTarget(new PlaceExternalItemRequest
                 {
@@ -4324,14 +4336,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         int placedCount = 0;
         string? lastPlacedName = null;
         var progress = await CreateFileProgressAsync("コピー");
-        int total = paths.Count;
+        int total = placeablePaths.Count;
         BeginDeferredPermissionSave();
         _pendingInteractionMessage = interactionMessage;
         try
         {
             for (int i = 0; i < total; i++)
             {
-                string sourcePath = paths[i];
+                string sourcePath = placeablePaths[i];
                 string fileName = Path.GetFileName(sourcePath);
                 progress.Report((i, total, fileName));
                 await Task.Yield(); // 高速完了時の同期化を防ぎ Progress callback を確実に描画させる
