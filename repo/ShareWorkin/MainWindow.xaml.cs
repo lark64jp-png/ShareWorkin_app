@@ -4412,6 +4412,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             $"Trace.DropDebug.Move: mode={_currentMode} src={sourcePath} dest={destinationFolder} " +
             $"destInShopItems={moveDestItem is not null} destIsReadOnly={moveDestItem?.IsReadOnly}");
 
+        string sourceParentForMove = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+        if (string.Equals(
+                Path.GetFullPath(sourceParentForMove),
+                Path.GetFullPath(destinationFolder),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         if (!TryConfirmInteractionAction("移す", [Path.GetFileName(sourcePath)], out string? interactionMessage))
         {
             return;
@@ -4470,7 +4479,19 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task MoveInternalDraggedItemsAsync(IReadOnlyList<string> sourcePaths, string destinationFolder)
     {
-        if (!TryConfirmInteractionAction("移す", sourcePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
+        string destFull = Path.GetFullPath(destinationFolder);
+        IReadOnlyList<string> movablePaths = sourcePaths
+            .Where(p => !string.Equals(
+                Path.GetFullPath(Path.GetDirectoryName(p) ?? string.Empty),
+                destFull,
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (movablePaths.Count == 0)
+        {
+            return;
+        }
+
+        if (!TryConfirmInteractionAction("移す", movablePaths.Select(path => Path.GetFileName(path) ?? path).ToList(), out string? interactionMessage))
         {
             return;
         }
@@ -4480,7 +4501,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         try
         {
             (int movedCount, string? lastName) = await ExecuteMoveExplorerActionsAsync(
-                sourcePaths,
+                movablePaths,
                 destinationFolder,
                 progress);
 
