@@ -4843,6 +4843,16 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             .ToList();
         if (items.Count == 0) return;
 
+        if (_currentMode == DisplayMode.FriendShop && items.Any(i => i.IsReadOnly))
+        {
+            SwkLogger.Info($"Explorer[{_currentMode}]: Move blocked - read-only items selected");
+            const string blockedMessage = "全員Rの項目は移せません。";
+            SetTransientStatus(blockedMessage);
+            System.Windows.MessageBox.Show(this, blockedMessage, "ShareWorkin",
+                System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            return;
+        }
+
         List<string> sourcePaths = items.Select(static item => item.FullPath).ToList();
 
         string? moveRootPath = GetCurrentRootPath();
