@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using System.Windows;
 using ShareWorkin.SMB;
 using Forms = System.Windows.Forms;
@@ -83,9 +84,13 @@ public sealed class TrayApp : IDisposable
         SwkLogger.Info($"TrayApp.Start: elevated={IsRunningAsAdmin()} processPath={Environment.ProcessPath ?? "null"}");
         WindowsToastNotificationService.Initialize();
         LoadSettings();
+        LogStartupShareState("after-load-settings");
+        ReconcilePersistedShopStateWithWindowsShare();
         SmbController.OnShopClosingReceived = HandleFriendShopClosingReceived;
         SmbController.OnInteractionEventReceived = HandleIncomingInteractionReceived;
         RestoreShopOpenStateFromSettings();
+        LogStartupShareState("after-restore");
+        _ = ObserveStartupShareStateAfterStartAsync();
         _notifyIcon.Visible = true;
         PipeServer.Start();
     }
@@ -149,15 +154,23 @@ public sealed class TrayApp : IDisposable
     {
         if (string.IsNullOrWhiteSpace(shopFolder) || string.IsNullOrWhiteSpace(shareName))
         {
+            SwkLogger.Warn(
+                $"TrayApp.UpdateShopOpenedState rejected: shopFolder={shopFolder ?? "-"} shareName={shareName ?? "-"}");
             return false;
         }
 
+        SwkLogger.Info(
+            $"TrayApp.UpdateShopOpenedState start: previousOpen={_isShopOpen} previousFolder={_shopFolder ?? "-"} " +
+            $"newFolder={shopFolder} shareName={shareName} accessRight={accessRight}");
         SmbController.StartShopBroadcaster(shareName);
         _isShopOpen = true;
         _shopFolder = shopFolder;
         _activeShareName = shareName;
         _shareAccessRight = accessRight;
         PatchSettingsOpenState(true, shopFolder);
+        SwkLogger.Info(
+            $"TrayApp.UpdateShopOpenedState complete: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"} " +
+            $"activeShareName={_activeShareName ?? "-"}");
         return true;
     }
 
@@ -165,14 +178,21 @@ public sealed class TrayApp : IDisposable
     {
         if (!_isShopOpen)
         {
+            SwkLogger.Info(
+                $"TrayApp.UpdateShopClosedState no-op: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"}");
             PatchSettingsOpenState(false, _shopFolder);
             return true;
         }
 
+        SwkLogger.Info(
+            $"TrayApp.UpdateShopClosedState start: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"} " +
+            $"activeShareName={_activeShareName ?? "-"}");
         SmbController.StopShopBroadcaster();
         _isShopOpen = false;
         _activeShareName = null;
         PatchSettingsOpenState(false, _shopFolder);
+        SwkLogger.Info(
+            $"TrayApp.UpdateShopClosedState complete: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"}");
         return true;
     }
 
@@ -180,6 +200,15 @@ public sealed class TrayApp : IDisposable
     {
         if (!_wasOpenAtLastShutdown || string.IsNullOrWhiteSpace(_shopFolder))
         {
+            return;
+        }
+
+        if (!Directory.Exists(_shopFolder))
+        {
+            SwkLogger.Warn(
+                $"TrayApp.RestoreShopOpenStateFromSettings skipped: shopFolder missing path={_shopFolder}");
+            _wasOpenAtLastShutdown = false;
+            PatchSettingsOpenState(false, _shopFolder);
             return;
         }
 
@@ -194,6 +223,59 @@ public sealed class TrayApp : IDisposable
         _isShopOpen = true;
         _activeShareName = shareName;
         SwkLogger.Info($"TrayApp.RestoreShopOpenStateFromSettings: shop state restored shareName={shareName}");
+    }
+
+    private void ReconcilePersistedShopStateWithWindowsShare()
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return;
+        }
+
+        ShareWorkinShareInfo? windowsShare = SmbShareManager.FindShareWorkinShareByPath(_shopFolder);
+        bool windowsShareExists = windowsShare is not null;
+        string derivedShareName = DeriveShareName(_shopFolder);
+        SwkLogger.Info(
+            $"TrayApp.StartupShareState: settingsOpen={_wasOpenAtLastShutdown} shopFolder={_shopFolder} " +
+            $"derivedShareName={derivedShareName} windowsShareExists={windowsShareExists} " +
+            $"windowsShareName={windowsShare?.Name ?? "-"} windowsSharePath={windowsShare?.Path ?? "-"}");
+
+        if (!_wasOpenAtLastShutdown && windowsShareExists)
+        {
+            SwkLogger.Info(
+                $"TrayApp.StartupShareResidual: settingsOpen=false and Windows share exists " +
+                $"shareName={windowsShare!.Name} sharePath={windowsShare.Path}; action=keep-settings-off");
+            return;
+        }
+
+        if (_wasOpenAtLastShutdown && !windowsShareExists)
+        {
+            SwkLogger.Warn(
+                $"TrayApp.StartupShareMismatch: settingsOpen=true but Windows share missing " +
+                $"derivedShareName={derivedShareName} shopFolder={_shopFolder}; action=log-only");
+        }
+    }
+
+    private void LogStartupShareState(string stage)
+    {
+        string? derivedShareName = string.IsNullOrWhiteSpace(_shopFolder) ? null : DeriveShareName(_shopFolder);
+        ShareWorkinShareInfo? windowsShare = string.IsNullOrWhiteSpace(_shopFolder)
+            ? null
+            : SmbShareManager.FindShareWorkinShareByPath(_shopFolder);
+        SwkLogger.Info(
+            $"TrayApp.StartupShareProbe: stage={stage} observedAt={DateTime.Now:O} " +
+            $"settingsOpen={_wasOpenAtLastShutdown} trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"} " +
+            $"activeShareName={_activeShareName ?? "-"} derivedShareName={derivedShareName ?? "-"} " +
+            $"windowsShareExists={(windowsShare is not null)} windowsShareName={windowsShare?.Name ?? "-"} " +
+            $"windowsSharePath={windowsShare?.Path ?? "-"}");
+    }
+
+    private async Task ObserveStartupShareStateAfterStartAsync()
+    {
+        await Task.Delay(1500);
+        LogStartupShareState("late-1500ms");
+        await Task.Delay(1500);
+        LogStartupShareState("late-3000ms");
     }
 
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();

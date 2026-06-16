@@ -21,6 +21,7 @@ public sealed record AclRepairPreflight(
 
 public static class SmbNtfsManager
 {
+    private const int MaxLegacyToolPathLength = 259;
     private const string SidSystem = "*S-1-5-18";
     private const string SidAdministrators = "*S-1-5-32-544";
     private const string PermFull = "(OI)(CI)(F)";
@@ -131,6 +132,7 @@ public static class SmbNtfsManager
 
         bool ok = blocked.Count == 0 && !enumerationBlocked;
         SwkLogger.Info($"PreflightTakeOwnership: ok={ok}, enumBlocked={enumerationBlocked}, blockedCount={blocked.Count}");
+        LogPathCollectionSummary("PreflightTakeOwnership blocked", blocked);
         return new TakeOwnershipPreflight(ok, enumerationBlocked, blocked.ToList());
     }
 
@@ -179,6 +181,8 @@ public static class SmbNtfsManager
         bool canRepair = blocked.Count == 0;
         SwkLogger.Info(
             $"PreflightAclRepair: needsOwnership={needsOwnershipChange}, canRepair={canRepair}, enumBlocked={enumerationBlocked}, blockedCount={blocked.Count}");
+        LogPathCollectionSummary("PreflightAclRepair needsOwnership", needsOwnership);
+        LogPathCollectionSummary("PreflightAclRepair blocked", blocked);
         return new AclRepairPreflight(needsOwnershipChange, canRepair, enumerationBlocked, blocked.ToList());
     }
 
@@ -206,6 +210,7 @@ public static class SmbNtfsManager
         }
 
         SwkLogger.Info($"TakeOwnershipRecursive start: {shopRootPath}");
+        Stopwatch stopwatch = Stopwatch.StartNew();
         if (!TakeOwnershipPath(shopRootPath))
         {
             SwkLogger.Warn($"TakeOwnershipRecursive: root ownership repair failed ({shopRootPath})");
@@ -218,7 +223,17 @@ public static class SmbNtfsManager
             return true;
         }
 
-        foreach (string blockedPath in EnumerateBlockedOwnershipTargets(shopRootPath))
+        List<string> blockedTargets = EnumerateBlockedOwnershipTargets(shopRootPath).ToList();
+        LogPathCollectionSummary("TakeOwnershipRecursive blockedTargets", blockedTargets);
+        string? oversizedPath = blockedTargets.FirstOrDefault(IsLegacyToolPathTooLong);
+        if (oversizedPath != null)
+        {
+            SwkLogger.Warn(
+                $"TakeOwnershipRecursive: blocked by path too long for takeown/icacls ({oversizedPath.Length} chars): {oversizedPath}");
+            return false;
+        }
+
+        foreach (string blockedPath in blockedTargets)
         {
             if (!TryRepairOwnershipTarget(blockedPath))
             {
@@ -229,10 +244,12 @@ public static class SmbNtfsManager
         bool verified = TryVerifyAclRepairReady(shopRootPath, "TakeOwnershipRecursive retry");
         if (!verified)
         {
+            SwkLogger.Warn($"TakeOwnershipRecursive elapsed={stopwatch.ElapsedMilliseconds}ms result=failed");
             SwkLogger.Warn($"TakeOwnershipRecursive: verification failed after retry ({shopRootPath})");
             return false;
         }
 
+        SwkLogger.Info($"TakeOwnershipRecursive elapsed={stopwatch.ElapsedMilliseconds}ms result=ok-after-retry");
         SwkLogger.Info("TakeOwnershipRecursive ok after retry");
         return true;
     }
@@ -240,6 +257,13 @@ public static class SmbNtfsManager
     public static bool TakeOwnershipPath(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        if (IsLegacyToolPathTooLong(path))
+        {
+            SwkLogger.Warn(
+                $"TakeOwnershipPath skipped: path too long for takeown/icacls ({path.Length} chars): {path}");
+            return false;
+        }
+
         bool isDirectory = Directory.Exists(path);
         if (!isDirectory && !File.Exists(path))
         {
@@ -598,6 +622,11 @@ public static class SmbNtfsManager
     {
         AclRepairPreflight preflight = PreflightAclRepair(shopRootPath);
         bool ok = !preflight.NeedsOwnershipChange && !preflight.EnumerationBlocked && preflight.BlockedPaths.Count == 0;
+        if (!ok)
+        {
+            LogPathCollectionSummary($"{label} blocked", preflight.BlockedPaths);
+        }
+
         SwkLogger.Info(
             $"{label}: verified={ok}, needsOwnership={preflight.NeedsOwnershipChange}, enumBlocked={preflight.EnumerationBlocked}, blockedCount={preflight.BlockedPaths.Count}");
         return ok;
@@ -645,7 +674,44 @@ public static class SmbNtfsManager
 
         SwkLogger.Info($"TryRepairOwnershipTarget start: {path}");
         bool ok = TakeOwnershipPath(path);
-        SwkLogger.Info($"TryRepairOwnershipTarget done: {path} ok={ok}");
+        SwkLogger.Info($"TryRepairOwnershipTarget done: {path} ok={ok} state={DescribePathState(path)}");
         return ok;
+    }
+
+    private static bool IsLegacyToolPathTooLong(string path)
+        => !string.IsNullOrWhiteSpace(path) &&
+           !path.StartsWith(@"\\?\",
+               StringComparison.Ordinal) &&
+           path.Length > MaxLegacyToolPathLength;
+
+    private static void LogPathCollectionSummary(string label, IEnumerable<string> paths)
+    {
+        string[] items = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (items.Length == 0)
+        {
+            return;
+        }
+
+        int tooLongCount = items.Count(IsLegacyToolPathTooLong);
+        int missingCount = items.Count(path => !Directory.Exists(path) && !File.Exists(path));
+        int fileCount = items.Count(File.Exists);
+        int dirCount = items.Count(Directory.Exists);
+        int maxLength = items.Max(path => path.Length);
+        string sample = string.Join(" | ", items.Take(5).Select(DescribePathState));
+
+        SwkLogger.Info(
+            $"{label}: count={items.Length}, dir={dirCount}, file={fileCount}, missing={missingCount}, tooLong={tooLongCount}, maxLen={maxLength}, sample={sample}");
+    }
+
+    private static string DescribePathState(string path)
+    {
+        bool isDir = Directory.Exists(path);
+        bool isFile = !isDir && File.Exists(path);
+        string kind = isDir ? "dir" : isFile ? "file" : "missing";
+        return $"{kind},len={path.Length},tooLong={IsLegacyToolPathTooLong(path)}:{path}";
     }
 }

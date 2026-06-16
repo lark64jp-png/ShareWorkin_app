@@ -72,29 +72,47 @@ public sealed class UiPipeClient : IDisposable
     {
         _receiveCts?.Cancel();
         _receiveCts = null;
-        _reader?.Dispose(); _reader = null;
-        _writer?.Dispose(); _writer = null;
-        try { _pipe?.Dispose(); } catch { }
+        _reader?.Dispose();
+        _reader = null;
+        _writer?.Dispose();
+        _writer = null;
+        try
+        {
+            _pipe?.Dispose();
+        }
+        catch
+        {
+        }
+
         _pipe = null;
     }
 
     public TrayStatus? GetStatus(int timeoutMs = 15000)
     {
-        var json = SendCommand("{\"cmd\":\"GET_STATUS\"}", timeoutMs);
-        if (json == null) return null;
+        string? json = SendCommand("{\"cmd\":\"GET_STATUS\"}", timeoutMs);
+        if (json == null)
+        {
+            return null;
+        }
+
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            bool isOpen = root.TryGetProperty("isShopOpen", out var o) && o.GetBoolean();
-            string? folder = root.TryGetProperty("shopFolder", out var f) && f.ValueKind != JsonValueKind.Null
-                ? f.GetString() : null;
+            JsonElement root = doc.RootElement;
+            bool isOpen = root.TryGetProperty("isShopOpen", out JsonElement openElement) && openElement.GetBoolean();
+            string? folder = root.TryGetProperty("shopFolder", out JsonElement folderElement) &&
+                             folderElement.ValueKind != JsonValueKind.Null
+                ? folderElement.GetString()
+                : null;
             return new TrayStatus(isOpen, folder);
         }
-        catch { return null; }
+        catch
+        {
+            return null;
+        }
     }
 
-    // インフラ準備・共有作成・ACL復元を含むため他コマンドより長い timeout を確保する。
+    // Keep a long timeout because opening a share includes infrastructure checks and ACL repair.
     private const int OpenShopTimeoutMs = 120_000;
 
     public ShopOpenOutcome? OpenShop(
@@ -128,7 +146,23 @@ public sealed class UiPipeClient : IDisposable
 
     public AdminCommandResponse CloseShop(string shopFolder, string shareName)
     {
-        return new AdminCommandResponse { Ok = true };
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            return new AdminCommandResponse
+            {
+                Ok = false,
+                ErrorCode = AdminErrorCode.ValidationFailed,
+                ErrorMessage = "共有名が不正です。"
+            };
+        }
+
+        SwkLogger.Info(
+            $"UiPipeClient.CloseShop logical-off: share={shareName} shopFolder={shopFolder} action=keep-windows-share");
+        return new AdminCommandResponse
+        {
+            Ok = true,
+            ErrorCode = AdminErrorCode.None
+        };
     }
 
     public AdminCommandResponse SetSubfolderPermission(string shopRootPath, string path, bool isSharedOff, bool isReadOnly)
@@ -196,7 +230,7 @@ public sealed class UiPipeClient : IDisposable
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean();
+            return doc.RootElement.TryGetProperty("ok", out JsonElement okElement) && okElement.GetBoolean();
         }
         catch
         {
@@ -209,10 +243,14 @@ public sealed class UiPipeClient : IDisposable
         _cmdLock.Wait();
         try
         {
-            if (!IsConnected) return null;
+            if (!IsConnected)
+            {
+                return null;
+            }
+
             _writer!.WriteLine(json);
             using var cts = new CancellationTokenSource(timeoutMs);
-            var task = _responseChannel.Reader.ReadAsync(cts.Token).AsTask();
+            Task<string> task = _responseChannel.Reader.ReadAsync(cts.Token).AsTask();
             task.Wait();
             return task.IsCompletedSuccessfully ? task.Result : null;
         }
@@ -222,7 +260,10 @@ public sealed class UiPipeClient : IDisposable
             Disconnect();
             return null;
         }
-        finally { _cmdLock.Release(); }
+        finally
+        {
+            _cmdLock.Release();
+        }
     }
 
     private NotificationCommandResult SendNotificationCommand(string json)
@@ -253,14 +294,14 @@ public sealed class UiPipeClient : IDisposable
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            bool ok = root.TryGetProperty("ok", out var okElement) && okElement.GetBoolean();
+            JsonElement root = doc.RootElement;
+            bool ok = root.TryGetProperty("ok", out JsonElement okElement) && okElement.GetBoolean();
             if (!ok)
             {
                 return NotificationCommandResult.Failed;
             }
 
-            string? delivery = root.TryGetProperty("delivery", out var deliveryElement)
+            string? delivery = root.TryGetProperty("delivery", out JsonElement deliveryElement)
                 ? deliveryElement.GetString()
                 : null;
 
@@ -279,9 +320,19 @@ public sealed class UiPipeClient : IDisposable
 
     private void FireAndForget(string json)
     {
-        if (!IsConnected) return;
-        try { _writer!.WriteLine(json); }
-        catch (Exception ex) { SwkLogger.Debug($"UiPipeClient.FireAndForget error: {ex.Message}"); }
+        if (!IsConnected)
+        {
+            return;
+        }
+
+        try
+        {
+            _writer!.WriteLine(json);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"UiPipeClient.FireAndForget error: {ex.Message}");
+        }
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
@@ -291,11 +342,20 @@ public sealed class UiPipeClient : IDisposable
             while (!ct.IsCancellationRequested && IsConnected)
             {
                 string? line = await _reader!.ReadLineAsync(ct);
-                if (line == null) break;
-                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (line == null)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
 
                 using var doc = JsonDocument.Parse(line);
-                string? type = doc.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
+                string? type = doc.RootElement.TryGetProperty("type", out JsonElement typeElement)
+                    ? typeElement.GetString()
+                    : null;
 
                 switch (type)
                 {
@@ -307,13 +367,13 @@ public sealed class UiPipeClient : IDisposable
                         break;
                     case "FRIEND_SHOP_CLOSING":
                     {
-                        string machineName = doc.RootElement.TryGetProperty("machineName", out var mn)
-                            ? mn.GetString() ?? string.Empty
+                        string machineName = doc.RootElement.TryGetProperty("machineName", out JsonElement machineNameElement)
+                            ? machineNameElement.GetString() ?? string.Empty
                             : string.Empty;
-                        string shareName = doc.RootElement.TryGetProperty("shareName", out var sn)
-                            ? sn.GetString() ?? string.Empty
+                        string friendShareName = doc.RootElement.TryGetProperty("shareName", out JsonElement shareNameElement)
+                            ? shareNameElement.GetString() ?? string.Empty
                             : string.Empty;
-                        FriendShopClosingReceived?.Invoke(machineName, shareName);
+                        FriendShopClosingReceived?.Invoke(machineName, friendShareName);
                         break;
                     }
                     case "INCOMING_INTERACTION":
@@ -326,6 +386,7 @@ public sealed class UiPipeClient : IDisposable
                                 IncomingInteractionReceived?.Invoke(entry);
                             }
                         }
+
                         break;
                     }
                     default:
@@ -334,13 +395,19 @@ public sealed class UiPipeClient : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { SwkLogger.Debug($"UiPipeClient.ReceiveLoopAsync ended: {ex.Message}"); }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Debug($"UiPipeClient.ReceiveLoopAsync ended: {ex.Message}");
+        }
         finally
         {
             if (!ct.IsCancellationRequested)
+            {
                 Disconnect();
+            }
         }
     }
-
 }

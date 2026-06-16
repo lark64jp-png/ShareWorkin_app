@@ -113,11 +113,14 @@ var
   LblDescBoth: TLabel;
   LblDescApp: TLabel;
   LblDescUninstall: TLabel;
+  CheckCarryIdentityData: TNewCheckBox;
+  LblCarryIdentityDesc: TLabel;
   DetectedRuntimeStatus: Integer;
   DetectedRuntimeVersion: String;
   DetectedAppStatus: Integer;
   DetectedAppVersion: String;
   SelectedAction: String;
+  PreserveIdentityData: Boolean;
 
 function OldInstallDir(): String;
 begin
@@ -204,6 +207,9 @@ begin
   Result := ExpandConstant('{tmp}\' + ICONS_BACKUP_DIR);
 end;
 
+procedure UpdateCarryIdentityUi(); forward;
+procedure InstallOptionClick(Sender: TObject); forward;
+
 function FindExistingFile(FileName: String; var FoundPath: String): Boolean;
 begin
   Result := False;
@@ -259,49 +265,22 @@ procedure BackupExistingSettings();
 var
   Source: String;
 begin
-  DeleteFile(SettingsBackupPath());
   DeleteFile(SecureBackupPath());
   DeleteFile(FriendsBackupPath());
-  DeleteFile(PermissionsBackupPath());
   DeleteFile(InvitesBackupPath());
-  DeleteFile(HistoryBackupPath());
-  DeleteFile(HistoryJournalBackupPath());
-  DeleteFile(UserListStateBackupPath());
   DeleteFile(InstanceBackupPath());
   DeleteFile(NotifyCertBackupPath());
-  DeleteFile(InteractionEventsBackupPath());
-  DeleteFile(IncomingInteractionsBackupPath());
-  DelTree(HoldBackupPath(), True, True, True);
-  DelTree(IconsBackupPath(), True, True, True);
 
-  if FindExistingFile(SETTINGS_FILE, Source) then
-    CopyFile(Source, SettingsBackupPath(), False);
   if FindExistingFile(SECURE_FILE, Source) then
     CopyFile(Source, SecureBackupPath(), False);
   if FindExistingFile(FRIENDS_FILE, Source) then
     CopyFile(Source, FriendsBackupPath(), False);
-  if FindExistingFile(PERMISSIONS_FILE, Source) then
-    CopyFile(Source, PermissionsBackupPath(), False);
   if FindExistingFile(INVITES_FILE, Source) then
     CopyFile(Source, InvitesBackupPath(), False);
-  if FindExistingFile(HISTORY_FILE, Source) then
-    CopyFile(Source, HistoryBackupPath(), False);
-  if FindExistingFile(HISTORY_JOURNAL_FILE, Source) then
-    CopyFile(Source, HistoryJournalBackupPath(), False);
-  if FindExistingFile(USERLIST_STATE_FILE, Source) then
-    CopyFile(Source, UserListStateBackupPath(), False);
   if FindExistingFile(INSTANCE_FILE, Source) then
     CopyFile(Source, InstanceBackupPath(), False);
   if FindExistingFile(NOTIFY_CERT_FILE, Source) then
     CopyFile(Source, NotifyCertBackupPath(), False);
-  if FindExistingFile(INTERACTION_EVENTS_FILE, Source) then
-    CopyFile(Source, InteractionEventsBackupPath(), False);
-  if FindExistingFile(INCOMING_INTERACTIONS_FILE, Source) then
-    CopyFile(Source, IncomingInteractionsBackupPath(), False);
-  if FindExistingDirectory(HOLD_DIR, Source) then
-    CopyDirectoryContents(Source, HoldBackupPath());
-  if FindExistingDirectory(ICONS_DIR, Source) then
-    CopyDirectoryContents(Source, IconsBackupPath());
 end;
 
 procedure RestoreExistingSettings();
@@ -310,11 +289,6 @@ var
 begin
   AppDir := ExpandConstant('{app}');
 
-  if FileExists(SettingsBackupPath()) then
-  begin
-    CopyFile(SettingsBackupPath(), AppDir + '\' + SETTINGS_FILE, False);
-    DeleteFile(SettingsBackupPath());
-  end;
   if FileExists(SecureBackupPath()) then
   begin
     CopyFile(SecureBackupPath(), AppDir + '\' + SECURE_FILE, False);
@@ -325,30 +299,10 @@ begin
     CopyFile(FriendsBackupPath(), AppDir + '\' + FRIENDS_FILE, False);
     DeleteFile(FriendsBackupPath());
   end;
-  if FileExists(PermissionsBackupPath()) then
-  begin
-    CopyFile(PermissionsBackupPath(), AppDir + '\' + PERMISSIONS_FILE, False);
-    DeleteFile(PermissionsBackupPath());
-  end;
   if FileExists(InvitesBackupPath()) then
   begin
     CopyFile(InvitesBackupPath(), AppDir + '\' + INVITES_FILE, False);
     DeleteFile(InvitesBackupPath());
-  end;
-  if FileExists(HistoryBackupPath()) then
-  begin
-    CopyFile(HistoryBackupPath(), AppDir + '\' + HISTORY_FILE, False);
-    DeleteFile(HistoryBackupPath());
-  end;
-  if FileExists(HistoryJournalBackupPath()) then
-  begin
-    CopyFile(HistoryJournalBackupPath(), AppDir + '\' + HISTORY_JOURNAL_FILE, False);
-    DeleteFile(HistoryJournalBackupPath());
-  end;
-  if FileExists(UserListStateBackupPath()) then
-  begin
-    CopyFile(UserListStateBackupPath(), AppDir + '\' + USERLIST_STATE_FILE, False);
-    DeleteFile(UserListStateBackupPath());
   end;
   if FileExists(InstanceBackupPath()) then
   begin
@@ -359,26 +313,6 @@ begin
   begin
     CopyFile(NotifyCertBackupPath(), AppDir + '\' + NOTIFY_CERT_FILE, False);
     DeleteFile(NotifyCertBackupPath());
-  end;
-  if FileExists(InteractionEventsBackupPath()) then
-  begin
-    CopyFile(InteractionEventsBackupPath(), AppDir + '\' + INTERACTION_EVENTS_FILE, False);
-    DeleteFile(InteractionEventsBackupPath());
-  end;
-  if FileExists(IncomingInteractionsBackupPath()) then
-  begin
-    CopyFile(IncomingInteractionsBackupPath(), AppDir + '\' + INCOMING_INTERACTIONS_FILE, False);
-    DeleteFile(IncomingInteractionsBackupPath());
-  end;
-  if DirExists(HoldBackupPath()) then
-  begin
-    CopyDirectoryContents(HoldBackupPath(), AppDir + '\' + HOLD_DIR);
-    DelTree(HoldBackupPath(), True, True, True);
-  end;
-  if DirExists(IconsBackupPath()) then
-  begin
-    CopyDirectoryContents(IconsBackupPath(), AppDir + '\' + ICONS_DIR);
-    DelTree(IconsBackupPath(), True, True, True);
   end;
 end;
 
@@ -449,6 +383,7 @@ var
 begin
   Result := True;
   SelectedAction := '';
+  PreserveIdentityData := False;
 
   if IsProcessRunning(APP_EXE) or IsProcessRunning(TRAY_EXE) or IsProcessRunning(ADMIN_EXE) then
   begin
@@ -1000,6 +935,28 @@ begin
   LblDescApp.Width := PageWidth - 20;
   Y := Y + 28;
 
+  CheckCarryIdentityData := TNewCheckBox.Create(WizardForm);
+  CheckCarryIdentityData.Parent := CustomPage.Surface;
+  CheckCarryIdentityData.Caption := '認証情報・自分の公開情報・利用者登録情報を引き継ぐ';
+  CheckCarryIdentityData.Font.Size := 8;
+  CheckCarryIdentityData.Left := 20;
+  CheckCarryIdentityData.Top := Y;
+  CheckCarryIdentityData.Width := PageWidth - 20;
+  CheckCarryIdentityData.Height := 18;
+  CheckCarryIdentityData.Checked := False;
+  CheckCarryIdentityData.OnClick := @InstallOptionClick;
+  Y := Y + 18;
+
+  LblCarryIdentityDesc := TLabel.Create(WizardForm);
+  LblCarryIdentityDesc.Parent := CustomPage.Surface;
+  LblCarryIdentityDesc.Caption := '既定では引き継ぎません。共有先・共有状態・権限状態・履歴・保留データは更新インストールでも引き継ぎません。';
+  LblCarryIdentityDesc.Font.Size := 8;
+  LblCarryIdentityDesc.Left := 40;
+  LblCarryIdentityDesc.Top := Y;
+  LblCarryIdentityDesc.Width := PageWidth - 40;
+  LblCarryIdentityDesc.Font.Color := COLOR_DESC;
+  Y := Y + 32;
+
   RadioUninstall := TNewRadioButton.Create(WizardForm);
   RadioUninstall.Parent := CustomPage.Surface;
   RadioUninstall.Caption := 'アンインストール';
@@ -1022,7 +979,11 @@ begin
   WizardForm.NextButton.Caption := '実行';
   WizardForm.BackButton.Visible := False;
 
+  RadioInstallBoth.OnClick := @InstallOptionClick;
+  RadioInstallApp.OnClick := @InstallOptionClick;
+  RadioUninstall.OnClick := @InstallOptionClick;
   ApplyDetectionResults();
+  UpdateCarryIdentityUi();
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -1031,7 +992,28 @@ begin
   begin
     WizardForm.NextButton.Caption := '実行';
     WizardForm.BackButton.Visible := False;
+    UpdateCarryIdentityUi();
   end;
+end;
+
+procedure UpdateCarryIdentityUi();
+var
+  Enabled: Boolean;
+begin
+  Enabled := RadioInstallApp.Checked;
+  CheckCarryIdentityData.Enabled := Enabled;
+  if not Enabled then
+    CheckCarryIdentityData.Checked := False;
+
+  if Enabled then
+    LblCarryIdentityDesc.Font.Color := COLOR_DESC
+  else
+    LblCarryIdentityDesc.Font.Color := COLOR_DESC_DISABLED;
+end;
+
+procedure InstallOptionClick(Sender: TObject);
+begin
+  UpdateCarryIdentityUi();
 end;
 
 function InstallRuntime(): Boolean;
@@ -1108,6 +1090,7 @@ begin
     if RadioInstallBoth.Checked then
     begin
       SelectedAction := 'both';
+      PreserveIdentityData := False;
       if DetectedRuntimeStatus <> 1 then
       begin
         RuntimeResult := InstallRuntime();
@@ -1132,7 +1115,8 @@ begin
     else if RadioInstallApp.Checked then
     begin
       SelectedAction := 'app';
-      if not CleanExistingInstall(False, True) then
+      PreserveIdentityData := CheckCarryIdentityData.Checked;
+      if not CleanExistingInstall(False, PreserveIdentityData) then
       begin
         Result := False;
         Exit;
@@ -1141,6 +1125,7 @@ begin
     else if RadioUninstall.Checked then
     begin
       SelectedAction := 'uninstall';
+      PreserveIdentityData := False;
       if RunUninstall() then
       begin
         WizardForm.Tag := 1;
@@ -1190,7 +1175,8 @@ begin
   if CurStep = ssPostInstall then
   begin
     HideInstallerArtifacts();
-    RestoreExistingSettings();
+    if (SelectedAction = 'app') and PreserveIdentityData then
+      RestoreExistingSettings();
 
     if (SelectedAction = 'both') or (SelectedAction = 'app') then
     begin

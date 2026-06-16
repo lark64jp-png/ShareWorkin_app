@@ -230,7 +230,6 @@ public partial class MainWindow : Window
     private int _deferredPermissionSaveDepth;
     private bool _permissionSavePending;
     private bool _suppressNotificationModeSelectionChanged;
-    private bool _shopRefreshAttentionNeeded;
     private bool _skipNextShopRefreshAttentionClear;
     private static readonly TimeSpan FriendRefreshAttentionWindow = TimeSpan.FromMinutes(5);
     private static readonly System.Windows.Media.Brush ShopRefreshAttentionBackgroundBrush =
@@ -248,7 +247,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = this;
-        UpdateRefreshButtonHighlight();
 
         _pipeClient.TrayExiting += () =>
             _ = Dispatcher.InvokeAsync(() =>
@@ -664,25 +662,229 @@ public partial class MainWindow : Window
             return;
         }
 
-        TrayStatus? trayStatus = _pipeClient.GetStatus(timeoutMs: 500);
-        if (trayStatus != null)
+        bool persistedWasOpen = _wasOpenAtLastShutdown;
+        string? persistedShopFolder = _shopFolder;
+        StartupShareObservation initialObservation =
+            CaptureStartupShareObservation("initial", persistedWasOpen, persistedShopFolder, 500);
+        await Task.Delay(350);
+        StartupShareObservation settleObservation =
+            CaptureStartupShareObservation("settle-350ms", persistedWasOpen, persistedShopFolder, 500);
+        LogStartupObservationChange(initialObservation, settleObservation);
+        StartupShareObservation adoptedObservation = settleObservation;
+        ApplyStartupShareObservation(adoptedObservation);
+        LogStartupShareState(adoptedObservation);
+        if (TryReconcileStartupShareState(persistedWasOpen, adoptedObservation))
         {
-            _isShopOpen = trayStatus.IsShopOpen;
-            if (!string.IsNullOrWhiteSpace(trayStatus.ShopFolder))
-            {
-                _shopFolder = trayStatus.ShopFolder;
-                MyShopTextBox.Text = _shopFolder;
-            }
-            _wasOpenAtLastShutdown = _isShopOpen;
+            _isShopOpen = true;
+            _wasOpenAtLastShutdown = true;
+            SaveSettings();
         }
         else
         {
-            _isShopOpen = false;
+            _wasOpenAtLastShutdown = _isShopOpen;
         }
+
+        string? startupNormalizationMessage = NormalizeStartupMissingShopFolderState();
+
         ImportPendingIncomingInteractions();
         ShowMainWindow();
-        UpdateShopState(_isShopOpen);
+        UpdateShopState(_isShopOpen, startupNormalizationMessage);
+        _ = ObserveStartupShareStateAfterLaunchAsync(persistedWasOpen, persistedShopFolder, adoptedObservation);
         _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
+    }
+
+    private readonly record struct StartupShareObservation(
+        string Stage,
+        DateTime ObservedAt,
+        bool PersistedWasOpen,
+        string? PersistedShopFolder,
+        bool TrayStatusReceived,
+        bool TrayStatusOpen,
+        string? TrayStatusFolder,
+        string? EffectiveShopFolder,
+        bool WindowsShareExists,
+        string? WindowsShareName,
+        string? WindowsSharePath);
+
+    private StartupShareObservation CaptureStartupShareObservation(
+        string stage,
+        bool persistedWasOpen,
+        string? persistedShopFolder,
+        int trayTimeoutMs)
+    {
+        TrayStatus? trayStatus = _pipeClient.GetStatus(timeoutMs: trayTimeoutMs);
+        string? trayStatusFolder = trayStatus?.ShopFolder;
+        string? effectiveShopFolder =
+            !string.IsNullOrWhiteSpace(trayStatusFolder) ? trayStatusFolder :
+            !string.IsNullOrWhiteSpace(_shopFolder) ? _shopFolder :
+            persistedShopFolder;
+        ShareWorkinShareInfo? windowsShare = ResolveStartupWindowsShare(effectiveShopFolder);
+        return new StartupShareObservation(
+            stage,
+            DateTime.Now,
+            persistedWasOpen,
+            persistedShopFolder,
+            trayStatus is not null,
+            trayStatus?.IsShopOpen ?? false,
+            trayStatusFolder,
+            effectiveShopFolder,
+            windowsShare is not null,
+            windowsShare?.Name,
+            windowsShare?.Path);
+    }
+
+    private void ApplyStartupShareObservation(StartupShareObservation observation)
+    {
+        _isShopOpen = observation.TrayStatusReceived && observation.TrayStatusOpen;
+        if (!string.IsNullOrWhiteSpace(observation.TrayStatusFolder))
+        {
+            _shopFolder = observation.TrayStatusFolder;
+            MyShopTextBox.Text = _shopFolder;
+        }
+        else if (!string.IsNullOrWhiteSpace(observation.EffectiveShopFolder))
+        {
+            _shopFolder = observation.EffectiveShopFolder;
+            MyShopTextBox.Text = _shopFolder;
+        }
+
+        if (_isShopOpen &&
+            (string.IsNullOrWhiteSpace(_shopFolder) || !Directory.Exists(_shopFolder)))
+        {
+            SwkLogger.Warn(
+                $"MainWindow.StartupShareInvalidOpenState: tray reported open but shop folder missing " +
+                $"shopFolder={_shopFolder ?? "-"} stage={observation.Stage}; action=force-closed");
+            _isShopOpen = false;
+        }
+    }
+
+    private string? NormalizeStartupMissingShopFolderState()
+    {
+        if (string.IsNullOrWhiteSpace(_shopFolder) || Directory.Exists(_shopFolder))
+        {
+            return null;
+        }
+
+        bool wasOpen = _isShopOpen;
+        bool traySyncOk = true;
+        if (wasOpen)
+        {
+            traySyncOk = _pipeClient.SyncTrayShopClosed();
+        }
+
+        _isShopOpen = false;
+        _wasOpenAtLastShutdown = false;
+        SwkLogger.Warn(
+            $"MainWindow.StartupMissingShopFolderNormalized: shopFolder={_shopFolder} " +
+            $"previousOpen={wasOpen} traySyncOk={traySyncOk}; action=force-closed");
+        SaveSettings();
+        return "前回の共有先が見つかりません。共有は閉じた状態で開始しました。";
+    }
+
+    private async Task ObserveStartupShareStateAfterLaunchAsync(
+        bool persistedWasOpen,
+        string? persistedShopFolder,
+        StartupShareObservation adoptedObservation)
+    {
+        await Task.Delay(1500);
+        StartupShareObservation lateObservation1 =
+            CaptureStartupShareObservation("late-1500ms", persistedWasOpen, persistedShopFolder, 500);
+        LogStartupObservationChange(adoptedObservation, lateObservation1);
+        LogStartupShareState(lateObservation1);
+
+        await Task.Delay(1500);
+        StartupShareObservation lateObservation2 =
+            CaptureStartupShareObservation("late-3000ms", persistedWasOpen, persistedShopFolder, 500);
+        LogStartupObservationChange(lateObservation1, lateObservation2);
+        LogStartupShareState(lateObservation2);
+    }
+
+    private ShareWorkinShareInfo? ResolveStartupWindowsShare(string? sharePath)
+    {
+        if (string.IsNullOrWhiteSpace(sharePath))
+        {
+            return null;
+        }
+
+        return SmbShareManager.FindShareWorkinShareByPath(sharePath);
+    }
+
+    private void LogStartupShareState(StartupShareObservation observation)
+    {
+        SwkLogger.Info(
+            $"MainWindow.StartupShareState: stage={observation.Stage} observedAt={observation.ObservedAt:O} " +
+            $"persistedOpen={observation.PersistedWasOpen} persistedShopFolder={observation.PersistedShopFolder ?? "-"} " +
+            $"trayStatusReceived={observation.TrayStatusReceived} trayStatusOpen={observation.TrayStatusOpen} " +
+            $"trayStatusFolder={observation.TrayStatusFolder ?? "-"} effectiveShopFolder={observation.EffectiveShopFolder ?? "-"} " +
+            $"windowsShareExists={observation.WindowsShareExists} windowsShareName={observation.WindowsShareName ?? "-"} " +
+            $"windowsSharePath={observation.WindowsSharePath ?? "-"}");
+    }
+
+    private void LogStartupObservationChange(
+        StartupShareObservation previous,
+        StartupShareObservation current)
+    {
+        bool changed =
+            previous.TrayStatusReceived != current.TrayStatusReceived ||
+            previous.TrayStatusOpen != current.TrayStatusOpen ||
+            !string.Equals(previous.TrayStatusFolder, current.TrayStatusFolder, StringComparison.OrdinalIgnoreCase) ||
+            previous.WindowsShareExists != current.WindowsShareExists ||
+            !string.Equals(previous.WindowsShareName, current.WindowsShareName, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(previous.WindowsSharePath, current.WindowsSharePath, StringComparison.OrdinalIgnoreCase);
+
+        if (!changed)
+        {
+            SwkLogger.Info(
+                $"MainWindow.StartupShareObservationStable: from={previous.Stage} to={current.Stage} " +
+                $"effectiveShopFolder={current.EffectiveShopFolder ?? "-"}");
+            return;
+        }
+
+        SwkLogger.Warn(
+            $"MainWindow.StartupShareObservationChanged: from={previous.Stage} to={current.Stage} " +
+            $"trayStatusReceived={previous.TrayStatusReceived}->{current.TrayStatusReceived} " +
+            $"trayStatusOpen={previous.TrayStatusOpen}->{current.TrayStatusOpen} " +
+            $"trayStatusFolder={previous.TrayStatusFolder ?? "-"}->{current.TrayStatusFolder ?? "-"} " +
+            $"windowsShareExists={previous.WindowsShareExists}->{current.WindowsShareExists} " +
+            $"windowsShareName={previous.WindowsShareName ?? "-"}->{current.WindowsShareName ?? "-"} " +
+            $"windowsSharePath={previous.WindowsSharePath ?? "-"}->{current.WindowsSharePath ?? "-"}");
+    }
+
+    private bool TryReconcileStartupShareState(
+        bool persistedWasOpen,
+        StartupShareObservation observation)
+    {
+        if (!observation.WindowsShareExists || string.IsNullOrWhiteSpace(observation.WindowsSharePath) || _isShopOpen)
+        {
+            return false;
+        }
+
+        if (!persistedWasOpen)
+        {
+            SwkLogger.Info(
+                $"MainWindow.StartupShareMismatch: persistedOpen=false trayOpen={observation.TrayStatusOpen} " +
+                $"trayStatusReceived={observation.TrayStatusReceived} stage={observation.Stage} " +
+                $"but Windows share exists shareName={observation.WindowsShareName ?? "-"} " +
+                $"path={observation.WindowsSharePath}; action=keep-closed");
+            return false;
+        }
+
+        SwkLogger.Warn(
+            $"MainWindow.StartupShareMismatch: persistedOpen=true trayOpen={observation.TrayStatusOpen} " +
+            $"trayStatusReceived={observation.TrayStatusReceived} stage={observation.Stage} " +
+            $"but startup still resolved closed while Windows share exists shareName={observation.WindowsShareName ?? "-"} " +
+            $"path={observation.WindowsSharePath}; action=promote-open");
+
+        _shopFolder = observation.WindowsSharePath;
+        MyShopTextBox.Text = _shopFolder;
+        string fallbackShareName = DeriveShareName(_shopFolder);
+        bool traySyncOk = _pipeClient.SyncTrayShopOpened(
+            _shopFolder,
+            observation.WindowsShareName ?? fallbackShareName,
+            (int)_shareAccessRight);
+        SwkLogger.Info(
+            $"MainWindow.StartupShareMismatch correction: traySyncOk={traySyncOk} " +
+            $"shareName={observation.WindowsShareName ?? fallbackShareName} shopFolder={_shopFolder}");
+        return true;
     }
 
     private async Task<bool> EnsureTrayConnectedAsync()
@@ -2080,6 +2282,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void BrowseButton_Click(object sender, RoutedEventArgs e)
     {
+        string? currentFolder = _shopFolder;
+        SwkLogger.Info(
+            $"ShopFolderSelection.Start: currentFolder={currentFolder ?? "-"} " +
+            $"currentExists={(!string.IsNullOrWhiteSpace(currentFolder) && Directory.Exists(currentFolder))} isShopOpen={_isShopOpen}");
         using Forms.FolderBrowserDialog dialog = new()
         {
             Description = "あなたのお店にする場所を選ぶ",
@@ -2089,10 +2295,12 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (dialog.ShowDialog() != Forms.DialogResult.OK)
         {
+            SwkLogger.Info($"ShopFolderSelection.Canceled: currentFolder={currentFolder ?? "-"}");
             return;
         }
 
         string selected = dialog.SelectedPath;
+        SwkLogger.Info($"ShopFolderSelection.Picked: currentFolder={currentFolder ?? "-"} selectedFolder={selected}");
         bool isSameAsCurrent = !string.IsNullOrWhiteSpace(_shopFolder) &&
             string.Equals(
                 Path.GetFullPath(selected).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
@@ -2101,6 +2309,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         if (isSameAsCurrent)
         {
+            SwkLogger.Info($"ShopFolderSelection.NoChange: currentFolder={currentFolder ?? "-"} selectedFolder={selected}");
             return;
         }
 
@@ -2115,12 +2324,17 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 MessageBoxResult.No);
             if (confirm != MessageBoxResult.Yes)
             {
+                SwkLogger.Info($"ShopFolderSelection.DesktopRejected: selectedFolder={selected}");
                 return;
             }
+
+            SwkLogger.Info($"ShopFolderSelection.DesktopConfirmed: selectedFolder={selected}");
         }
 
         if (_isShopOpen)
         {
+            SwkLogger.Info(
+                $"ShopFolderSelection.Apply: mode=switch-open previousFolder={currentFolder ?? "-"} selectedFolder={selected}");
             SwitchShopFolder(selected);
         }
         else
@@ -2128,20 +2342,33 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _shopFolder = selected;
             MyShopTextBox.Text = _shopFolder;
             SaveSettings();
+            SwkLogger.Info(
+                $"ShopFolderSelection.Apply: mode=set-closed previousFolder={currentFolder ?? "-"} finalFolder={_shopFolder}");
             UpdateShopState(false);
         }
     }
 
     private async void SwitchShopFolder(string newFolder)
     {
+        SwkLogger.Info(
+            $"ShopFolderSwitch.Start: currentFolder={_shopFolder ?? "-"} newFolder={newFolder} " +
+            $"newFolderExists={Directory.Exists(newFolder)} isShopOpen={_isShopOpen} " +
+            $"persistedOpen={_wasOpenAtLastShutdown}");
         if (!Directory.Exists(newFolder))
         {
             await CloseShop();
+            SwkLogger.Warn($"ShopFolderSwitch.MissingTarget: newFolder={newFolder}");
             UpdateShopState(false, "その場所が見つかりません。");
             return;
         }
 
+        SwkLogger.Info(
+            $"ShopFolderSwitch.BeforeClose: currentFolder={_shopFolder ?? "-"} targetFolder={newFolder} " +
+            $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
         await CloseShop();
+        SwkLogger.Info(
+            $"ShopFolderSwitch.AfterClose: previousFolder={_shopFolder ?? "-"} targetFolder={newFolder} " +
+            $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
         _folderSizeCache.Clear();
         _subfolderCountCache.Clear();
         _backStack.Clear();
@@ -2150,8 +2377,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _shopFolder = newFolder;
         MyShopTextBox.Text = _shopFolder;
         SaveSettings();
+        SwkLogger.Info(
+            $"ShopFolderSwitch.Reopen: finalFolder={_shopFolder} isShopOpen={_isShopOpen} " +
+            $"persistedOpen={_wasOpenAtLastShutdown}");
 
         await OpenShop();
+        SwkLogger.Info(
+            $"ShopFolderSwitch.AfterOpen: finalFolder={_shopFolder ?? "-"} isShopOpen={_isShopOpen} " +
+            $"persistedOpen={_wasOpenAtLastShutdown}");
     }
 
     private void ShopDoorButton_Click(object sender, RoutedEventArgs e)
@@ -2170,6 +2403,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async void ExecuteOpenShop()
     {
+        SwkLogger.Info(
+            $"ShopOpenButton.Click: shopFolder={_shopFolder ?? "-"} isShopOpen={_isShopOpen} " +
+            $"shareAccessRight={_shareAccessRight}");
         await OpenShop();
     }
 
@@ -4336,6 +4572,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     ModeLabel = modeLabel,
                     SourcePath = sourcePath,
                     DestinationFolder = destinationFolder,
+                    IsUnderFolder = IsUnderFolder,
                     BeforeWrite = SuppressExternalChangeNotifications,
                 })))
         {
@@ -4363,6 +4600,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     ModeLabel = modeLabel,
                     SourcePath = sourcePath,
                     DestinationFolder = destinationFolder,
+                    IsUnderFolder = IsUnderFolder,
                     BeforeWrite = SuppressExternalChangeNotifications,
                 }));
 
@@ -5757,6 +5995,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task OpenShop()
     {
+        SwkLogger.Info(
+            $"OpenShop.Start: shopFolder={_shopFolder ?? "-"} isShopOpen={_isShopOpen} " +
+            $"persistedOpen={_wasOpenAtLastShutdown} shareAccessRight={_shareAccessRight}");
         if (string.IsNullOrWhiteSpace(_shopFolder))
         {
             const string emptyMsg = "共有する場所を選んでください。";
@@ -5795,9 +6036,13 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             SwkLogger.Info($"OpenShop: importedManifest={imported}");
         }
         List<SMB.PermissionRestoreEntry>? restoreEntries = BuildRestoreEntries(root, restoreMode);
+        SwkLogger.Info(
+            $"OpenShop.Input: shopFolder={_shopFolder} root={root} shareName={shareName} " +
+            $"restoreMode={restoreMode} restoreEntryCount={(restoreEntries?.Count ?? 0)} shareAccessRight={_shareAccessRight}");
 
         if (_isAdminWorkerRunning)
         {
+            SwkLogger.Info("OpenShop blocked before admin: reason=AdminWorkerAlreadyRunning");
             SetAdminWorkerStatus("管理者権限の処理中です。しばらくお待ちください。");
             return;
         }
@@ -5814,6 +6059,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
             try
             {
+                SwkLogger.Info(
+                    $"OpenShop.AdminCall: phase=initial shopFolder={shopFolder} shareName={shareName} " +
+                    $"sharedOff=False restoreEntryCount={(restoreEntries?.Count ?? 0)}");
                 outcome = await Task.Run(() => _pipeClient.OpenShop(shopFolder, shareName, shareName, (int)_shareAccessRight, false, restoreEntries));
             }
             finally
@@ -5834,6 +6082,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
                 try
                 {
+                    SwkLogger.Info(
+                        $"OpenShop.AdminCall: phase=retry-needs-ownership shopFolder={shopFolder} shareName={shareName} " +
+                        $"sharedOff=True restoreEntryCount={(restoreEntries?.Count ?? 0)}");
                     outcome = await Task.Run(() => _pipeClient.OpenShop(shopFolder, shareName, shareName, (int)_shareAccessRight, true, restoreEntries));
                 }
                 finally
@@ -5892,8 +6143,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             _isShopOpen = true;
             _wasOpenAtLastShutdown = true;
-            _pipeClient.SyncTrayShopOpened(shopFolder, shareName, (int)_shareAccessRight);
+            bool traySyncOk = _pipeClient.SyncTrayShopOpened(shopFolder, shareName, (int)_shareAccessRight);
+            SwkLogger.Info(
+                $"OpenShop.SuccessState: shopFolder={shopFolder} shareName={shareName} " +
+                $"traySyncOk={traySyncOk} isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
             SaveSettings();
+            SwkLogger.Info(
+                $"OpenShop.SettingsSaved: shopFolder={shopFolder} isShopOpen={_isShopOpen} " +
+                $"persistedOpen={_wasOpenAtLastShutdown}");
 
             if (restoreMode == ShopRestoreMode.NormalizeSharedFolderOnly)
             {
@@ -5906,6 +6163,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             await Task.Delay(500);
             SetAdminWorkerStatus("");
             UpdateShopState(true);
+            SwkLogger.Info(
+                $"OpenShop.Complete: shopFolder={shopFolder} shareName={shareName} " +
+                $"currentMode={_currentMode} isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
             if (_currentMode == DisplayMode.Shop)
             {
                 NavigateTo(shopFolder, addHistory: false, clearForward: true);
@@ -6114,6 +6374,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async Task CloseShop(bool removeSmbShare = true)
     {
+        SwkLogger.Info(
+            $"CloseShop.Start: shopFolder={_shopFolder ?? "-"} removeSmbShare={removeSmbShare} " +
+            $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
         DisposeWatcher();
         _pollingTimer.Stop();
         CancelDeferredRefresh();
@@ -6141,24 +6404,39 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 BrowseButton.IsEnabled = false;
                 try
                 {
-                    SetAdminWorkerStatus("管理者権限の確認画面が表示されています。\n許可すると共有設定を続行します。");
-                    await Task.Delay(100);
-                    SetAdminWorkerStatus("管理者権限で共有設定を確認しています...");
+                    SetAdminWorkerStatus("共有を閉じています...");
                     Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+                    AdminCommandResponse closeResponse;
                     try
                     {
                         string shareName = DeriveShareName(shopFolder);
-                        await Task.Run(() => _pipeClient.CloseShop(shopFolder, shareName));
+                        closeResponse = await Task.Run(() => _pipeClient.CloseShop(shopFolder, shareName));
+                        SwkLogger.Info(
+                            $"CloseShop.CommandResult: shopFolder={shopFolder} shareName={shareName} " +
+                            $"ok={closeResponse.Ok} errorCode={closeResponse.ErrorCode} " +
+                            $"errorMessage={closeResponse.ErrorMessage ?? "-"}");
                     }
                     finally
                     {
                         Mouse.OverrideCursor = null;
                     }
 
-                    SetAdminWorkerStatus("共有設定が完了しました。");
+                    if (!closeResponse.Ok)
+                    {
+                        _isShopOpen = true;
+                        ReinitializeShopChangeMonitoring();
+                        SetAdminWorkerStatus(string.Empty);
+                        UpdateShopState(true, closeResponse.ErrorMessage ?? "共有終了処理に失敗しました。");
+                        return;
+                    }
+
+                    SetAdminWorkerStatus("共有を閉じました。");
                     await Task.Delay(500);
                     SetAdminWorkerStatus("");
-                    _pipeClient.SyncTrayShopClosed();
+                    bool traySyncOk = _pipeClient.SyncTrayShopClosed();
+                    SwkLogger.Info(
+                        $"CloseShop.TraySync: shopFolder={shopFolder} traySyncOk={traySyncOk} " +
+                        $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
                 }
                 finally
                 {
@@ -6183,6 +6461,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _wasOpenAtLastShutdown = preserveShareState;
         SaveSettings();
+        SwkLogger.Info(
+            $"CloseShop.SettingsSaved: shopFolder={_shopFolder ?? "-"} wasOpen={wasOpen} " +
+            $"removeSmbShare={removeSmbShare} preserveShareState={preserveShareState} " +
+            $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
 
         if (!preserveShareState)
         {
@@ -6192,6 +6474,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             UpdateShopState(true);
         }
+
+        SwkLogger.Info(
+            $"CloseShop.Complete: shopFolder={_shopFolder ?? "-"} removeSmbShare={removeSmbShare} " +
+            $"wasOpen={wasOpen} preserveShareState={preserveShareState} " +
+            $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
     }
 
     private void DisposeWatcher()
@@ -9341,18 +9628,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void SetShopRefreshAttentionNeeded(bool needed)
     {
-        _shopRefreshAttentionNeeded = needed;
-        if (!needed)
-        {
-            _skipNextShopRefreshAttentionClear = false;
-        }
-
-        UpdateRefreshButtonHighlight();
     }
 
     private void RefreshShopRefreshAttentionForCurrentTarget()
     {
-        SetShopRefreshAttentionNeeded(ShouldHighlightRefreshButtonForCurrentTarget());
     }
 
     private bool ShouldHighlightRefreshButtonForCurrentTarget()
@@ -9446,16 +9725,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             return;
         }
 
-        if (_shopRefreshAttentionNeeded)
-        {
-            RefreshButton.Background = ShopRefreshAttentionBackgroundBrush;
-            RefreshButton.BorderBrush = ShopRefreshAttentionBorderBrush;
-        }
-        else
-        {
-            RefreshButton.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
-            RefreshButton.ClearValue(System.Windows.Controls.Control.BorderBrushProperty);
-        }
+        RefreshButton.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        RefreshButton.ClearValue(System.Windows.Controls.Control.BorderBrushProperty);
     }
 
     private void TopButton_Click(object sender, RoutedEventArgs e)

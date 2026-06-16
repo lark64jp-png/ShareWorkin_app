@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 
 namespace ShareWorkin.SMB;
@@ -185,6 +186,22 @@ $out | ConvertTo-Json -Compress -Depth 4
         }
     }
 
+    public static ShareWorkinShareInfo? FindShareWorkinShareByPath(string folderPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(folderPath);
+        string normalizedTarget = NormalizeSharePath(folderPath);
+
+        foreach (ShareWorkinShareInfo share in ListShareWorkinShares())
+        {
+            if (string.Equals(NormalizeSharePath(share.Path), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+            {
+                return share;
+            }
+        }
+
+        return null;
+    }
+
     public static bool RemoveAllShareWorkinShares()
     {
         IReadOnlyList<ShareWorkinShareInfo> shares = ListShareWorkinShares();
@@ -206,6 +223,19 @@ $out | ConvertTo-Json -Compress -Depth 4
             return description[DescriptionPrefix.Length..].TrimStart();
         }
         return string.Empty;
+    }
+
+    private static string NormalizeSharePath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch
+        {
+            return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
     }
 
     private static string EscapeSingleQuotes(string value) => value.Replace("'", "''");

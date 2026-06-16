@@ -71,6 +71,7 @@ public sealed class PlaceExternalItemRequest
     public required string ModeLabel { get; init; }
     public required string SourcePath { get; init; }
     public required string DestinationFolder { get; init; }
+    public required Func<string, string, bool> IsUnderFolder { get; init; }
     public required Action BeforeWrite { get; init; }
 }
 
@@ -103,6 +104,24 @@ public sealed class CreateFolderRequest
 
 public static class ExplorerActionService
 {
+    private static void LogPathDecision(
+        string modeLabel,
+        string action,
+        string sourcePath,
+        string destinationFolder,
+        bool sourceIsDirectory,
+        bool sourceIsFile,
+        string sourceParent,
+        bool sameLocation,
+        bool destinationUnderSource)
+    {
+        SwkLogger.Info(
+            $"Explorer[{modeLabel}]: {action} decision " +
+            $"source={sourcePath} dest={destinationFolder} sourceIsDirectory={sourceIsDirectory} " +
+            $"sourceIsFile={sourceIsFile} sourceParent={sourceParent} sameLocation={sameLocation} " +
+            $"destUnderSource={destinationUnderSource}");
+    }
+
     public static ExplorerActionResult ValidateMoveTarget(MoveItemRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.SourcePath) || !Directory.Exists(request.DestinationFolder))
@@ -131,10 +150,22 @@ public static class ExplorerActionService
         }
 
         string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
-        if (string.Equals(
-                Path.GetFullPath(sourceParent),
-                Path.GetFullPath(request.DestinationFolder),
-                StringComparison.OrdinalIgnoreCase))
+        bool sameLocation = string.Equals(
+            Path.GetFullPath(sourceParent),
+            Path.GetFullPath(request.DestinationFolder),
+            StringComparison.OrdinalIgnoreCase);
+        bool destinationUnderSource = sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath);
+        LogPathDecision(
+            request.ModeLabel,
+            "Move validation",
+            request.SourcePath,
+            request.DestinationFolder,
+            sourceIsDirectory,
+            sourceIsFile,
+            sourceParent,
+            sameLocation,
+            destinationUnderSource);
+        if (sameLocation)
         {
             return new ExplorerActionResult
             {
@@ -158,7 +189,7 @@ public static class ExplorerActionService
                 note: $"移動元: {sourceParent}");
         }
 
-        if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
+        if (destinationUnderSource)
         {
             return Blocked("Move", "その中へは移せません。",
                 $"Explorer[{request.ModeLabel}]: Move validation blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
@@ -219,10 +250,22 @@ public static class ExplorerActionService
         }
 
         string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
-        if (string.Equals(
-                Path.GetFullPath(sourceParent),
-                Path.GetFullPath(request.DestinationFolder),
-                StringComparison.OrdinalIgnoreCase))
+        bool sameLocation = string.Equals(
+            Path.GetFullPath(sourceParent),
+            Path.GetFullPath(request.DestinationFolder),
+            StringComparison.OrdinalIgnoreCase);
+        bool destinationUnderSource = sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath);
+        LogPathDecision(
+            request.ModeLabel,
+            "Copy validation",
+            request.SourcePath,
+            request.DestinationFolder,
+            sourceIsDirectory,
+            sourceIsFile,
+            sourceParent,
+            sameLocation,
+            destinationUnderSource);
+        if (sameLocation)
         {
             return Blocked("Copy", "同じ場所にはコピーできません。",
                 $"Explorer[{request.ModeLabel}]: Copy validation blocked - same location: {request.SourcePath}",
@@ -239,7 +282,7 @@ public static class ExplorerActionService
                 note: $"コピー元: {sourceParent}");
         }
 
-        if (sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath))
+        if (destinationUnderSource)
         {
             return Blocked("Copy", "その中へはコピーできません。",
                 $"Explorer[{request.ModeLabel}]: Copy validation blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
@@ -292,12 +335,23 @@ public static class ExplorerActionService
                 pathText: request.DestinationFolder);
         }
 
-        // TODO: ValidateMoveTarget 等と同一ディレクトリチェックを共通化（将来課題）
         string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
-        if (string.Equals(
-                Path.GetFullPath(sourceParent),
-                Path.GetFullPath(request.DestinationFolder),
-                StringComparison.OrdinalIgnoreCase))
+        bool sameLocation = string.Equals(
+            Path.GetFullPath(sourceParent),
+            Path.GetFullPath(request.DestinationFolder),
+            StringComparison.OrdinalIgnoreCase);
+        bool destinationUnderSource = sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath);
+        LogPathDecision(
+            request.ModeLabel,
+            "Place validation",
+            request.SourcePath,
+            request.DestinationFolder,
+            sourceIsDirectory,
+            sourceIsFile,
+            sourceParent,
+            sameLocation,
+            destinationUnderSource);
+        if (sameLocation)
         {
             return new ExplorerActionResult
             {
@@ -310,6 +364,15 @@ public static class ExplorerActionService
                 TargetName = Path.GetFileName(request.SourcePath),
                 PathText = sourceParent,
             };
+        }
+
+        if (destinationUnderSource)
+        {
+            return Blocked("Place", "その中へは置けません。",
+                $"Explorer[{request.ModeLabel}]: Place validation blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"配置元: {sourceParent}");
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);
@@ -737,6 +800,27 @@ public static class ExplorerActionService
                 $"Explorer[{request.ModeLabel}]: Place blocked - source not found: {request.SourcePath}",
                 targetName: Path.GetFileName(request.SourcePath),
                 pathText: request.DestinationFolder);
+        }
+
+        string sourceParent = Path.GetDirectoryName(request.SourcePath) ?? string.Empty;
+        bool destinationUnderSource = sourceIsDirectory && request.IsUnderFolder(request.DestinationFolder, request.SourcePath);
+        LogPathDecision(
+            request.ModeLabel,
+            "Place execute",
+            request.SourcePath,
+            request.DestinationFolder,
+            sourceIsDirectory,
+            sourceIsFile,
+            sourceParent,
+            sameLocation: false,
+            destinationUnderSource);
+        if (destinationUnderSource)
+        {
+            return Blocked("Place", "その中へは置けません。",
+                $"Explorer[{request.ModeLabel}]: Place blocked - destination is under source: {request.SourcePath} -> {request.DestinationFolder}",
+                targetName: Path.GetFileName(request.SourcePath),
+                pathText: request.DestinationFolder,
+                note: $"配置元: {sourceParent}");
         }
 
         string sourceName = Path.GetFileName(request.SourcePath);

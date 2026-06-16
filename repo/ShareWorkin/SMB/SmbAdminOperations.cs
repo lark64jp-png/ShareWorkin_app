@@ -7,6 +7,28 @@ namespace ShareWorkin.SMB;
 
 public static class SmbAdminOperations
 {
+    private static void LogOpenShopDecision(
+        AdminCommandRequest request,
+        string stage,
+        string shopRootPath,
+        string shareName,
+        bool? needsOwnership = null,
+        bool? canRepair = null,
+        bool? enumerationBlocked = null,
+        int? blockedCount = null,
+        bool? ourShareAlreadyExists = null,
+        bool? sameNamedShareExists = null,
+        bool? applyPermissionsOnOpen = null,
+        int? permissionEntryCount = null)
+    {
+        SwkLogger.Info(
+            $"AdminWorker.OpenShop decision corr={request.CorrelationId} stage={stage} root={shopRootPath} share={shareName} " +
+            $"needsOwnership={needsOwnership?.ToString() ?? "-"} canRepair={canRepair?.ToString() ?? "-"} " +
+            $"enumBlocked={enumerationBlocked?.ToString() ?? "-"} blockedCount={blockedCount?.ToString() ?? "-"} " +
+            $"ourShareAlreadyExists={ourShareAlreadyExists?.ToString() ?? "-"} sameNamedShareExists={sameNamedShareExists?.ToString() ?? "-"} " +
+            $"applyPermissionsOnOpen={applyPermissionsOnOpen?.ToString() ?? "-"} permissionEntryCount={permissionEntryCount?.ToString() ?? "-"}");
+    }
+
     public static AdminCommandResponse Execute(AdminCommandRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -63,8 +85,28 @@ public static class SmbAdminOperations
         }
 
         AclRepairPreflight aclRepair = SmbNtfsManager.PreflightAclRepair(shopRootPath);
+        LogOpenShopDecision(
+            request,
+            stage: "acl-preflight",
+            shopRootPath,
+            shareName,
+            needsOwnership: aclRepair.NeedsOwnershipChange,
+            canRepair: aclRepair.CanRepairWithOwnershipChange,
+            enumerationBlocked: aclRepair.EnumerationBlocked,
+            blockedCount: aclRepair.BlockedPaths.Count,
+            applyPermissionsOnOpen: request.ApplyPermissionsOnOpen,
+            permissionEntryCount: request.PermissionEntries?.Count ?? 0);
         if (aclRepair.NeedsOwnershipChange)
         {
+            LogOpenShopDecision(
+                request,
+                stage: "ownership-required",
+                shopRootPath,
+                shareName,
+                needsOwnership: true,
+                canRepair: aclRepair.CanRepairWithOwnershipChange,
+                enumerationBlocked: aclRepair.EnumerationBlocked,
+                blockedCount: aclRepair.BlockedPaths.Count);
             if (!SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
             {
                 string message = aclRepair.BlockedPaths.Count > 0
@@ -75,6 +117,15 @@ public static class SmbAdminOperations
         }
         else if (!SmbNtfsManager.TakeOwnershipRecursive(shopRootPath))
         {
+            LogOpenShopDecision(
+                request,
+                stage: "ownership-align-failed",
+                shopRootPath,
+                shareName,
+                needsOwnership: false,
+                canRepair: aclRepair.CanRepairWithOwnershipChange,
+                enumerationBlocked: aclRepair.EnumerationBlocked,
+                blockedCount: aclRepair.BlockedPaths.Count);
             return Fail(request, AdminErrorCode.OwnershipRepairFailed, "お店のアクセス設定を整えられませんでした。");
         }
 
@@ -85,29 +136,67 @@ public static class SmbAdminOperations
 
         bool ourShareAlreadyExists = SmbShareManager.ListShareWorkinShares()
             .Any(s => string.Equals(s.Name, shareName, StringComparison.OrdinalIgnoreCase));
+        LogOpenShopDecision(
+            request,
+            stage: "shareworkin-share-scan",
+            shopRootPath,
+            shareName,
+            ourShareAlreadyExists: ourShareAlreadyExists,
+            applyPermissionsOnOpen: request.ApplyPermissionsOnOpen,
+            permissionEntryCount: request.PermissionEntries?.Count ?? 0);
 
         if (!ourShareAlreadyExists)
         {
-            if (SmbShareManager.ShareExists(shareName))
+            bool sameNamedShareExists = SmbShareManager.ShareExists(shareName);
+            LogOpenShopDecision(
+                request,
+                stage: "share-name-scan",
+                shopRootPath,
+                shareName,
+                ourShareAlreadyExists: false,
+                sameNamedShareExists: sameNamedShareExists);
+            if (sameNamedShareExists)
             {
                 SmbNtfsManager.RevokeSwkGuest(shopRootPath);
                 return Fail(request, AdminErrorCode.ShareNameConflict, "この名前は別のお店で使われているようです。お店の名前を変えてください。");
             }
 
+            LogOpenShopDecision(
+                request,
+                stage: "create-share",
+                shopRootPath,
+                shareName,
+                ourShareAlreadyExists: false,
+                sameNamedShareExists: false);
             if (!SmbShareManager.CreateShare(shareName, shopRootPath, request.ProfileLabel ?? shareName))
             {
                 SmbNtfsManager.RevokeSwkGuest(shopRootPath);
                 return Fail(request, AdminErrorCode.ShareCreateFailed, "お店を開くのに失敗しました。");
             }
         }
-        else if (!SmbShareManager.RepairShareDefinition(shareName, shopRootPath, request.ProfileLabel ?? shareName))
+        else
         {
-            SmbNtfsManager.RevokeSwkGuest(shopRootPath);
-            return Fail(request, AdminErrorCode.ShareRepairFailed, "お店の入口を整え直せませんでした。");
+            LogOpenShopDecision(
+                request,
+                stage: "repair-share",
+                shopRootPath,
+                shareName,
+                ourShareAlreadyExists: true);
+            if (!SmbShareManager.RepairShareDefinition(shareName, shopRootPath, request.ProfileLabel ?? shareName))
+            {
+                SmbNtfsManager.RevokeSwkGuest(shopRootPath);
+                return Fail(request, AdminErrorCode.ShareRepairFailed, "お店の入口を整え直せませんでした。");
+            }
         }
 
         SmbShareManager.RevokeEveryone(shareName);
         ShareAccessRight accessRight = request.AccessRight == 1 ? ShareAccessRight.Read : ShareAccessRight.Full;
+        LogOpenShopDecision(
+            request,
+            stage: "grant-swkguest",
+            shopRootPath,
+            shareName,
+            ourShareAlreadyExists: ourShareAlreadyExists);
         if (!SmbShareManager.GrantSwkGuest(shareName, accessRight))
         {
             if (!ourShareAlreadyExists)
@@ -121,6 +210,13 @@ public static class SmbAdminOperations
 
         if (request.ApplyPermissionsOnOpen)
         {
+            LogOpenShopDecision(
+                request,
+                stage: "apply-permissions-on-open",
+                shopRootPath,
+                shareName,
+                applyPermissionsOnOpen: true,
+                permissionEntryCount: request.PermissionEntries?.Count ?? 0);
             AdminCommandResponse? permResult = ApplyPermissionsOnOpen(request, shopRootPath, request.PermissionEntries);
             if (permResult != null) return permResult;
         }
@@ -305,12 +401,30 @@ public static class SmbAdminOperations
         AdminCommandRequest request,
         AdminErrorCode errorCode,
         string message,
-        IReadOnlyList<string>? blockedPaths = null) => new()
+        IReadOnlyList<string>? blockedPaths = null)
     {
-        Ok = false,
-        CorrelationId = request.CorrelationId,
-        ErrorCode = errorCode,
-        ErrorMessage = message,
-        BlockedPaths = blockedPaths?.ToList()
-    };
+        LogFailure(request, errorCode, message, blockedPaths);
+        return new AdminCommandResponse
+        {
+            Ok = false,
+            CorrelationId = request.CorrelationId,
+            ErrorCode = errorCode,
+            ErrorMessage = message,
+            BlockedPaths = blockedPaths?.ToList()
+        };
+    }
+
+    private static void LogFailure(
+        AdminCommandRequest request,
+        AdminErrorCode errorCode,
+        string message,
+        IReadOnlyList<string>? blockedPaths)
+    {
+        int blockedCount = blockedPaths?.Count ?? 0;
+        string sample = blockedPaths == null
+            ? string.Empty
+            : string.Join(" | ", blockedPaths.Where(path => !string.IsNullOrWhiteSpace(path)).Take(5));
+        SwkLogger.Warn(
+            $"AdminWorker.Fail corr={request.CorrelationId} cmd={request.Cmd} code={errorCode} blockedCount={blockedCount} message={message} sample={sample}");
+    }
 }
