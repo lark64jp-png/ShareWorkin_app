@@ -908,8 +908,8 @@ begin
 
   LblDescBoth := TLabel.Create(WizardForm);
   LblDescBoth.Parent := CustomPage.Surface;
-  LblDescBoth.Caption := '既存の ShareWorkin・設定・お友達アカウント・共有定義をすべて消し、白紙から入れ直します。.NET Desktop Runtime も同時に整えます。';
-  LblDescBoth.Font.Size := 8;
+  LblDescBoth.Caption := '既にインストールアプリがあれば一掃し再インストールされます';
+  LblDescBoth.Font.Size := 7;
   LblDescBoth.Left := 20;
   LblDescBoth.Top := Y;
   LblDescBoth.Width := PageWidth - 20;
@@ -928,8 +928,8 @@ begin
 
   LblDescApp := TLabel.Create(WizardForm);
   LblDescApp.Parent := CustomPage.Surface;
-  LblDescApp.Caption := '既存の設定・お店の鍵・保留物・お友達情報を引き継いだまま、ShareWorkin 本体のみを新しい版に置き換えます。';
-  LblDescApp.Font.Size := 8;
+  LblDescApp.Caption := '認証情報・自分の公開情報・利用者登録情報を引き継がない場合、更新ではなく実質的に新規状態で再構成されます';
+  LblDescApp.Font.Size := 7;
   LblDescApp.Left := 20;
   LblDescApp.Top := Y;
   LblDescApp.Width := PageWidth - 20;
@@ -938,7 +938,7 @@ begin
   CheckCarryIdentityData := TNewCheckBox.Create(WizardForm);
   CheckCarryIdentityData.Parent := CustomPage.Surface;
   CheckCarryIdentityData.Caption := '認証情報・自分の公開情報・利用者登録情報を引き継ぐ';
-  CheckCarryIdentityData.Font.Size := 8;
+  CheckCarryIdentityData.Font.Size := 7;
   CheckCarryIdentityData.Left := 20;
   CheckCarryIdentityData.Top := Y;
   CheckCarryIdentityData.Width := PageWidth - 20;
@@ -949,8 +949,8 @@ begin
 
   LblCarryIdentityDesc := TLabel.Create(WizardForm);
   LblCarryIdentityDesc.Parent := CustomPage.Surface;
-  LblCarryIdentityDesc.Caption := '既定では引き継ぎません。共有先・共有状態・権限状態・履歴・保留データは更新インストールでも引き継ぎません。';
-  LblCarryIdentityDesc.Font.Size := 8;
+  LblCarryIdentityDesc.Caption := '自分の共有は再設定が必要なほかアプリ起動時再設定の確認が必要です';
+  LblCarryIdentityDesc.Font.Size := 7;
   LblCarryIdentityDesc.Left := 40;
   LblCarryIdentityDesc.Top := Y;
   LblCarryIdentityDesc.Width := PageWidth - 40;
@@ -970,8 +970,8 @@ begin
 
   LblDescUninstall := TLabel.Create(WizardForm);
   LblDescUninstall.Parent := CustomPage.Surface;
-  LblDescUninstall.Caption := 'ShareWorkin をアンインストールし、設定・お店の鍵・保留物・お友達アカウント・共有定義をすべて消去します。';
-  LblDescUninstall.Font.Size := 8;
+  LblDescUninstall.Caption := 'ShareWorkinの関連情報を含めすべてを削除します';
+  LblDescUninstall.Font.Size := 7;
   LblDescUninstall.Left := 20;
   LblDescUninstall.Top := Y;
   LblDescUninstall.Width := PageWidth - 20;
