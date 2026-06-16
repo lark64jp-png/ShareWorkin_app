@@ -7774,6 +7774,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _effectiveParentPerm = FindEffectiveAncestorPermission(_currentFolder);
         ShopPermissionManifest? friendPermissionManifest = LoadFriendPermissionManifest();
+        if (_currentMode == DisplayMode.FriendShop)
+        {
+            SwkLogger.Debug($"Investigation.RefreshShopItems[FriendShop]: folder={_currentFolder} manifestGeneratedAt={friendPermissionManifest?.GeneratedAt ?? "null"} manifestEntries={friendPermissionManifest?.Entries.Count ?? 0}");
+        }
 
         try
         {
@@ -7906,24 +7910,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
     {
         if (manifest is null)
         {
+            SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: skip item={item.Name} reason=manifestNull");
             return;
         }
 
         string? root = GetCurrentRootPath();
         if (string.IsNullOrWhiteSpace(root))
         {
+            SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: skip item={item.Name} reason=rootBlank");
             return;
         }
 
         string relativePath = ToRelativeShopPath(root, item.FullPath);
         if (string.IsNullOrWhiteSpace(relativePath))
         {
+            SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: skip item={item.Name} reason=relativePathBlank root={root} fullPath={item.FullPath}");
             return;
         }
 
         ShopPermissionManifestEntry? entry = manifest.FindEffectiveEntry(relativePath);
         if (entry is null)
         {
+            SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: item={item.Name} relativePath={relativePath} entry=NOTFOUND manifestGeneratedAt={manifest.GeneratedAt} manifestEntries=[{string.Join(",", manifest.Entries.Select(e => e.RelativePath))}] -> fallback AllowedUsers={item.AllowedUsers.Count} IsReadOnly={item.IsReadOnly} IsSharedOff={item.IsSharedOff} ShareStatusText={item.ShareStatusText}");
             return;
         }
 
@@ -7932,6 +7940,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             item.IsSharedOff = true;
             item.IsReadOnly = false;
+            SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: item={item.Name} relativePath={relativePath} entry=({entry.RelativePath},users=[{string.Join(",", entry.Users)}],ro={entry.IsReadOnly},off={entry.IsSharedOff}) isAllowed={isAllowed} -> OFF ShareStatusText={item.ShareStatusText}");
             return;
         }
 
@@ -7942,6 +7951,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             item.AllowedUsers.Add(user);
         }
+        SwkLogger.Debug($"Investigation.ApplyFriendPermissionManifest: item={item.Name} relativePath={relativePath} entry=({entry.RelativePath},users=[{string.Join(",", entry.Users)}],ro={entry.IsReadOnly},off={entry.IsSharedOff}) -> AllowedUsers=[{string.Join(",", item.AllowedUsers)}] IsReadOnly={item.IsReadOnly} IsSharedOff={item.IsSharedOff} ShareStatusText={item.ShareStatusText}");
     }
 
     private bool CanSelectFriendMoveDestination(string folderPath, ShopPermissionManifest? manifest)
