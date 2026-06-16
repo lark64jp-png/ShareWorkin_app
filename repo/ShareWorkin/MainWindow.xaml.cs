@@ -8903,13 +8903,21 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         ShopPermissionManifest manifest = ShopPermissionManifest.Load(root);
         bool changed = false;
 
-        if (removeSourceEntry)
+        // 移動元の有効エントリ(継承含む)の AllowedMachineNames を先に取得する。
+        // 自前の ResolveAllowedMachineNames は本器の FriendsRepository を使うため
+        // 本器自身や東芝側で登録済みの機械名が抜け落ちる場合がある。
+        // 移動元の manifest エントリが持つ機械名をそのまま引き継ぐことで
+        // 移動後も同じ相手に見えるようにする。
+        string sourceRelative = ToRelativeShopPath(root, sourcePath);
+        List<string>? sourceAllowedMachineNames = null;
+        if (!string.IsNullOrWhiteSpace(sourceRelative))
         {
-            string sourceRelative = ToRelativeShopPath(root, sourcePath);
-            if (!string.IsNullOrWhiteSpace(sourceRelative))
-            {
-                changed |= manifest.Entries.RemoveAll(e => IsSameRelativeShopPath(e.RelativePath, sourceRelative)) > 0;
-            }
+            sourceAllowedMachineNames = manifest.FindEffectiveEntry(sourceRelative)?.AllowedMachineNames;
+        }
+
+        if (removeSourceEntry && !string.IsNullOrWhiteSpace(sourceRelative))
+        {
+            changed |= manifest.Entries.RemoveAll(e => IsSameRelativeShopPath(e.RelativePath, sourceRelative)) > 0;
         }
 
         if (string.IsNullOrWhiteSpace(destinationRelative))
@@ -8926,7 +8934,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             {
                 RelativePath = destinationRelative,
                 Users = perm.Users.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-                AllowedMachineNames = ResolveAllowedMachineNames(perm.Users, FriendsRepository.LoadAll()),
+                AllowedMachineNames = sourceAllowedMachineNames ?? ResolveAllowedMachineNames(perm.Users, FriendsRepository.LoadAll()),
                 IsReadOnly = perm.IsReadOnly,
                 IsSharedOff = perm.IsSharedOff
             });
