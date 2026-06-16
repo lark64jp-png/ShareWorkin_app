@@ -178,6 +178,8 @@ public partial class MainWindow : Window
     private bool _externalDragDropInitialized;
     private System.Windows.Point _dragStartPoint;
     private ShopItem? _dragStartItem;
+    private HashSet<string>? _dragCandidatePaths;
+    private bool _shopItemsPointerPressed;
     private bool _isRubberBanding;
     private System.Windows.Point _rubberBandOrigin;
     private System.Windows.Threading.DispatcherTimer? _renameTimer;
@@ -3940,6 +3942,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _dragStartPoint = e.GetPosition(null);
         _dragStartItem = GetShopItemFromSource(e.OriginalSource as DependencyObject);
         _itemWasSelectedAtPress = false;
+        _dragCandidatePaths = null;
+        // アイテムを掴んでいる間は裏の自動再表示が一覧・選択を入れ替えないようにする
+        _shopItemsPointerPressed = _dragStartItem is not null;
 
         if (IsClickOnItemButton(e.OriginalSource as DependencyObject))
         {
@@ -3979,6 +3984,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 // 複数選択中のアイテムをクリック → D&D 開始まで選択解除を保留
                 _clickSelectionPending = true;
                 e.Handled = true;
+                // 掴んだ瞬間の選択をパスで記録（裏の定期リフレッシュでオブジェクト
+                // 参照が入れ替わっても、移動対象が緑色の選択からズレないようにする）
+                _dragCandidatePaths = CaptureSelectedShopItemPaths();
             }
         }
         else
@@ -4013,6 +4021,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void ShopItemsListView_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        _shopItemsPointerPressed = false;
         if (_suppressInternalDragUntilLeftButtonRelease)
         {
             _suppressInternalDragUntilLeftButtonRelease = false;
@@ -4082,10 +4091,15 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         CancelRenameTimer();
 
         List<ShopItem> itemsToDrag;
-        if (ShopItemsListView.SelectedItems.Contains(_dragStartItem))
+        if (_dragCandidatePaths is not null && _dragCandidatePaths.Contains(_dragStartItem.FullPath))
         {
-            itemsToDrag = ShopItemsListView.SelectedItems.Cast<ShopItem>()
-                .Where(i => !i.IsHoldFolder)
+            // 掴んだ瞬間にパスで記録した選択集合から再取得する。
+            // SelectedItems を直接参照すると、つかんだ直後にフレンドショップの
+            // 定期リフレッシュ(RestoreSelectedShopItems)が挟まった場合、
+            // _dragStartItem が古いオブジェクト参照のままになり Contains が
+            // 偽になって緑色の選択と移動対象がズレる(1個しか動かない)ため。
+            itemsToDrag = ShopItems
+                .Where(i => !i.IsHoldFolder && _dragCandidatePaths.Contains(i.FullPath))
                 .ToList();
         }
         else
@@ -4124,6 +4138,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             HideDragHint();
             ClearDropTargetHighlight();
             _dragStartItem = null;
+            _shopItemsPointerPressed = false;
         }
     }
 
@@ -7752,6 +7767,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private void RefreshShopItems()
     {
+        if (_shopItemsPointerPressed)
+        {
+            // アイテムを掴んでいる最中(クリック〜ドラッグ判定中)は一覧・選択を
+            // 入れ替えない。次の自動再表示タイミングで反映される。
+            SwkLogger.Debug("RefreshShopItems: skipped because an item is currently pressed");
+            return;
+        }
+
         CancelFolderSizeCalculation();
         if (_currentMode == DisplayMode.FriendShop)
             ResetFriendShopPollInterval();
@@ -8791,6 +8814,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 MoveHoldDisplayPermission(sourcePath, destinationPath);
                 SavePermissionMap();
             }
+            PublishFriendShopPermissionMove(sourcePath, destinationPath, null, removeSourceEntry);
             return false;
         }
 
@@ -8806,6 +8830,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
             _permissionMap[destinationPath] = effectiveSource.Value;
             SavePermissionMap();
+            PublishFriendShopPermissionMove(sourcePath, destinationPath, effectiveSource.Value, removeSourceEntry);
             string capturedDest = destinationPath;
             var capturedPerm = effectiveSource.Value;
             _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, capturedDest, capturedPerm.IsSharedOff, capturedPerm.IsReadOnly));
@@ -8825,18 +8850,80 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (effectiveDest == null)
         {
             SavePermissionMap();
+            PublishFriendShopPermissionMove(sourcePath, destinationPath, null, removeSourceEntry);
             return false;
         }
 
         _permissionMap[destinationPath] = effectiveDest.Value;
         SavePermissionMap();
         AppendPermissionChangedByMoveHistory(sourcePath, destinationPath, destinationFolder, effectiveSource, effectiveDest.Value, historySource);
+        PublishFriendShopPermissionMove(sourcePath, destinationPath, effectiveDest.Value, removeSourceEntry);
 
         string enforcedDestPath = destinationPath;
         var enforcedDestPerm = effectiveDest.Value;
         _ = Task.Run(() => _pipeClient.SetSubfolderPermission(_shopFolder!, enforcedDestPath, enforcedDestPerm.IsSharedOff, enforcedDestPerm.IsReadOnly));
         return true;
     }
+
+    // FriendShop(相手の共有)では _permissionMap はローカル台帳に過ぎず、
+    // 表示は相手フォルダー内の .swk_permissions.json を見て決まる。
+    // 移動による許可の決定(指定を保つ/移動先に揃える)をこのマニフェストにも
+    // 反映しないと、相手の元の許可元(親フォルダー等)から離れた途端に
+    // 表示が既定(全員)へ戻ってしまう。
+    private void PublishFriendShopPermissionMove(
+        string sourcePath,
+        string destinationPath,
+        (List<string> Users, bool IsReadOnly, bool IsSharedOff)? destinationPerm,
+        bool removeSourceEntry)
+    {
+        if (_currentMode != DisplayMode.FriendShop) return;
+
+        string? root = GetCurrentRootPath();
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return;
+
+        string destinationRelative = ToRelativeShopPath(root, destinationPath);
+        ShopPermissionManifest manifest = ShopPermissionManifest.Load(root);
+        bool changed = false;
+
+        if (removeSourceEntry)
+        {
+            string sourceRelative = ToRelativeShopPath(root, sourcePath);
+            if (!string.IsNullOrWhiteSpace(sourceRelative))
+            {
+                changed |= manifest.Entries.RemoveAll(e => IsSameRelativeShopPath(e.RelativePath, sourceRelative)) > 0;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(destinationRelative))
+        {
+            if (changed) ShopPermissionManifest.Save(root, manifest.Entries);
+            return;
+        }
+
+        changed |= manifest.Entries.RemoveAll(e => IsSameRelativeShopPath(e.RelativePath, destinationRelative)) > 0;
+
+        if (destinationPerm is { } perm && (perm.Users.Count > 0 || perm.IsReadOnly || perm.IsSharedOff))
+        {
+            manifest.Entries.Add(new ShopPermissionManifestEntry
+            {
+                RelativePath = destinationRelative,
+                Users = perm.Users.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                AllowedMachineNames = ResolveAllowedMachineNames(perm.Users, FriendsRepository.LoadAll()),
+                IsReadOnly = perm.IsReadOnly,
+                IsSharedOff = perm.IsSharedOff
+            });
+            changed = true;
+        }
+
+        if (changed && !ShopPermissionManifest.Save(root, manifest.Entries))
+        {
+            SwkLogger.Warn($"PublishFriendShopPermissionMove: save failed root={root} dest={destinationRelative}");
+        }
+    }
+
+    private static bool IsSameRelativeShopPath(string a, string b) =>
+        !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b) &&
+        string.Equals(a.Trim('\\', '/'), b.Trim('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     private void AppendPermissionChangedByMoveHistory(
         string sourcePath,
