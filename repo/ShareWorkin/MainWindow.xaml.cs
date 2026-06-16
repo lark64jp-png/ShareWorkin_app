@@ -7714,7 +7714,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
 
         _currentFolder = folderPath;
-        RefreshShopItems();
+        RefreshShopItems(ignorePointerPressedGuard: true);
         StartContentsSensor(folderPath);
         UpdateNavigationState();
     }
@@ -7765,9 +7765,9 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _friendShopPollTimer.Interval = PollingInterval;
     }
 
-    private void RefreshShopItems()
+    private void RefreshShopItems(bool ignorePointerPressedGuard = false)
     {
-        if (_shopItemsPointerPressed)
+        if (!ignorePointerPressedGuard && _shopItemsPointerPressed)
         {
             // アイテムを掴んでいる最中(クリック〜ドラッグ判定中)は一覧・選択を
             // 入れ替えない。次の自動再表示タイミングで反映される。
@@ -8803,6 +8803,24 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         (List<string> Users, bool IsReadOnly, bool IsSharedOff)? effectiveSource =
             GetDisplayedPermissionForPath(sourcePath, sourceParent);
+
+        // FriendShopモードでは _permissionMap にエントリがなくても
+        // manifest の継承権限（上位フォルダーのエントリ）で「指定」に見えている場合がある。
+        // その継承権限を effectiveSource に補完し、移動先でも保持されるようにする。
+        if (effectiveSource == null && _currentMode == DisplayMode.FriendShop)
+        {
+            string? manifestRoot = GetCurrentRootPath();
+            if (!string.IsNullOrWhiteSpace(manifestRoot))
+            {
+                string relSource = ToRelativeShopPath(manifestRoot, sourcePath);
+                ShopPermissionManifestEntry? inherited = ShopPermissionManifest.Load(manifestRoot).FindEffectiveEntry(relSource);
+                if (inherited != null && !inherited.IsSharedOff && inherited.Users.Count > 0)
+                {
+                    effectiveSource = (inherited.Users.ToList(), inherited.IsReadOnly, false);
+                    SwkLogger.Debug($"PreservePermissionOnArrival: effectiveSource補完 path={relSource} users=[{string.Join(",", inherited.Users)}] ro={inherited.IsReadOnly}");
+                }
+            }
+        }
 
         if (effectiveSource == null)
         {
