@@ -42,6 +42,44 @@ public partial class MainWindow : Window
         PreserveManagedPermissions,
         NormalizeSharedFolderOnly,
     }
+    private enum TrayUiStatusState
+    {
+        Hidden,
+        WaitingMarkOnly,
+        WaitingMessage,
+        StaleFallback,
+        Failed,
+        TimedOut,
+        InternalError,
+    }
+    private enum TrayUiResultCode
+    {
+        Success,
+        FallbackSuccess,
+        TimedOut,
+        Failed,
+        InternalError,
+    }
+    private enum TrayUiErrorReason
+    {
+        None,
+        TrayUnavailable,
+        Timeout,
+        AccessDenied,
+        TargetMismatch,
+        Cancelled,
+        InternalException,
+        Unknown,
+    }
+    private sealed record TrayCommandUiResponse(
+        TrayUiResultCode ResultCode,
+        TrayUiErrorReason ErrorReason = TrayUiErrorReason.None,
+        bool Retryable = false,
+        string? Detail = null);
+    private sealed class TrayRetryRequest
+    {
+        public required Func<bool, Task> ExecuteAsync { get; init; }
+    }
     internal const string InternalDragPathFormat = "ShareWorkin.InternalPath";
     internal const string InternalDragPathsFormat = "ShareWorkin.InternalPaths";
     private static readonly bool EnableExplorerOleDropTarget = true;
@@ -104,6 +142,8 @@ public partial class MainWindow : Window
     private static readonly TimeSpan NotificationQuietTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan TrayStatusBarMessageDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan TrayCommandTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan FriendReconnectRetryCooldown = TimeSpan.FromSeconds(8);
     private const int FriendShopOfflineMissThreshold = 2;
 
@@ -133,6 +173,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _pollingTimer;
     private readonly DispatcherTimer _notificationSupportRefreshTimer;
     private readonly DispatcherTimer _transientStatusTimer;
+    private readonly DispatcherTimer _trayStatusBarDelayTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly Dictionary<string, DateTime> _recentExternalReceiveAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _recentIncomingInteractionAt = new(StringComparer.OrdinalIgnoreCase);
@@ -226,6 +267,8 @@ public partial class MainWindow : Window
     private DateTime? _lastNotificationTestAt;
     private NotificationSupportState _notificationSupportState = NotificationSupportState.Unverified;
     private bool _isNotificationTestInProgress;
+    private bool _isTrayRequestInProgress;
+    private TrayRetryRequest? _lastRetryableTrayRequest;
     private const string NotificationSettingsAppId = SwkNotificationIdentity.AppUserModelId;
     private const int MaxNotificationRegistrationAttempts = 3;
     private int _processingDepth;
@@ -280,9 +323,13 @@ public partial class MainWindow : Window
         _transientStatusTimer = new DispatcherTimer { Interval = TransientStatusDuration };
         _transientStatusTimer.Tick += TransientStatusTimer_Tick;
 
+        _trayStatusBarDelayTimer = new DispatcherTimer { Interval = TrayStatusBarMessageDelay };
+        _trayStatusBarDelayTimer.Tick += TrayStatusBarDelayTimer_Tick;
+
         LoadSettings();
         LoadPermissionMap();
         NotificationModeComboBox.SelectionChanged += NotificationModeComboBox_SelectionChanged;
+        SetTrayStatusBarState(TrayUiStatusState.Hidden);
 
         // ExplorerTargetComboBox.SelectionChanged は XAML 側で登録済み (二重発火防止のため code-behind 登録は外す)
         InitializeExplorerDropdownForStartup();
@@ -2668,6 +2715,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
     private async void SendTestNotificationButton_Click(object sender, RoutedEventArgs e)
     {
+        await RunSendTestNotificationAsync(forceRefresh: false);
+    }
+
+    private async Task RunSendTestNotificationAsync(bool forceRefresh)
+    {
         if (_isNotificationTestInProgress)
         {
             return;
@@ -2675,22 +2727,28 @@ private static void ClearHiddenFolderAttribute(string folderPath)
 
         _isNotificationTestInProgress = true;
         SendTestNotificationButton.IsEnabled = false;
-        SwkLogger.Info("NotificationSettings.SendTestNotification requested");
+        SwkLogger.Info($"NotificationSettings.SendTestNotification requested forceRefresh={forceRefresh}");
         try
         {
             var initialSnapshot = await WaitForStableNotificationStateAsync();
             if (!initialSnapshot.WindowsEnabled)
             {
                 SwkLogger.Info("NotificationSettings.SendTestNotification blocked: windows notifications are off");
-                ShowTestNotificationFeedback("Windows通知をONにしてからテストを行ってください");
+                ShowTestNotificationFeedback("Windows通知がOFFになっているためテストを送れません");
                 RefreshNotificationSupportUi();
                 return;
             }
 
+            TrayRetryRequest retryRequest = new() { ExecuteAsync = RunSendTestNotificationAsync };
             if (!await EnsureTrayConnectedAsync())
             {
                 SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray connection unavailable");
-                SetTransientStatus("ShareWorkinTray に接続できませんでした。");
+                ApplyTrayCommandResponseToStatusBar(
+                    new TrayCommandUiResponse(
+                        TrayUiResultCode.Failed,
+                        TrayUiErrorReason.TrayUnavailable,
+                        Retryable: true),
+                    retryRequest);
                 RefreshNotificationSupportUi();
                 return;
             }
@@ -2705,15 +2763,14 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     SwkLogger.Info($"NotificationSettings.SendTestNotification phase=registration-notice attempt={attempt}");
                     registrationResult = ShowBalloonTipWithTrace(
                         "NotificationSettings.RegistrationNotice",
-                        "ShareWorkin 通知準備",
-                        "システムのアプリ認識確認をしています",
+                        "ShareWorkin 通知登録",
+                        "システムのアプリ通知設定をしていきます。",
                         _shopFolder);
                     SwkLogger.Info($"NotificationSettings.SendTestNotification registration attempt={attempt} delivery={registrationResult}");
 
                     if (registrationResult == NotificationCommandResult.Failed)
                     {
-                        string message = "通知表示確認の準備通知を送信できませんでした。少し待ってからもう一度お試しください。";
-                        ShowTestNotificationFeedback(message);
+                        ShowTestNotificationFeedback("通知表示確認・登録通知を送れませんでした。少し待ってからもう一度お試しください。");
                         RefreshNotificationSupportUi();
                         return;
                     }
@@ -2733,7 +2790,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (!currentSnapshot.WindowsEnabled)
             {
                 SwkLogger.Info("NotificationSettings.SendTestNotification blocked after wait: windows notifications are off");
-                ShowTestNotificationFeedback("Windows通知をONにしてからテストを行ってください");
+                ShowTestNotificationFeedback("Windows通知がOFFになっているためテストを送れません");
                 RefreshNotificationSupportUi();
                 return;
             }
@@ -2746,16 +2803,23 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 return;
             }
 
-            NotificationCommandResult testResult = await Task.Run(() => _pipeClient.SendTestNotification(_shopFolder));
-            if (testResult == NotificationCommandResult.Failed)
+            BeginTrayStatusBarRequest();
+            TrayCommandUiResponse trayResponse = await ExecuteTrayNotificationCommandAsync(
+                () => _pipeClient.SendTestNotification(_shopFolder));
+            ApplyTrayCommandResponseToStatusBar(trayResponse, retryRequest);
+            if (trayResponse.ResultCode is TrayUiResultCode.Failed or TrayUiResultCode.TimedOut or TrayUiResultCode.InternalError)
             {
                 SwkLogger.Warn("NotificationSettings.SendTestNotification failed: tray command was not acknowledged");
-                ShowTestNotificationFeedback("テスト通知を送信できませんでした。少し待ってからもう一度お試しください。");
+                ShowTestNotificationFeedback("テスト通知を送れませんでした。少し待ってからもう一度お試しください。");
                 RefreshNotificationSupportUi();
                 return;
             }
 
-            SwkLogger.Info($"NotificationSettings.SendTestNotification acknowledged by tray delivery={testResult}");
+            NotificationCommandResult testResult = trayResponse.ResultCode == TrayUiResultCode.FallbackSuccess
+                ? NotificationCommandResult.Fallback
+                : NotificationCommandResult.Toast;
+
+            SwkLogger.Info($"NotificationSettings.SendTestNotification acknowledged by tray delivery={testResult} forceRefresh={forceRefresh}");
             _testNotificationFeedbackCts?.Cancel();
             TestNotificationFeedbackTextBlock.Visibility = Visibility.Collapsed;
             _lastNotificationTestAt = DateTime.Now;
@@ -2767,11 +2831,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         }
         finally
         {
+            CompleteTrayStatusBarRequest();
             _isNotificationTestInProgress = false;
             SendTestNotificationButton.IsEnabled = true;
         }
     }
-
     private static async Task<NotificationStateSnapshot> WaitForStableNotificationStateAsync()
     {
         const int intervalMs = 200;
@@ -5927,6 +5991,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         StopFriendShopPolling();
         _transientStatusTimer.Stop();
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
+        _trayStatusBarDelayTimer.Stop();
+        _trayStatusBarDelayTimer.Tick -= TrayStatusBarDelayTimer_Tick;
         SwkLogger.Info("DoWindowClosingAsync: timers stopped");
         _pipeClient.Dispose();
         SwkLogger.Info("DoWindowClosingAsync: pipeClient disposed");
@@ -10113,6 +10179,201 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         foreach (string key in toRemove)
         {
             _subfolderCountCache.Remove(key);
+        }
+    }
+
+    private void SetTrayStatusBarState(
+        TrayUiStatusState state,
+        string? message = null,
+        bool showRetryButton = false)
+    {
+        System.Windows.Media.Brush markBrush = state switch
+        {
+            TrayUiStatusState.StaleFallback => new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 106, 0)),
+            TrayUiStatusState.Failed or TrayUiStatusState.TimedOut or TrayUiStatusState.InternalError
+                => new SolidColorBrush(System.Windows.Media.Color.FromRgb(166, 67, 52)),
+            _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(85, 107, 47))
+        };
+
+        TrayStatusBarMarkTextBlock.Foreground = markBrush;
+        TrayStatusBarMarkTextBlock.Visibility = state == TrayUiStatusState.Hidden
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        bool showMessage = !string.IsNullOrWhiteSpace(message);
+        TrayStatusBarMessageTextBlock.Text = showMessage ? message : string.Empty;
+        TrayStatusBarMessageTextBlock.Visibility = showMessage
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        TrayStatusBarRetryButton.Visibility = showRetryButton
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void BeginTrayStatusBarRequest()
+    {
+        _isTrayRequestInProgress = true;
+        _trayStatusBarDelayTimer.Stop();
+        SetTrayStatusBarState(TrayUiStatusState.WaitingMarkOnly);
+        _trayStatusBarDelayTimer.Start();
+    }
+
+    private void CompleteTrayStatusBarRequest()
+    {
+        _isTrayRequestInProgress = false;
+        _trayStatusBarDelayTimer.Stop();
+    }
+
+    private void TrayStatusBarDelayTimer_Tick(object? sender, EventArgs e)
+    {
+        _trayStatusBarDelayTimer.Stop();
+        if (_isTrayRequestInProgress)
+        {
+            SetTrayStatusBarState(
+                TrayUiStatusState.WaitingMessage,
+                "共有状態を確認しています...");
+        }
+    }
+
+    private void ApplyTrayCommandResponseToStatusBar(
+        TrayCommandUiResponse response,
+        TrayRetryRequest? retryRequest = null)
+    {
+        CompleteTrayStatusBarRequest();
+
+        switch (response.ResultCode)
+        {
+            case TrayUiResultCode.Success:
+                _lastRetryableTrayRequest = null;
+                SetTrayStatusBarState(TrayUiStatusState.Hidden);
+                return;
+
+            case TrayUiResultCode.FallbackSuccess:
+                if (response.Retryable && retryRequest is not null)
+                {
+                    _lastRetryableTrayRequest = retryRequest;
+                }
+
+                SetTrayStatusBarState(
+                    TrayUiStatusState.StaleFallback,
+                    response.Detail ?? "前回確認できた状態を表示しています。",
+                    showRetryButton: response.Retryable && retryRequest is not null);
+                return;
+
+            case TrayUiResultCode.TimedOut:
+                if (response.Retryable && retryRequest is not null)
+                {
+                    _lastRetryableTrayRequest = retryRequest;
+                }
+
+                SetTrayStatusBarState(
+                    TrayUiStatusState.TimedOut,
+                    response.Detail ?? "共有状態の確認がタイムアウトしました。",
+                    showRetryButton: response.Retryable && retryRequest is not null);
+                return;
+
+            case TrayUiResultCode.InternalError:
+                if (response.Retryable && retryRequest is not null)
+                {
+                    _lastRetryableTrayRequest = retryRequest;
+                }
+
+                SetTrayStatusBarState(
+                    TrayUiStatusState.InternalError,
+                    response.Detail ?? "共有状態の確認中に内部エラーが発生しました。",
+                    showRetryButton: response.Retryable && retryRequest is not null);
+                return;
+
+            case TrayUiResultCode.Failed:
+            default:
+                if (response.Retryable && retryRequest is not null)
+                {
+                    _lastRetryableTrayRequest = retryRequest;
+                }
+
+                string message = response.ErrorReason switch
+                {
+                    TrayUiErrorReason.AccessDenied => "共有状態を確認する権限がありません。",
+                    TrayUiErrorReason.TargetMismatch => "共有状態が現在の接続先と一致しません。",
+                    TrayUiErrorReason.Cancelled => "共有状態の確認を中止しました。",
+                    TrayUiErrorReason.TrayUnavailable => "ShareWorkinTray に接続できませんでした。",
+                    _ => response.Detail ?? "共有状態を確認できませんでした。"
+                };
+                SetTrayStatusBarState(
+                    TrayUiStatusState.Failed,
+                    message,
+                    showRetryButton: response.Retryable && retryRequest is not null);
+                return;
+        }
+    }
+
+    private async Task<TrayCommandUiResponse> ExecuteTrayNotificationCommandAsync(Func<NotificationCommandResult> command)
+    {
+        try
+        {
+            Task<NotificationCommandResult> commandTask = Task.Run(command);
+            Task completedTask = await Task.WhenAny(commandTask, Task.Delay(TrayCommandTimeout));
+            if (completedTask != commandTask)
+            {
+                return new TrayCommandUiResponse(
+                    TrayUiResultCode.TimedOut,
+                    TrayUiErrorReason.Timeout,
+                    Retryable: true);
+            }
+
+            NotificationCommandResult result = await commandTask;
+            return result switch
+            {
+                NotificationCommandResult.Toast => new TrayCommandUiResponse(TrayUiResultCode.Success),
+                NotificationCommandResult.Fallback => new TrayCommandUiResponse(
+                    TrayUiResultCode.FallbackSuccess,
+                    Retryable: true,
+                    Detail: "前回確認できた状態を表示しています。"),
+                _ => new TrayCommandUiResponse(
+                    TrayUiResultCode.Failed,
+                    TrayUiErrorReason.Unknown,
+                    Retryable: true)
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            return new TrayCommandUiResponse(
+                TrayUiResultCode.Failed,
+                TrayUiErrorReason.Cancelled,
+                Retryable: true);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"ExecuteTrayNotificationCommandAsync failed: {ex.GetType().Name}: {ex.Message}");
+            return new TrayCommandUiResponse(
+                TrayUiResultCode.InternalError,
+                TrayUiErrorReason.InternalException,
+                Retryable: true);
+        }
+    }
+
+    private async void TrayStatusBarRetryButton_Click(object sender, RoutedEventArgs e)
+    {
+        TrayRetryRequest? retryRequest = _lastRetryableTrayRequest;
+        if (retryRequest is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await retryRequest.ExecuteAsync(true);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TrayStatusBarRetryButton_Click failed: {ex.GetType().Name}: {ex.Message}");
+            ApplyTrayCommandResponseToStatusBar(
+                new TrayCommandUiResponse(
+                    TrayUiResultCode.InternalError,
+                    TrayUiErrorReason.InternalException,
+                    Retryable: true),
+                retryRequest);
         }
     }
 
