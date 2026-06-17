@@ -112,6 +112,52 @@ public sealed class UiPipeClient : IDisposable
         }
     }
 
+    public TrayCommandResponse<ShareSnapshotPayload>? GetShareSnapshot(
+        string? shareName,
+        string? shopRootPath,
+        bool forceRefresh,
+        int timeoutMs = 15000)
+    {
+        string requestId = Guid.NewGuid().ToString("N");
+        string? json = SendCommand(JsonSerializer.Serialize(new
+        {
+            cmd = "GET_SHARE_SNAPSHOT",
+            requestId,
+            shareName,
+            shopRootPath,
+            forceRefresh
+        }), timeoutMs);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            TrayCommandResponse<ShareSnapshotPayload>? response =
+                JsonSerializer.Deserialize<TrayCommandResponse<ShareSnapshotPayload>>(json);
+            if (response is null)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(response.RequestId) &&
+                !string.Equals(response.RequestId, requestId, StringComparison.Ordinal))
+            {
+                SwkLogger.Warn(
+                    $"UiPipeClient.GetShareSnapshot requestId mismatch: expected={requestId} actual={response.RequestId}");
+                return null;
+            }
+
+            return response;
+        }
+        catch (JsonException ex)
+        {
+            SwkLogger.Warn($"UiPipeClient.GetShareSnapshot parse failed: {ex.Message}");
+            return null;
+        }
+    }
+
     // Keep a long timeout because opening a share includes infrastructure checks and ACL repair.
     private const int OpenShopTimeoutMs = 120_000;
 

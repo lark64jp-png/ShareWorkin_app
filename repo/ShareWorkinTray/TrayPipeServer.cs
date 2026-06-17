@@ -191,6 +191,28 @@ internal sealed class TrayPipeSession : IDisposable
                     }));
                     break;
 
+                case "GET_SHARE_SNAPSHOT":
+                {
+                    GetShareSnapshotRequest request = new(
+                        root.TryGetProperty("requestId", out var requestIdElement) &&
+                        requestIdElement.ValueKind != JsonValueKind.Null
+                            ? requestIdElement.GetString()
+                            : null,
+                        root.TryGetProperty("shareName", out var shareNameElement) &&
+                        shareNameElement.ValueKind != JsonValueKind.Null
+                            ? shareNameElement.GetString()
+                            : null,
+                        root.TryGetProperty("shopRootPath", out var shopRootPathElement) &&
+                        shopRootPathElement.ValueKind != JsonValueKind.Null
+                            ? shopRootPathElement.GetString()
+                            : null,
+                        root.TryGetProperty("forceRefresh", out var forceRefreshElement) &&
+                        forceRefreshElement.ValueKind == JsonValueKind.True);
+                    TrayCommandResponse<ShareSnapshotPayload> response = await _tray.GetShareSnapshotAsync(request);
+                    await SendAsync(JsonSerializer.Serialize(response));
+                    break;
+                }
+
                 case "SYNC_SHOP_OPENED":
                 {
                     string shopFolder = root.TryGetProperty("shopFolder", out var sf) ? sf.GetString() ?? "" : "";

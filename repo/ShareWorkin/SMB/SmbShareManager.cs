@@ -12,6 +12,20 @@ public enum ShareAccessRight
 }
 
 public sealed record ShareWorkinShareInfo(string Name, string Path, string DescriptionLabel);
+public sealed record ShareDefinitionAccessInfo(string AccountName, string AccessControlType, string AccessRight);
+public sealed record ShareDefinitionDetails(
+    string Name,
+    string Path,
+    string DescriptionLabel,
+    string? ShareState,
+    uint? CurrentUsers,
+    IReadOnlyList<ShareDefinitionAccessInfo> AccessEntries);
+public sealed record ShareDefinitionQueryResult(
+    bool Succeeded,
+    bool TimedOut,
+    bool NotFound,
+    string? ErrorMessage,
+    ShareDefinitionDetails? Share);
 
 public static class SmbShareManager
 {
@@ -200,6 +214,158 @@ $out | ConvertTo-Json -Compress -Depth 4
         }
 
         return null;
+    }
+
+    public static ShareDefinitionDetails? FindShareDefinition(string? shareName, string? folderPath)
+        => QueryShareDefinition(shareName, folderPath).Share;
+
+    public static ShareDefinitionQueryResult QueryShareDefinition(string? shareName, string? folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(shareName) && string.IsNullOrWhiteSpace(folderPath))
+        {
+            throw new ArgumentException("shareName or folderPath is required.");
+        }
+
+        string? escapedName = string.IsNullOrWhiteSpace(shareName) ? null : EscapeSingleQuotes(shareName);
+        string? escapedPath = string.IsNullOrWhiteSpace(folderPath) ? null : EscapeSingleQuotes(folderPath);
+        string script = $@"
+function Normalize-SharePath([string]$value) {{
+    if ([string]::IsNullOrWhiteSpace($value)) {{ return $null }}
+    try {{
+        return [System.IO.Path]::GetFullPath($value).TrimEnd('\','/')
+    }}
+    catch {{
+        return $value.TrimEnd('\','/')
+    }}
+}}
+
+$requestedName = {(escapedName is null ? "$null" : $"'{escapedName}'")};
+$requestedPath = {(escapedPath is null ? "$null" : $"'{escapedPath}'")};
+$normalizedRequestedPath = Normalize-SharePath $requestedPath;
+$shares = Get-SmbShare | Where-Object {{ $_.Description -like 'ShareWorkin:*' }};
+
+if ($requestedName) {{
+    $shares = $shares | Where-Object {{ $_.Name -eq $requestedName }};
+}}
+
+if ($normalizedRequestedPath) {{
+    $shares = $shares | Where-Object {{ (Normalize-SharePath $_.Path) -eq $normalizedRequestedPath }};
+}}
+
+$share = $shares | Select-Object -First 1;
+if (-not $share) {{
+    Write-Output '';
+    exit 0;
+}}
+
+$accessEntries = @();
+try {{
+    $accessEntries = @(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | ForEach-Object {{
+        [ordered]@{{
+            AccountName = $_.AccountName;
+            AccessControlType = [string]$_.AccessControlType;
+            AccessRight = [string]$_.AccessRight;
+        }}
+    }});
+}}
+catch {{
+    $accessEntries = @();
+}}
+
+[ordered]@{{
+    Name = $share.Name;
+    Path = $share.Path;
+    Description = $share.Description;
+    ShareState = if ($share.PSObject.Properties['ShareState']) {{ [string]$share.ShareState }} else {{ $null }};
+    CurrentUsers = if ($share.PSObject.Properties['CurrentUsers']) {{ [uint32]$share.CurrentUsers }} else {{ $null }};
+    AccessEntries = $accessEntries;
+}} | ConvertTo-Json -Compress -Depth 6
+";
+
+        PowerShellResult result = PowerShellRunner.Run(script, timeoutMs: 10000);
+        if (result.TimedOut)
+        {
+            return new ShareDefinitionQueryResult(
+                Succeeded: false,
+                TimedOut: true,
+                NotFound: false,
+                ErrorMessage: "PowerShell timed out.",
+                Share: null);
+        }
+
+        if (!result.Succeeded)
+        {
+            return new ShareDefinitionQueryResult(
+                Succeeded: false,
+                TimedOut: false,
+                NotFound: false,
+                ErrorMessage: string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut.Trim() : result.StdErr.Trim(),
+                Share: null);
+        }
+
+        if (string.IsNullOrWhiteSpace(result.StdOut))
+        {
+            return new ShareDefinitionQueryResult(
+                Succeeded: true,
+                TimedOut: false,
+                NotFound: true,
+                ErrorMessage: null,
+                Share: null);
+        }
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(result.StdOut.Trim());
+            JsonElement root = doc.RootElement;
+            string name = root.GetProperty("Name").GetString() ?? string.Empty;
+            string path = root.GetProperty("Path").GetString() ?? string.Empty;
+            string description = root.GetProperty("Description").GetString() ?? string.Empty;
+            string label = ExtractLabel(description);
+            string? shareState = root.TryGetProperty("ShareState", out JsonElement stateElement) &&
+                                 stateElement.ValueKind != JsonValueKind.Null
+                ? stateElement.GetString()
+                : null;
+            uint? currentUsers = root.TryGetProperty("CurrentUsers", out JsonElement currentUsersElement) &&
+                                 currentUsersElement.ValueKind != JsonValueKind.Null
+                ? currentUsersElement.GetUInt32()
+                : null;
+
+            List<ShareDefinitionAccessInfo> accessEntries = new();
+            if (root.TryGetProperty("AccessEntries", out JsonElement accessEntriesElement) &&
+                accessEntriesElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement entry in accessEntriesElement.EnumerateArray())
+                {
+                    accessEntries.Add(new ShareDefinitionAccessInfo(
+                        entry.TryGetProperty("AccountName", out JsonElement accountElement)
+                            ? accountElement.GetString() ?? string.Empty
+                            : string.Empty,
+                        entry.TryGetProperty("AccessControlType", out JsonElement controlElement)
+                            ? controlElement.GetString() ?? string.Empty
+                            : string.Empty,
+                        entry.TryGetProperty("AccessRight", out JsonElement rightElement)
+                            ? rightElement.GetString() ?? string.Empty
+                            : string.Empty));
+                }
+            }
+
+            return new ShareDefinitionQueryResult(
+                Succeeded: true,
+                TimedOut: false,
+                NotFound: false,
+                ErrorMessage: null,
+                Share: new ShareDefinitionDetails(name, path, label, shareState, currentUsers, accessEntries));
+        }
+        catch (JsonException ex)
+        {
+            SwkLogger.Error("FindShareDefinition parse failed", ex);
+            return new ShareDefinitionQueryResult(
+                Succeeded: false,
+                TimedOut: false,
+                NotFound: false,
+                ErrorMessage: ex.Message,
+                Share: null);
+        }
     }
 
     public static bool RemoveAllShareWorkinShares()

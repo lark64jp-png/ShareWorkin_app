@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using ShareWorkin.SMB;
@@ -20,14 +23,20 @@ public enum NotificationDisplayResult
 
 public sealed class TrayApp : IDisposable
 {
+    private sealed record CachedShareSnapshot(ShareSnapshotPayload Payload, DateTime CachedAtUtc);
+
     private static readonly string AppHomeDirectory = AppContext.BaseDirectory.TrimEnd(
         Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     private static readonly string SettingsPath = Path.Combine(AppHomeDirectory, "settings.json");
     private static readonly TimeSpan BalloonTipShownTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ShareSnapshotTtl = TimeSpan.FromSeconds(15);
 
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ContextMenuStrip _trayMenu;
     private readonly object _balloonTipSync = new();
+    private readonly object _shareSnapshotSync = new();
+    private readonly Dictionary<string, CachedShareSnapshot> _shareSnapshotCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Task<TrayCommandResponse<ShareSnapshotPayload>>> _shareSnapshotInflight = new(StringComparer.OrdinalIgnoreCase);
     internal readonly TrayPipeServer PipeServer;
 
     private bool _isShopOpen;
@@ -167,6 +176,7 @@ public sealed class TrayApp : IDisposable
         _shopFolder = shopFolder;
         _activeShareName = shareName;
         _shareAccessRight = accessRight;
+        MarkShareSnapshotDirty("TrayShopOpened");
         PatchSettingsOpenState(true, shopFolder);
         SwkLogger.Info(
             $"TrayApp.UpdateShopOpenedState complete: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"} " +
@@ -190,12 +200,67 @@ public sealed class TrayApp : IDisposable
         SmbController.StopShopBroadcaster();
         _isShopOpen = false;
         _activeShareName = null;
+        MarkShareSnapshotDirty("TrayShopClosed");
         PatchSettingsOpenState(false, _shopFolder);
         SwkLogger.Info(
             $"TrayApp.UpdateShopClosedState complete: trayOpen={_isShopOpen} shopFolder={_shopFolder ?? "-"}");
         return true;
     }
 
+    public async Task<TrayCommandResponse<ShareSnapshotPayload>> GetShareSnapshotAsync(GetShareSnapshotRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        GetShareSnapshotRequest effectiveRequest = request with
+        {
+            ShareName = string.IsNullOrWhiteSpace(request.ShareName) ? _activeShareName : request.ShareName,
+            ShopRootPath = string.IsNullOrWhiteSpace(request.ShopRootPath) ? _shopFolder : request.ShopRootPath
+        };
+        string cacheKey = BuildShareSnapshotCacheKey(effectiveRequest.ShareName, effectiveRequest.ShopRootPath);
+        Task<TrayCommandResponse<ShareSnapshotPayload>> pendingTask;
+        bool joinedInflight = false;
+
+        lock (_shareSnapshotSync)
+        {
+            if (!effectiveRequest.ForceRefresh &&
+                _shareSnapshotCache.TryGetValue(cacheKey, out CachedShareSnapshot? cached) &&
+                IsFresh(cached.Payload))
+            {
+                return BuildShareSnapshotResponse(
+                    effectiveRequest,
+                    cached.Payload with { Source = "TrayCache" },
+                    TrayCommandResultCode.Success,
+                    TrayCommandErrorReason.None,
+                    retryable: false,
+                    joinedInflight: false,
+                    message: null);
+            }
+
+            if (_shareSnapshotInflight.TryGetValue(cacheKey, out pendingTask!))
+            {
+                joinedInflight = true;
+            }
+            else
+            {
+                pendingTask = Task.Run(() => RefreshShareSnapshotCore(effectiveRequest, cacheKey));
+                _shareSnapshotInflight[cacheKey] = pendingTask;
+            }
+        }
+
+        TrayCommandResponse<ShareSnapshotPayload> response = await pendingTask;
+        return response with
+        {
+            RequestId = effectiveRequest.RequestId,
+            JoinedInflight = joinedInflight,
+            Payload = response.Payload is null
+                ? null
+                : response.Payload with
+                {
+                    RequestedShareName = effectiveRequest.ShareName,
+                    RequestedShopRootPath = effectiveRequest.ShopRootPath
+                }
+        };
+    }
     private void RestoreShopOpenStateFromSettings()
     {
         if (!_wasOpenAtLastShutdown || string.IsNullOrWhiteSpace(_shopFolder))
@@ -280,6 +345,275 @@ public sealed class TrayApp : IDisposable
 
     public void BroadcastShopClosing() => _ = SmbController.BroadcastShopClosingAsync();
     public void BroadcastPermissionChanged() => _ = SmbController.BroadcastPermissionChangedAsync();
+
+    private TrayCommandResponse<ShareSnapshotPayload> RefreshShareSnapshotCore(
+        GetShareSnapshotRequest request,
+        string cacheKey)
+    {
+        try
+        {
+            ShareDefinitionQueryResult query = SmbShareManager.QueryShareDefinition(request.ShareName, request.ShopRootPath);
+            ShareSnapshotPayload payload = BuildShareSnapshotPayload(
+                request,
+                query.Share,
+                source: "WindowsConfirmed",
+                isStale: false,
+                dirtyReasons: Array.Empty<string>());
+
+            if (query.Succeeded && !query.NotFound && query.Share is not null)
+            {
+                lock (_shareSnapshotSync)
+                {
+                    _shareSnapshotCache[cacheKey] = new CachedShareSnapshot(payload, DateTime.UtcNow);
+                }
+
+                return BuildShareSnapshotResponse(
+                    request,
+                    payload,
+                    TrayCommandResultCode.Success,
+                    TrayCommandErrorReason.None,
+                    retryable: false,
+                    joinedInflight: false,
+                    message: null);
+            }
+
+            if (TryGetCachedFallback(cacheKey, request, out TrayCommandResponse<ShareSnapshotPayload>? fallback))
+            {
+                return fallback;
+            }
+
+            if (query.TimedOut)
+            {
+                return BuildShareSnapshotResponse(
+                    request,
+                    payload with { IsStale = true, DirtyReasons = new[] { "TimedOut" } },
+                    TrayCommandResultCode.TimedOut,
+                    TrayCommandErrorReason.Timeout,
+                    retryable: true,
+                    joinedInflight: false,
+                    message: "共有状態の確認がタイムアウトしました。");
+            }
+
+            if (query.NotFound)
+            {
+                return BuildShareSnapshotResponse(
+                    request,
+                    payload with { IsStale = true, DirtyReasons = new[] { "ShareNotFound" } },
+                    TrayCommandResultCode.Failed,
+                    TrayCommandErrorReason.ShareNotFound,
+                    retryable: true,
+                    joinedInflight: false,
+                    message: "Windows の共有定義に対象が見つかりませんでした。");
+            }
+
+            return BuildShareSnapshotResponse(
+                request,
+                payload with { IsStale = true, DirtyReasons = new[] { "WindowsQueryFailed" } },
+                TrayCommandResultCode.Failed,
+                TrayCommandErrorReason.WindowsQueryFailed,
+                retryable: true,
+                joinedInflight: false,
+                message: string.IsNullOrWhiteSpace(query.ErrorMessage)
+                    ? "共有状態を確認できませんでした。"
+                    : query.ErrorMessage);
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"TrayApp.RefreshShareSnapshotCore failed: {ex.GetType().Name}: {ex.Message}");
+            if (TryGetCachedFallback(cacheKey, request, out TrayCommandResponse<ShareSnapshotPayload>? fallback))
+            {
+                return fallback;
+            }
+
+            return BuildShareSnapshotResponse(
+                request,
+                BuildShareSnapshotPayload(request, null, "WindowsError", isStale: true, dirtyReasons: new[] { "InternalException" }),
+                TrayCommandResultCode.InternalError,
+                TrayCommandErrorReason.InternalException,
+                retryable: true,
+                joinedInflight: false,
+                message: "共有状態を取得できませんでした。");
+        }
+        finally
+        {
+            lock (_shareSnapshotSync)
+            {
+                _shareSnapshotInflight.Remove(cacheKey);
+            }
+        }
+    }
+
+    private bool TryGetCachedFallback(
+        string cacheKey,
+        GetShareSnapshotRequest request,
+        out TrayCommandResponse<ShareSnapshotPayload> response)
+    {
+        lock (_shareSnapshotSync)
+        {
+            if (_shareSnapshotCache.TryGetValue(cacheKey, out CachedShareSnapshot? cached))
+            {
+                ShareSnapshotPayload stalePayload = cached.Payload with
+                {
+                    Source = "TrayCacheFallback",
+                    IsStale = true,
+                    DirtyReasons = AppendDirtyReason(cached.Payload.DirtyReasons, "RefreshFailed"),
+                    RequestedShareName = request.ShareName,
+                    RequestedShopRootPath = request.ShopRootPath
+                };
+                response = BuildShareSnapshotResponse(
+                    request,
+                    stalePayload,
+                    TrayCommandResultCode.FallbackSuccess,
+                    TrayCommandErrorReason.None,
+                    retryable: true,
+                    joinedInflight: false,
+                    message: "前回確認できた状態を表示しています。");
+                return true;
+            }
+        }
+
+        response = null!;
+        return false;
+    }
+
+    private ShareSnapshotPayload BuildShareSnapshotPayload(
+        GetShareSnapshotRequest request,
+        ShareDefinitionDetails? share,
+        string source,
+        bool isStale,
+        IReadOnlyList<string> dirtyReasons)
+    {
+        bool shareNameMatches = string.IsNullOrWhiteSpace(request.ShareName) ||
+                                string.Equals(share?.Name, request.ShareName, StringComparison.OrdinalIgnoreCase);
+        bool shopRootPathMatches = string.IsNullOrWhiteSpace(request.ShopRootPath) ||
+                                   string.Equals(
+                                       NormalizePath(share?.Path),
+                                       NormalizePath(request.ShopRootPath),
+                                       StringComparison.OrdinalIgnoreCase);
+        bool hasMatchingShare = share is not null && shareNameMatches && shopRootPathMatches;
+        string? effectiveAccessRight = ResolveEffectiveAccessRight(share);
+
+        return new ShareSnapshotPayload(
+            DateTime.UtcNow,
+            source,
+            isStale,
+            dirtyReasons,
+            request.ShareName,
+            request.ShopRootPath,
+            _activeShareName,
+            _shopFolder,
+            _shareAccessRight.ToString(),
+            share?.Name,
+            share?.Path,
+            share?.DescriptionLabel,
+            share?.ShareState,
+            share?.CurrentUsers,
+            hasMatchingShare,
+            shareNameMatches,
+            shopRootPathMatches,
+            effectiveAccessRight,
+            share?.AccessEntries
+                .Select(x => new ShareSnapshotAccessEntry(x.AccountName, x.AccessControlType, x.AccessRight))
+                .ToArray()
+                ?? Array.Empty<ShareSnapshotAccessEntry>());
+    }
+
+    private static TrayCommandResponse<ShareSnapshotPayload> BuildShareSnapshotResponse(
+        GetShareSnapshotRequest request,
+        ShareSnapshotPayload payload,
+        TrayCommandResultCode resultCode,
+        TrayCommandErrorReason errorReason,
+        bool retryable,
+        bool joinedInflight,
+        string? message)
+    {
+        return new TrayCommandResponse<ShareSnapshotPayload>(
+            request.RequestId,
+            resultCode,
+            errorReason,
+            retryable,
+            joinedInflight,
+            message,
+            payload);
+    }
+
+    private void MarkShareSnapshotDirty(string reason)
+    {
+        lock (_shareSnapshotSync)
+        {
+            foreach (string key in _shareSnapshotCache.Keys.ToArray())
+            {
+                CachedShareSnapshot cached = _shareSnapshotCache[key];
+                _shareSnapshotCache[key] = cached with
+                {
+                    Payload = cached.Payload with
+                    {
+                        IsStale = true,
+                        DirtyReasons = AppendDirtyReason(cached.Payload.DirtyReasons, reason)
+                    }
+                };
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> AppendDirtyReason(IReadOnlyList<string> existing, string reason)
+    {
+        if (existing.Any(x => string.Equals(x, reason, StringComparison.OrdinalIgnoreCase)))
+        {
+            return existing;
+        }
+
+        return existing.Concat(new[] { reason }).ToArray();
+    }
+
+    private static bool IsFresh(ShareSnapshotPayload payload)
+    {
+        return !payload.IsStale && DateTime.UtcNow - payload.ObservedAtUtc <= ShareSnapshotTtl;
+    }
+
+    private static string BuildShareSnapshotCacheKey(string? shareName, string? shopRootPath)
+    {
+        string sharePart = string.IsNullOrWhiteSpace(shareName) ? "-" : shareName.Trim();
+        string pathPart = string.IsNullOrWhiteSpace(shopRootPath) ? "-" : NormalizePath(shopRootPath) ?? shopRootPath.Trim();
+        return $"{sharePart}|{pathPart}";
+    }
+
+    private static string? ResolveEffectiveAccessRight(ShareDefinitionDetails? share)
+    {
+        if (share is null)
+        {
+            return null;
+        }
+
+        ShareDefinitionAccessInfo? swkAccountEntry = share.AccessEntries.FirstOrDefault(
+            x => string.Equals(x.AccountName, SmbAccountManager.LocalQualifiedAccountName, StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(x.AccessControlType, "Allow", StringComparison.OrdinalIgnoreCase));
+        if (swkAccountEntry is not null)
+        {
+            return swkAccountEntry.AccessRight;
+        }
+
+        ShareDefinitionAccessInfo? allowEntry = share.AccessEntries.FirstOrDefault(
+            x => string.Equals(x.AccessControlType, "Allow", StringComparison.OrdinalIgnoreCase));
+        return allowEntry?.AccessRight;
+    }
+
+    private static string? NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch
+        {
+            return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+    }
 
     private void HandleFriendShopClosingReceived(string machineName, string shareName)
     {

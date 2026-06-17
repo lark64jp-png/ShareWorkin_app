@@ -143,6 +143,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TransientStatusDuration = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan TrayStatusBarMessageDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan LocalShareSnapshotDebounceDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan TrayCommandTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan FriendReconnectRetryCooldown = TimeSpan.FromSeconds(8);
     private const int FriendShopOfflineMissThreshold = 2;
@@ -174,6 +175,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _notificationSupportRefreshTimer;
     private readonly DispatcherTimer _transientStatusTimer;
     private readonly DispatcherTimer _trayStatusBarDelayTimer;
+    private readonly DispatcherTimer _localShareSnapshotDebounceTimer;
     private readonly List<ArrivedItem> _pendingNotificationItems = [];
     private readonly Dictionary<string, DateTime> _recentExternalReceiveAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _recentIncomingInteractionAt = new(StringComparer.OrdinalIgnoreCase);
@@ -269,6 +271,10 @@ public partial class MainWindow : Window
     private bool _isNotificationTestInProgress;
     private bool _isTrayRequestInProgress;
     private TrayRetryRequest? _lastRetryableTrayRequest;
+    private Task _localShareSnapshotRefreshLoopTask = Task.CompletedTask;
+    private bool _hasPendingLocalShareSnapshotRefresh;
+    private bool _pendingLocalShareSnapshotForceRefresh;
+    private bool _hasDebouncedLocalShareSnapshotRefresh;
     private const string NotificationSettingsAppId = SwkNotificationIdentity.AppUserModelId;
     private const int MaxNotificationRegistrationAttempts = 3;
     private int _processingDepth;
@@ -325,6 +331,9 @@ public partial class MainWindow : Window
 
         _trayStatusBarDelayTimer = new DispatcherTimer { Interval = TrayStatusBarMessageDelay };
         _trayStatusBarDelayTimer.Tick += TrayStatusBarDelayTimer_Tick;
+
+        _localShareSnapshotDebounceTimer = new DispatcherTimer { Interval = LocalShareSnapshotDebounceDelay };
+        _localShareSnapshotDebounceTimer.Tick += LocalShareSnapshotDebounceTimer_Tick;
 
         LoadSettings();
         LoadPermissionMap();
@@ -738,6 +747,7 @@ public partial class MainWindow : Window
         ImportPendingIncomingInteractions();
         ShowMainWindow();
         UpdateShopState(_isShopOpen, startupNormalizationMessage);
+        _ = QueueLocalShareSnapshotRefreshAsync(forceRefresh: false);
         _ = ObserveStartupShareStateAfterLaunchAsync(persistedWasOpen, persistedShopFolder, adoptedObservation);
         _ = Dispatcher.BeginInvoke(new Action(CompleteStartupAfterFirstPaint), DispatcherPriority.Background);
     }
@@ -1845,6 +1855,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (result.State == ExplorerActionState.Success)
         {
             NotifyShellOfExplorerAction(result);
+            RequestLocalShareSnapshotStatusRefresh();
         }
     }
 
@@ -1950,6 +1961,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (string.Equals(Path.GetFullPath(_currentFolder), targetFolderPath, StringComparison.OrdinalIgnoreCase))
             {
                 RefreshShopItems();
+                RequestLocalShareSnapshotStatusRefresh();
             }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
@@ -2465,6 +2477,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         if (!string.Equals(_activeFriendShop.ShareName, shareName, StringComparison.OrdinalIgnoreCase)) return;
 
         ShopItems.Clear();
+        SetTrayStatusBarState(TrayUiStatusState.Hidden);
         string label = string.IsNullOrWhiteSpace(_activeFriendShop.DisplayName)
             ? machineName
             : _activeFriendShop.DisplayName;
@@ -2505,6 +2518,11 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             if (_isShopOpen)
             {
                 ReinitializeShopChangeMonitoring();
+                await QueueLocalShareSnapshotRefreshAsync(forceRefresh: true);
+            }
+            else
+            {
+                SetTrayStatusBarState(TrayUiStatusState.Hidden);
             }
             return;
         }
@@ -3445,6 +3463,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                             await Task.Delay(500);
                             SetAdminWorkerStatus("");
                             _pipeClient.BroadcastPermission();
+                            RequestLocalShareSnapshotStatusRefresh();
                         }
                     }
                     finally
@@ -5993,6 +6012,8 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _transientStatusTimer.Tick -= TransientStatusTimer_Tick;
         _trayStatusBarDelayTimer.Stop();
         _trayStatusBarDelayTimer.Tick -= TrayStatusBarDelayTimer_Tick;
+        _localShareSnapshotDebounceTimer.Stop();
+        _localShareSnapshotDebounceTimer.Tick -= LocalShareSnapshotDebounceTimer_Tick;
         SwkLogger.Info("DoWindowClosingAsync: timers stopped");
         _pipeClient.Dispose();
         SwkLogger.Info("DoWindowClosingAsync: pipeClient disposed");
@@ -6244,6 +6265,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             await Task.Delay(500);
             SetAdminWorkerStatus("");
             UpdateShopState(true);
+            await QueueLocalShareSnapshotRefreshAsync(forceRefresh: true);
             SwkLogger.Info(
                 $"OpenShop.Complete: shopFolder={shopFolder} shareName={shareName} " +
                 $"currentMode={_currentMode} isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
@@ -6518,6 +6540,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                     SwkLogger.Info(
                         $"CloseShop.TraySync: shopFolder={shopFolder} traySyncOk={traySyncOk} " +
                         $"isShopOpen={_isShopOpen} persistedOpen={_wasOpenAtLastShutdown}");
+                    SetTrayStatusBarState(TrayUiStatusState.Hidden);
                 }
                 finally
                 {
@@ -6788,6 +6811,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             ScheduleRefreshShopItemsIfCurrentFolder(
                 Path.GetDirectoryName(e.FullPath) ?? string.Empty,
                 TimeSpan.FromMilliseconds(300));
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -6823,6 +6847,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 SwkLogger.Debug($"ArrivalSensor_Renamed suppressed: old={e.OldFullPath} new={e.FullPath}");
             }
             RefreshShopItemsIfCurrentFolder(Path.GetDirectoryName(e.FullPath) ?? string.Empty);
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -6832,6 +6857,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             DisposeWatcher();
             BeginPolling();
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -7783,6 +7809,10 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         RefreshShopItems(ignorePointerPressedGuard: true);
         StartContentsSensor(folderPath);
         UpdateNavigationState();
+        if (_currentMode != DisplayMode.FriendShop)
+        {
+            RequestLocalShareSnapshotStatusRefresh();
+        }
     }
 
     private void SyncModeToFolderPath(string folderPath)
@@ -8287,6 +8317,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             : _activeFriendShop.DisplayName;
 
         SwkNetworkCache.RemoveShop(_activeFriendShop.HostMachineName, _activeFriendShop.ShareName);
+        SetTrayStatusBarState(TrayUiStatusState.Hidden);
         DisposeContentsWatcher();
         ShopItems.Clear();
         _friendShopReadOnlyState.Clear();
@@ -8726,6 +8757,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             }
             RefreshShopItems();
             ScheduleRefreshShopItemsIfCurrentFolder(_currentFolder ?? string.Empty, TimeSpan.FromMilliseconds(300));
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -8753,6 +8785,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 SwkLogger.Debug($"ContentsSensor_Renamed suppressed: old={e.OldFullPath} new={e.FullPath}");
             }
             RefreshShopItems();
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -8788,6 +8821,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         {
             EnsureHoldFolderForShopChange(notifyWhenRecreated: true);
             RefreshShopItems();
+            RequestLocalShareSnapshotStatusRefresh();
         });
     }
 
@@ -9216,6 +9250,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
             _activeFriendShopRootPath = null;
             _missingFriendShopStatus = null;
             EnterShopMode();
+            await QueueLocalShareSnapshotRefreshAsync(forceRefresh: false);
             return;
         }
 
@@ -9443,6 +9478,7 @@ private static void ClearHiddenFolderAttribute(string folderPath)
         _friendShopLiveMissCount = 0;
         _missingFriendShopStatus = null;
         _currentMode = DisplayMode.FriendShop;
+        SetTrayStatusBarState(TrayUiStatusState.Hidden);
         CancelFolderSizeCalculation();
         DisposeContentsWatcher();
         _currentFolder = null;
@@ -10350,6 +10386,222 @@ private static void ClearHiddenFolderAttribute(string folderPath)
                 TrayUiResultCode.InternalError,
                 TrayUiErrorReason.InternalException,
                 Retryable: true);
+        }
+    }
+
+    private async Task<TrayCommandUiResponse> ExecuteTrayShareSnapshotCommandAsync(
+        string? shareName,
+        string? shopRootPath,
+        bool forceRefresh)
+    {
+        try
+        {
+            TrayCommandResponse<ShareSnapshotPayload>? response = await Task.Run(
+                () => _pipeClient.GetShareSnapshot(shareName, shopRootPath, forceRefresh));
+            if (response is null)
+            {
+                return new TrayCommandUiResponse(
+                    TrayUiResultCode.Failed,
+                    TrayUiErrorReason.Unknown,
+                    Retryable: true,
+                    Detail: "共有状態を確認できませんでした。");
+            }
+
+            return response.ResultCode switch
+            {
+                TrayCommandResultCode.Success => new TrayCommandUiResponse(
+                    TrayUiResultCode.Success,
+                    Retryable: false,
+                    Detail: response.Payload?.IsStale == true
+                        ? "前回確認できた状態を表示しています。"
+                        : null),
+                TrayCommandResultCode.FallbackSuccess => new TrayCommandUiResponse(
+                    TrayUiResultCode.FallbackSuccess,
+                    Retryable: response.Retryable,
+                    Detail: response.Message ?? "前回確認できた状態を表示しています。"),
+                TrayCommandResultCode.TimedOut => new TrayCommandUiResponse(
+                    TrayUiResultCode.TimedOut,
+                    TrayUiErrorReason.Timeout,
+                    Retryable: response.Retryable,
+                    Detail: response.Message),
+                TrayCommandResultCode.InternalError => new TrayCommandUiResponse(
+                    TrayUiResultCode.InternalError,
+                    TrayUiErrorReason.InternalException,
+                    Retryable: response.Retryable,
+                    Detail: response.Message),
+                TrayCommandResultCode.Failed => new TrayCommandUiResponse(
+                    TrayUiResultCode.Failed,
+                    response.ErrorReason switch
+                    {
+                        TrayCommandErrorReason.Timeout => TrayUiErrorReason.Timeout,
+                        TrayCommandErrorReason.AccessDenied => TrayUiErrorReason.AccessDenied,
+                        TrayCommandErrorReason.TargetMismatch => TrayUiErrorReason.TargetMismatch,
+                        TrayCommandErrorReason.Cancelled => TrayUiErrorReason.Cancelled,
+                        TrayCommandErrorReason.TrayUnavailable => TrayUiErrorReason.TrayUnavailable,
+                        _ => TrayUiErrorReason.Unknown
+                    },
+                    Retryable: response.Retryable,
+                    Detail: response.Message),
+                _ => new TrayCommandUiResponse(
+                    TrayUiResultCode.Failed,
+                    TrayUiErrorReason.Unknown,
+                    Retryable: response.Retryable,
+                    Detail: response.Message)
+            };
+        }
+        catch (Exception ex)
+        {
+            SwkLogger.Warn($"ExecuteTrayShareSnapshotCommandAsync failed: {ex.GetType().Name}: {ex.Message}");
+            return new TrayCommandUiResponse(
+                TrayUiResultCode.InternalError,
+                TrayUiErrorReason.InternalException,
+                Retryable: true);
+        }
+    }
+
+    private Task QueueLocalShareSnapshotRefreshAsync(bool forceRefresh)
+    {
+        _hasPendingLocalShareSnapshotRefresh = true;
+        _pendingLocalShareSnapshotForceRefresh |= forceRefresh;
+
+        if (_localShareSnapshotRefreshLoopTask.IsCompleted)
+        {
+            _localShareSnapshotRefreshLoopTask = ProcessPendingLocalShareSnapshotRefreshAsync();
+        }
+
+        return _localShareSnapshotRefreshLoopTask;
+    }
+
+    private async Task ProcessPendingLocalShareSnapshotRefreshAsync()
+    {
+        while (_hasPendingLocalShareSnapshotRefresh)
+        {
+            bool forceRefresh = _pendingLocalShareSnapshotForceRefresh;
+            _hasPendingLocalShareSnapshotRefresh = false;
+            _pendingLocalShareSnapshotForceRefresh = false;
+
+            try
+            {
+                await RefreshLocalShareSnapshotStatusCoreAsync(forceRefresh);
+            }
+            catch (Exception ex)
+            {
+                SwkLogger.Warn(
+                    $"ProcessPendingLocalShareSnapshotRefreshAsync failed: {ex.GetType().Name}: {ex.Message}");
+                CompleteTrayStatusBarRequest();
+                _lastRetryableTrayRequest = null;
+                SetTrayStatusBarState(TrayUiStatusState.Hidden);
+            }
+        }
+    }
+
+    private async Task RefreshLocalShareSnapshotStatusCoreAsync(bool forceRefresh)
+    {
+        if (_currentMode == DisplayMode.FriendShop ||
+            !_isShopOpen ||
+            string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            SetTrayStatusBarState(TrayUiStatusState.Hidden);
+            return;
+        }
+
+        string? shareName = DeriveShareName(_shopFolder);
+        if (string.IsNullOrWhiteSpace(shareName))
+        {
+            SetTrayStatusBarState(TrayUiStatusState.Hidden);
+            return;
+        }
+        string requestedShopFolder = _shopFolder;
+
+        TrayRetryRequest retryRequest = new()
+        {
+            ExecuteAsync = retryForceRefresh => QueueLocalShareSnapshotRefreshAsync(retryForceRefresh)
+        };
+
+        if (!await EnsureTrayConnectedAsync())
+        {
+            ApplyTrayCommandResponseToStatusBar(
+                new TrayCommandUiResponse(
+                    TrayUiResultCode.Failed,
+                    TrayUiErrorReason.TrayUnavailable,
+                    Retryable: true),
+                retryRequest);
+            return;
+        }
+
+        BeginTrayStatusBarRequest();
+        TrayCommandUiResponse response = await ExecuteTrayShareSnapshotCommandAsync(
+            shareName,
+            _shopFolder,
+            forceRefresh);
+        if (!IsCurrentLocalShareSnapshotTarget(shareName, requestedShopFolder))
+        {
+            CompleteTrayStatusBarRequest();
+            _lastRetryableTrayRequest = null;
+            SetTrayStatusBarState(TrayUiStatusState.Hidden);
+            return;
+        }
+        ApplyTrayCommandResponseToStatusBar(response, retryRequest);
+    }
+
+    private void RequestLocalShareSnapshotStatusRefresh(bool forceRefresh = false)
+    {
+        if (_windowClosingHandled)
+        {
+            return;
+        }
+
+        if (forceRefresh)
+        {
+            _hasDebouncedLocalShareSnapshotRefresh = false;
+            _localShareSnapshotDebounceTimer.Stop();
+            _ = QueueLocalShareSnapshotRefreshAsync(forceRefresh: true);
+            return;
+        }
+
+        _hasDebouncedLocalShareSnapshotRefresh = true;
+        _localShareSnapshotDebounceTimer.Stop();
+        _localShareSnapshotDebounceTimer.Start();
+    }
+
+    private void LocalShareSnapshotDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _localShareSnapshotDebounceTimer.Stop();
+        if (!_hasDebouncedLocalShareSnapshotRefresh || _windowClosingHandled)
+        {
+            return;
+        }
+
+        _hasDebouncedLocalShareSnapshotRefresh = false;
+        _ = QueueLocalShareSnapshotRefreshAsync(forceRefresh: false);
+    }
+
+    private bool IsCurrentLocalShareSnapshotTarget(string expectedShareName, string expectedShopFolder)
+    {
+        if (_currentMode == DisplayMode.FriendShop ||
+            !_isShopOpen ||
+            string.IsNullOrWhiteSpace(_shopFolder))
+        {
+            return false;
+        }
+
+        string? currentShareName = DeriveShareName(_shopFolder);
+        if (!string.Equals(currentShareName, expectedShareName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            string currentPath = Path.GetFullPath(_shopFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string expectedPath = Path.GetFullPath(expectedShopFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Equals(currentPath, expectedPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return string.Equals(_shopFolder, expectedShopFolder, StringComparison.OrdinalIgnoreCase);
         }
     }
 
